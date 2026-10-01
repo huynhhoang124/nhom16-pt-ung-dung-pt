@@ -1,0 +1,69 @@
+<mxfile host="app.diagrams.net" modified="2026-09-20T00:00:00.000Z" agent="Codex" version="24.7.17" compressed="false">
+  <diagram id="smart-parking-distributed" name="Kiến trúc phân tán">
+    <mxGraphModel dx="1800" dy="1100" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1800" pageHeight="1100" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="title" value="MÔ HÌNH KIẾN TRÚC PHÂN TÁN&#xa;BÃI ĐỖ XE THÔNG MINH LIÊN KẾT NHIỀU BÃI — NHÓM 16" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#0F172A;gradientColor=#1E3A8A;fontColor=#FFFFFF;fontSize=26;fontStyle=1;strokeColor=#0F172A;" vertex="1" parent="1">
+          <mxGeometry x="60" y="30" width="1680" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="users" value="NGƯỜI SỬ DỤNG&#xa;Khách hàng • Nhân viên&#xa;Quản trị viên" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;strokeWidth=2;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="70" y="230" width="250" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="frontend" value="WEB FRONTEND&#xa;ReactJS&#xa;Một giao diện thống nhất" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFEFF;strokeColor=#0891B2;strokeWidth=3;fontColor=#164E63;fontSize=18;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="390" y="230" width="280" height="150" as="geometry"/>
+        </mxCell>
+        <mxCell id="aggregator" value="AGGREGATOR SERVICE&#xa;&#xa;• Đăng ký và định tuyến node&#xa;• Tổng hợp chỗ trống song song&#xa;• Health check, timeout, OFFLINE&#xa;• Không lưu trạng thái chi tiết slot" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=24;fillColor=#EEF2FF;strokeColor=#4F46E5;strokeWidth=4;fontColor=#312E81;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="750" y="190" width="390" height="230" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="edge-user" value="HTTPS" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=3;endArrow=block;endFill=1;fontSize=14;fontStyle=1;" edge="1" parent="1" source="users" target="frontend"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edge-front" value="REST/JSON + WebSocket" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;strokeWidth=3;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#1D4ED8;fontSize=14;fontStyle=1;" edge="1" parent="1" source="frontend" target="aggregator"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="groupA" value="HẠ TẦNG BÃI A — ĐỘC LẬP" style="swimlane;horizontal=1;startSize=38;rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#60A5FA;strokeWidth=3;dashed=1;fontColor=#1E3A8A;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="160" y="560" width="470" height="360" as="geometry"/>
+        </mxCell>
+        <mxCell id="nodeA" value="PARKING NODE A&#xa;Slot A01–A20&#xa;Reservation • Enter/Exit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=3;fontColor=#1E40AF;fontSize=18;fontStyle=1;" vertex="1" parent="groupA">
+          <mxGeometry x="50" y="70" width="370" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="dbA" value="DATABASE A&#xa;Dữ liệu riêng của Bãi A" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=3;fontColor=#166534;fontSize=17;fontStyle=1;" vertex="1" parent="groupA">
+          <mxGeometry x="105" y="230" width="260" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-dbA" value="SQL nội bộ" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;fontSize=13;" edge="1" parent="groupA" source="nodeA" target="dbA"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="groupB" value="HẠ TẦNG BÃI B — ĐỘC LẬP" style="swimlane;horizontal=1;startSize=38;rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#A78BFA;strokeWidth=3;dashed=1;fontColor=#4C1D95;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="665" y="560" width="470" height="360" as="geometry"/>
+        </mxCell>
+        <mxCell id="nodeB" value="PARKING NODE B&#xa;Slot B01–B30&#xa;Reservation • Enter/Exit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;strokeWidth=3;fontColor=#5B21B6;fontSize=18;fontStyle=1;" vertex="1" parent="groupB">
+          <mxGeometry x="50" y="70" width="370" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="dbB" value="DATABASE B&#xa;Dữ liệu riêng của Bãi B" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=3;fontColor=#166534;fontSize=17;fontStyle=1;" vertex="1" parent="groupB">
+          <mxGeometry x="105" y="230" width="260" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-dbB" value="SQL nội bộ" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;fontSize=13;" edge="1" parent="groupB" source="nodeB" target="dbB"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="groupC" value="HẠ TẦNG BÃI C — ĐỘC LẬP" style="swimlane;horizontal=1;startSize=38;rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#FB923C;strokeWidth=3;dashed=1;fontColor=#7C2D12;fontSize=17;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="1170" y="560" width="470" height="360" as="geometry"/>
+        </mxCell>
+        <mxCell id="nodeC" value="PARKING NODE C&#xa;Slot C01–C15&#xa;Reservation • Enter/Exit" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;strokeWidth=3;fontColor=#9A3412;fontSize=18;fontStyle=1;" vertex="1" parent="groupC">
+          <mxGeometry x="50" y="70" width="370" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="dbC" value="DATABASE C&#xa;Dữ liệu riêng của Bãi C" style="shape=cylinder3;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#DCFCE7;strokeColor=#16A34A;strokeWidth=3;fontColor=#166534;fontSize=17;fontStyle=1;" vertex="1" parent="groupC">
+          <mxGeometry x="105" y="230" width="260" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="edge-dbC" value="SQL nội bộ" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;strokeWidth=2;endArrow=block;fontSize=13;" edge="1" parent="groupC" source="nodeC" target="dbC"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="edgeA" value="REST/JSON • Health check" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;strokeWidth=3;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#1D4ED8;fontSize=13;" edge="1" parent="1" source="aggregator" target="nodeA"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edgeB" value="REST/JSON • Health check" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;strokeWidth=3;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#1D4ED8;fontSize=13;" edge="1" parent="1" source="aggregator" target="nodeB"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="edgeC" value="REST/JSON • Health check" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;strokeWidth=3;startArrow=block;startFill=1;endArrow=block;endFill=1;fontColor=#1D4ED8;fontSize=13;" edge="1" parent="1" source="aggregator" target="nodeC"><mxGeometry relative="1" as="geometry"/></mxCell>
+
+        <mxCell id="note" value="ĐẶC TÍNH PHÂN TÁN: Không dùng chung CSDL • Giao tiếp qua mạng • Node B lỗi thì A và C vẫn hoạt động • Có thể thêm Node D, E…" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#CBD5E1;strokeWidth=2;fontColor=#334155;fontSize=16;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="160" y="960" width="1480" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="members" value="Nhóm 16: Vũ Văn Hùng • Hoàng Văn Huynh • Nguyễn Văn Luân • Trịnh Kim Loan • Đỗ Huyền Trang • Phạm Sỹ Hiệp" style="text;html=1;align=center;verticalAlign=middle;resizable=0;points=[];autosize=1;strokeColor=none;fillColor=none;fontColor=#64748B;fontSize=13;" vertex="1" parent="1">
+          <mxGeometry x="310" y="1045" width="1180" height="30" as="geometry"/>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

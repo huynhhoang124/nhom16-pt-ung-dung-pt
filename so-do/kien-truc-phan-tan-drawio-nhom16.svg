@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#333333"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#1a73e8"/>
+    </marker>
+  </defs>
+
+  <rect width="1600" height="900" fill="#ffffff"/>
+  <text x="800" y="42" text-anchor="middle" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#222222">
+    MÔ HÌNH KIẾN TRÚC HỆ THỐNG PHÂN TÁN
+  </text>
+  <text x="800" y="75" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" fill="#333333">
+    Đề tài: Bãi đỗ xe thông minh liên kết nhiều bãi - Nhóm 16
+  </text>
+
+  <!-- Actors -->
+  <ellipse cx="115" cy="175" rx="25" ry="25" fill="#f5f5f5" stroke="#666666" stroke-width="2"/>
+  <line x1="115" y1="200" x2="115" y2="260" stroke="#666666" stroke-width="3"/>
+  <line x1="77" y1="222" x2="153" y2="222" stroke="#666666" stroke-width="3"/>
+  <line x1="115" y1="260" x2="80" y2="304" stroke="#666666" stroke-width="3"/>
+  <line x1="115" y1="260" x2="150" y2="304" stroke="#666666" stroke-width="3"/>
+  <text x="115" y="337" text-anchor="middle" font-family="Arial, sans-serif" font-size="17" font-weight="700">Người dùng</text>
+  <text x="115" y="360" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#555555">Khách / Nhân viên / Admin</text>
+
+  <!-- Main distributed-system boundary -->
+  <rect x="245" y="115" width="1300" height="680" fill="none" stroke="#888888" stroke-width="2" stroke-dasharray="8 6"/>
+  <rect x="270" y="102" width="280" height="27" fill="#ffffff"/>
+  <text x="280" y="121" font-family="Arial, sans-serif" font-size="16" font-weight="700" fill="#555555">HỆ THỐNG SMART PARKING</text>
+
+  <!-- Frontend -->
+  <rect x="315" y="180" width="250" height="120" rx="7" fill="#dae8fc" stroke="#6c8ebf" stroke-width="2"/>
+  <text x="440" y="222" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="700">Web Application</text>
+  <text x="440" y="251" text-anchor="middle" font-family="Arial, sans-serif" font-size="16">ReactJS</text>
+  <text x="440" y="278" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" fill="#444444">Xem bãi, xem slot, đặt chỗ</text>
+
+  <!-- Aggregator -->
+  <rect x="690" y="165" width="330" height="150" rx="7" fill="#fff2cc" stroke="#d6b656" stroke-width="2"/>
+  <text x="855" y="205" text-anchor="middle" font-family="Arial, sans-serif" font-size="21" font-weight="700">Aggregator Service</text>
+  <text x="715" y="238" font-family="Arial, sans-serif" font-size="15">- Nhận yêu cầu từ Frontend</text>
+  <text x="715" y="265" font-family="Arial, sans-serif" font-size="15">- Gọi đồng thời các Parking Node</text>
+  <text x="715" y="292" font-family="Arial, sans-serif" font-size="15">- Tổng hợp kết quả, kiểm tra node</text>
+
+  <!-- Top edges -->
+  <line x1="155" y1="242" x2="315" y2="242" stroke="#333333" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="235" y="228" text-anchor="middle" font-family="Arial, sans-serif" font-size="14">HTTPS</text>
+  <line x1="565" y1="242" x2="690" y2="242" stroke="#333333" stroke-width="2.5" marker-end="url(#arrow)"/>
+  <text x="627" y="220" text-anchor="middle" font-family="Arial, sans-serif" font-size="14">REST API</text>
+  <text x="627" y="238" text-anchor="middle" font-family="Arial, sans-serif" font-size="13" fill="#555555">WebSocket</text>
+
+  <!-- Network branch -->
+  <line x1="855" y1="315" x2="855" y2="385" stroke="#1a73e8" stroke-width="2.5"/>
+  <line x1="445" y1="385" x2="1265" y2="385" stroke="#1a73e8" stroke-width="2.5"/>
+  <line x1="445" y1="385" x2="445" y2="440" stroke="#1a73e8" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+  <line x1="855" y1="385" x2="855" y2="440" stroke="#1a73e8" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+  <line x1="1265" y1="385" x2="1265" y2="440" stroke="#1a73e8" stroke-width="2.5" marker-end="url(#arrowBlue)"/>
+  <text x="855" y="369" text-anchor="middle" font-family="Arial, sans-serif" font-size="15" font-weight="700" fill="#1a73e8">HTTP/REST - JSON - Health Check</text>
+
+  <!-- Parking Node A -->
+  <rect x="300" y="440" width="290" height="120" rx="5" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+  <text x="445" y="480" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="700">Parking Node A</text>
+  <text x="445" y="510" text-anchor="middle" font-family="Arial, sans-serif" font-size="15">Quản lý bãi A - 20 slot</text>
+  <text x="445" y="537" text-anchor="middle" font-family="Arial, sans-serif" font-size="14">Port 8001</text>
+  <line x1="445" y1="560" x2="445" y2="630" stroke="#333333" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <ellipse cx="445" cy="651" rx="115" ry="22" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <rect x="330" y="651" width="230" height="76" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <ellipse cx="445" cy="727" rx="115" ry="22" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <text x="445" y="682" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700">Database A</text>
+  <text x="445" y="707" text-anchor="middle" font-family="Arial, sans-serif" font-size="14">Slots + Reservations A</text>
+
+  <!-- Parking Node B -->
+  <rect x="710" y="440" width="290" height="120" rx="5" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+  <text x="855" y="480" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="700">Parking Node B</text>
+  <text x="855" y="510" text-anchor="middle" font-family="Arial, sans-serif" font-size="15">Quản lý bãi B - 30 slot</text>
+  <text x="855" y="537" text-anchor="middle" font-family="Arial, sans-serif" font-size="14">Port 8002</text>
+  <line x1="855" y1="560" x2="855" y2="630" stroke="#333333" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <ellipse cx="855" cy="651" rx="115" ry="22" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <rect x="740" y="651" width="230" height="76" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <ellipse cx="855" cy="727" rx="115" ry="22" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <text x="855" y="682" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700">Database B</text>
+  <text x="855" y="707" text-anchor="middle" font-family="Arial, sans-serif" font-size="14">Slots + Reservations B</text>
+
+  <!-- Parking Node C -->
+  <rect x="1120" y="440" width="290" height="120" rx="5" fill="#d5e8d4" stroke="#82b366" stroke-width="2"/>
+  <text x="1265" y="480" text-anchor="middle" font-family="Arial, sans-serif" font-size="20" font-weight="700">Parking Node C</text>
+  <text x="1265" y="510" text-anchor="middle" font-family="Arial, sans-serif" font-size="15">Quản lý bãi C - 15 slot</text>
+  <text x="1265" y="537" text-anchor="middle" font-family="Arial, sans-serif" font-size="14">Port 8003</text>
+  <line x1="1265" y1="560" x2="1265" y2="630" stroke="#333333" stroke-width="2.5" marker-end="url(#arrow)"/>
+
+  <ellipse cx="1265" cy="651" rx="115" ry="22" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <rect x="1150" y="651" width="230" height="76" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <ellipse cx="1265" cy="727" rx="115" ry="22" fill="#e1d5e7" stroke="#9673a6" stroke-width="2"/>
+  <text x="1265" y="682" text-anchor="middle" font-family="Arial, sans-serif" font-size="18" font-weight="700">Database C</text>
+  <text x="1265" y="707" text-anchor="middle" font-family="Arial, sans-serif" font-size="14">Slots + Reservations C</text>
+
+  <!-- Footer note -->
+  <rect x="315" y="810" width="970" height="45" rx="3" fill="#f5f5f5" stroke="#666666" stroke-width="1.5"/>
+  <text x="800" y="838" text-anchor="middle" font-family="Arial, sans-serif" font-size="15">
+    Mỗi Parking Node chạy độc lập và chỉ truy cập database của chính nó. Một node lỗi, các node còn lại vẫn hoạt động.
+  </text>
+</svg>
