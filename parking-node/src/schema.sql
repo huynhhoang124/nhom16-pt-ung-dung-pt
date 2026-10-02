@@ -13,7 +13,7 @@ CREATE TABLE IF NOT EXISTS parking_slots (
 
 CREATE TABLE IF NOT EXISTS reservations (
   id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  request_id    VARCHAR(64) UNIQUE NOT NULL,          -- Idempotency-Key: retry không tạo bản thứ hai
+  request_id    VARCHAR(128) UNIQUE NOT NULL,         -- "<userId>:<Idempotency-Key>": retry không tạo bản thứ hai
   user_id       VARCHAR(64) NOT NULL,
   slot_id       INT NOT NULL REFERENCES parking_slots(id),
   license_plate VARCHAR(20) NOT NULL,

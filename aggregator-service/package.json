@@ -1,0 +1,23 @@
+{
+  "name": "aggregator-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Diem vao duy nhat: dinh tuyen, tong hop, health check, nhan su kien tu RabbitMQ, day realtime",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "amqplib": "^2.2.0",
+    "bcryptjs": "^3.0.3",
+    "express": "^5.2.1",
+    "jsonwebtoken": "^9.0.3",
+    "pg": "^8.23.1",
+    "socket.io": "^4.8.4"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
+  }
+}

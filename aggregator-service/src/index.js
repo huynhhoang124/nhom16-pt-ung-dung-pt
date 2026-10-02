@@ -1,0 +1,63 @@
+const http = require('node:http');
+const fs = require('node:fs');
+const path = require('node:path');
+const { Pool } = require('pg');
+const { Server } = require('socket.io');
+const { makeRegistry } = require('./nodes');
+const { applyEvent, reconcile, startConsumer } = require('./events');
+const { makeAuth, seedUsers } = require('./auth');
+const { makeApp } = require('./routes');
+
+const env = (k, d) => process.env[k] ?? d;
+
+// NODES='[{"parkingId":"A","name":"Bãi A","apiUrl":"http://parking-a:8001","address":"..."}]'
+async function init(pool) {
+  await pool.query(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+  for (const n of JSON.parse(env('NODES', '[]'))) {
+    await pool.query(
+      `INSERT INTO parking_nodes(parking_id, name, api_url, address) VALUES ($1,$2,$3,$4)
+       ON CONFLICT (parking_id) DO NOTHING`, [n.parkingId, n.name, n.apiUrl, n.address ?? null]);
+  }
+  await seedUsers(pool, env('DEMO_PASSWORD', '123456'));
+}
+
+async function main() {
+  const pool = new Pool({ connectionString: env('DATABASE_URL') });
+  for (let i = 1; ; i++) {
+    try { await init(pool); break; }
+    catch (e) { if (i >= 30) throw e; console.log(`DB chưa sẵn sàng (${e.message}), thử lại...`); await new Promise((r) => setTimeout(r, 2000)); }
+  }
+
+  const reg = makeRegistry({
+    internalKey: env('INTERNAL_KEY', 'dev'),
+    timeoutMs: Number(env('NODE_TIMEOUT_MS', 2000)),
+    failThreshold: Number(env('FAIL_THRESHOLD', 3)),
+  });
+  for (const row of (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows) reg.add(row);
+
+  const cache = new Map();
+  const app = makeApp({ pool, reg, cache, auth: makeAuth(env('JWT_SECRET', 'dev-secret')) });
+  const server = http.createServer(app);
+  const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS
+
+  const push = (e) => io.emit('SLOT_UPDATED', e);
+  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e) => { if (applyEvent(cache, e)) push(e); });
+
+  const onChange = (n, prev) => {
+    console.log(`Bãi ${n.id}: ${prev} -> ${n.status}`);
+    io.emit('NODE_STATUS', { parkingId: n.id, status: n.status });
+    if (n.status === 'ONLINE') {
+      reconcile(reg, cache, n, push)
+        .then((k) => console.log(`Đối soát bãi ${n.id}: cập nhật ${k} slot`))
+        .catch((e) => console.error(`Đối soát bãi ${n.id} lỗi:`, e.message));
+    }
+  };
+  const check = () => reg.check(onChange).catch((e) => console.error('health:', e.message));
+  check();
+  setInterval(check, Number(env('HEALTH_INTERVAL_MS', 5000)));
+
+  const port = Number(env('PORT', 8000));
+  server.listen(port, () => console.log(`Aggregator chạy ở cổng ${port}`));
+}
+
+main().catch((e) => { console.error(e); process.exit(1); });
