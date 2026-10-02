@@ -2,7 +2,13 @@
 
 Đây là bản **tổng hợp để làm bài**: lý thuyết (xem `ly-thuyet-ap-dung-xuyen-suot.md`) đã được chuyển thành **quyết định cụ thể, schema, API, code mẫu, test, kịch bản demo và dàn báo cáo**, bám theo `Ke_hoach_trien_khai.pdf` (33 trang) và `Nhom16_Mo_hinh_HLD.pdf`.
 
-> **Trạng thái kiểm chứng:** schema SQL, `reserve`, `moveSlot` và `relay` (mục 3, 5.1–5.3) đã chạy thử trên PostgreSQL thật (PGlite) với 15 kiểm tra, **đạt hết**. Đoạn Aggregator (5.4), Docker Compose (mục 6) và kiểm thử song song thật (TC09) **chưa chạy**. Chi tiết ở mục 12.
+> **Cập nhật 02/10/2026: đã có code chạy được.** File này là bản thiết kế ban đầu. Code thật nằm ở `parking-node/`, `aggregator-service/`, `frontend/`, `docker-compose.yml`; kế hoạch cho nhóm ở `ke-hoach-thuc-hien-btl.md`. Bản đã làm khác thiết kế dưới đây ở 6 điểm:
+> 1. **Dùng RabbitMQ ngay từ đầu** (nhóm đã chốt ở mục 0). Relay publish qua confirm channel lên exchange topic `parking.events`; Aggregator nhận từ queue `aggregator.slot-updates` (xem `parking-node/src/relay.js`, `aggregator-service/src/events.js`). Mục 5.3 (relay HTTP) không còn dùng.
+> 2. `request_id` = `<userId>:<Idempotency-Key>`, cột nới lên 128 ký tự: người khác dùng lại key không đọc trộm được reservation.
+> 3. Sửa lỗi đua mà e2e phát hiện: hai request cùng key chạy song song, request chờ khoá nhận 409. Nay khi 409 thì kiểm tra lại theo `request_id` (`parking-node/src/slots.js`, hàm `reserve`).
+> 4. Thao tác nhân viên gộp vào trang chi tiết bãi (bấm slot để xe vào/ra/khoá), không làm trang Staff riêng.
+> 5. Chi tiết bãi OFFLINE trả cache cuối cùng kèm `stale: true`; thêm `GET /api/me/reservations`, `GET /api/parkings/:id/reservations` (nhân viên), `/api/admin/nodes`.
+> 6. **Kết quả test thật:** 14 test Parking Node + 11 test Aggregator (PGlite, không cần Docker) + **9 test e2e trên Docker** (Postgres + RabbitMQ thật), đều đạt; gồm TC09 (20 request đồng thời → 1×201, 19×409), tắt bãi B, tắt Aggregator, tắt broker. Phần "chưa kiểm chứng" ở mục 12 nay đã được kiểm chứng.
 
 ---
 
