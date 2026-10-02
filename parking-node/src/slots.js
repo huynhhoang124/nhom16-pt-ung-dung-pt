@@ -35,11 +35,16 @@ const findByRequest = (pool, requestId) =>
      WHERE r.request_id = $1`, [requestId]);
 
 async function reserve(pool, parkingId, { requestId, userId, slotCode, licensePlate }, minutes = 15) {
-  const prior = await findByRequest(pool, requestId);
-  if (prior.rowCount) return { code: 200, body: prior.rows[0], replayed: true };   // retry an toàn
+  // Đã có bản ghi với requestId này (retry, hoặc request trùng chạy song song đã thắng) -> trả lại bản đó.
+  const replayOr = async (fallback) => {
+    const prior = await findByRequest(pool, requestId);
+    return prior.rowCount ? { code: 200, body: prior.rows[0], replayed: true } : fallback;
+  };
+  const prior = await replayOr(null);
+  if (prior) return prior;
 
   try {
-    return await tx(pool, async (c) => {
+    const out = await tx(pool, async (c) => {
       // compare-and-swap nguyên tử: chỉ một request thấy 1 dòng bị ảnh hưởng
       const s = await c.query(
         `UPDATE parking_slots SET status='RESERVED', version=version+1, updated_at=now()
@@ -52,12 +57,12 @@ async function reserve(pool, parkingId, { requestId, userId, slotCode, licensePl
       await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', s.rows[0].version, licensePlate);
       return { code: 201, body: { ...r.rows[0], slot_code: slotCode } };
     });
+    // 409 có thể do chính request trùng của mình vừa giữ slot: chờ khoá xong thì slot đã RESERVED.
+    return out.code === 409 ? await replayOr(out) : out;
   } catch (e) {
     if (e.code !== '23505') throw e;
-    // hai request cùng requestId đua nhau: bản thắng đã commit, trả lại bản đó
-    const again = await findByRequest(pool, requestId);
-    if (again.rowCount) return { code: 200, body: again.rows[0], replayed: true };
-    return { code: 409, body: { error: 'SLOT_TAKEN' } };   // vi phạm ux_one_active_per_slot
+    // vi phạm UNIQUE(request_id) khi đua nhau, hoặc ux_one_active_per_slot
+    return replayOr({ code: 409, body: { error: 'SLOT_TAKEN' } });
   }
 }
 
