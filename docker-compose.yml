@@ -1,0 +1,86 @@
+# Hệ thống bãi đỗ xe phân tán – Nhóm 16
+#   docker compose up -d --build                 # chạy 3 bãi A, B, C
+#   docker compose --profile extra up -d         # thêm bãi D (demo mở rộng)
+# Mỗi bãi: 1 container node + 1 Postgres riêng. Node bãi này không có địa chỉ DB của bãi khác.
+name: nhom16-parking
+
+x-pg: &pg
+  image: postgres:16-alpine
+  environment: { POSTGRES_PASSWORD: dev, POSTGRES_DB: parking }
+  healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres -d parking"], interval: 3s, timeout: 3s, retries: 30 }
+
+x-node-env: &node-env
+  INTERNAL_KEY: ${INTERNAL_KEY:-dev}
+  RABBITMQ_URL: amqp://parking:parking@rabbitmq
+  RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
+
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    environment: { RABBITMQ_DEFAULT_USER: parking, RABBITMQ_DEFAULT_PASS: parking }
+    ports: ["5672:5672", "15672:15672"]          # 15672 = giao diện quản lý (parking/parking)
+    volumes: [rabbitmq-data:/var/lib/rabbitmq]
+    healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"], interval: 5s, timeout: 5s, retries: 30 }
+
+  db-a: { <<: *pg, volumes: [db-a-data:/var/lib/postgresql/data] }
+  db-b: { <<: *pg, volumes: [db-b-data:/var/lib/postgresql/data] }
+  db-c: { <<: *pg, volumes: [db-c-data:/var/lib/postgresql/data] }
+  db-agg: { <<: *pg, volumes: [db-agg-data:/var/lib/postgresql/data] }
+
+  parking-a:
+    build: ./parking-node
+    image: nhom16/parking-node
+    environment: { <<: *node-env, PARKING_ID: A, PORT: 8001, SLOT_COUNT: 20, DATABASE_URL: "postgres://postgres:dev@db-a/parking" }
+    ports: ["8001:8001"]
+    depends_on: { db-a: { condition: service_healthy } }
+  parking-b:
+    build: ./parking-node
+    image: nhom16/parking-node
+    environment: { <<: *node-env, PARKING_ID: B, PORT: 8002, SLOT_COUNT: 30, DATABASE_URL: "postgres://postgres:dev@db-b/parking" }
+    ports: ["8002:8002"]
+    depends_on: { db-b: { condition: service_healthy } }
+  parking-c:
+    build: ./parking-node
+    image: nhom16/parking-node
+    environment: { <<: *node-env, PARKING_ID: C, PORT: 8003, SLOT_COUNT: 15, DATABASE_URL: "postgres://postgres:dev@db-c/parking" }
+    ports: ["8003:8003"]
+    depends_on: { db-c: { condition: service_healthy } }
+
+  aggregator:
+    build: ./aggregator-service
+    environment:
+      PORT: 8000
+      DATABASE_URL: "postgres://postgres:dev@db-agg/parking"
+      RABBITMQ_URL: amqp://parking:parking@rabbitmq
+      INTERNAL_KEY: ${INTERNAL_KEY:-dev}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:-123456}
+      NODES: >-
+        [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông"},
+         {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội"},
+         {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội"}]
+    ports: ["8000:8000"]
+    depends_on: { db-agg: { condition: service_healthy } }
+
+  frontend:
+    build: ./frontend
+    ports: ["3000:80"]
+    depends_on: [aggregator]
+
+  # --- Demo mở rộng: thêm bãi D rồi đăng ký trên trang Quản trị (apiUrl http://parking-d:8004) ---
+  db-d: { <<: *pg, profiles: [extra], volumes: [db-d-data:/var/lib/postgresql/data] }
+  parking-d:
+    profiles: [extra]
+    build: ./parking-node
+    image: nhom16/parking-node
+    environment: { <<: *node-env, PARKING_ID: D, PORT: 8004, SLOT_COUNT: 10, DATABASE_URL: "postgres://postgres:dev@db-d/parking" }
+    ports: ["8004:8004"]
+    depends_on: { db-d: { condition: service_healthy } }
+
+volumes:
+  rabbitmq-data:
+  db-a-data:
+  db-b-data:
+  db-c-data:
+  db-agg-data:
+  db-d-data:

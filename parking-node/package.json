@@ -1,0 +1,20 @@
+{
+  "name": "parking-node",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Mot bai do xe: quan ly slot, dat cho, xe vao/ra; outbox -> RabbitMQ",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": { "node": ">=20" },
+  "dependencies": {
+    "amqplib": "^2.2.0",
+    "express": "^5.2.1",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
+  }
+}
