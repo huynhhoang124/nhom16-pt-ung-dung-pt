@@ -1,0 +1,60 @@
+const express = require('express');
+const s = require('./slots');
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15 }) {
+  const app = express();
+  app.use(express.json());
+
+  // /health không cần khoá: Aggregator dùng làm failure detector. Kiểm tra cả DB.
+  app.get('/health', async (_req, res) => {
+    try { await pool.query('SELECT 1'); res.json({ status: 'UP', parkingId }); }
+    catch { res.status(503).json({ status: 'DOWN', parkingId }); }
+  });
+
+  // Chỉ Aggregator (và barrier của bãi) được gọi API nghiệp vụ.
+  app.use('/api', (req, res, next) =>
+    req.get('x-internal-key') === internalKey ? next() : res.status(401).json({ error: 'UNAUTHORIZED' }));
+
+  const send = (res, r) => res.status(r.code).json(r.body);
+
+  app.get('/api/availability', async (_req, res) => res.json(await s.availability(pool, parkingId)));
+  app.get('/api/slots', async (_req, res) => res.json(await s.listSlots(pool, false)));
+  app.get('/api/slots/available', async (_req, res) => res.json(await s.listSlots(pool, true)));
+
+  app.post('/api/reservations', async (req, res) => {
+    const { requestId, userId, slotCode, licensePlate } = req.body ?? {};
+    if (![requestId, userId, slotCode, licensePlate].every((v) => typeof v === 'string' && v)) {
+      return res.status(400).json({ error: 'requestId, userId, slotCode, licensePlate are required' });
+    }
+    send(res, await s.reserve(pool, parkingId, { requestId, userId, slotCode, licensePlate }, reservationMinutes));
+  });
+
+  app.get('/api/reservations', async (req, res) => res.json(await s.listReservations(pool, req.query.userId)));
+
+  app.delete('/api/reservations/:id', async (req, res) => {
+    if (!UUID.test(req.params.id)) return res.status(404).json({ error: 'RESERVATION_NOT_ACTIVE' });
+    send(res, await s.endReservation(pool, parkingId, req.params.id, 'CANCELLED', req.query.userId));
+  });
+
+  const moves = {
+    enter: [['RESERVED', 'AVAILABLE'], 'OCCUPIED', 'CAR_ENTER'],   // AVAILABLE -> OCCUPIED: xe vào không đặt trước
+    exit: [['OCCUPIED'], 'AVAILABLE', 'CAR_EXIT'],
+    maintenance: [['AVAILABLE'], 'MAINTENANCE', 'MAINTENANCE_ON'],
+    unmaintenance: [['MAINTENANCE'], 'AVAILABLE', 'MAINTENANCE_OFF'],
+  };
+  app.post('/api/slots/:code/:action', async (req, res) => {
+    const m = moves[req.params.action];
+    if (!m) return res.status(404).json({ error: 'UNKNOWN_ACTION' });
+    send(res, await s.moveSlot(pool, parkingId, req.params.code, ...m, req.body?.licensePlate));
+  });
+
+  app.use((err, _req, res, _next) => {
+    console.error(err);
+    res.status(500).json({ error: 'INTERNAL_ERROR' });
+  });
+  return app;
+}
+
+module.exports = { makeApp };

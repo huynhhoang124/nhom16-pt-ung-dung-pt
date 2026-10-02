@@ -8,6 +8,7 @@
 - `tai-lieu/Nhom16_Mo_hinh_HLD.pdf` – mô hình HLD + trả lời 3 câu (vì sao / ở đâu / giải pháp phân tán). **Bản mới nhất.**
 - `tai-lieu/Ke_hoach_trien_khai.pdf` – kế hoạch triển khai 33 trang (API, DB, kiểm thử, 7 giai đoạn).
 - `tai-lieu/ly-thuyet-ap-dung-xuyen-suot.md` – lý thuyết ứng dụng phân tán áp vào 8 kịch bản của đề tài (đặt chỗ, sự kiện, node sập/phục hồi…), kèm vấn đáp.
+- `tai-lieu/ap-dung-vao-btl.md` – bản áp dụng vào BTL: quyết định cần chốt, schema, API, code mẫu (đã kiểm chứng phần Node), test, kịch bản demo, phân công 6 người, dàn báo cáo.
 - `so-do/kien-truc-phan-tan-drawio-nhom16.*` – sơ đồ kiến trúc kiểu draw.io (Bài tập 2, 20/09/2026).
 - `so-do/kien-truc-phan-tan-bai-do-xe-thong-minh.*` – bản sơ đồ đầu tiên.
 
