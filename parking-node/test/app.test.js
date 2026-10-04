@@ -27,11 +27,15 @@ test('HTTP: health mở, API cần khoá nội bộ, luồng đặt/vào/ra/hu�
   assert.deepEqual((await call('/api/availability')).body, { parkingId: 'B', available: 3, total: 3, byType: { CAR: { available: 3, total: 3 } } });
 
   assert.equal((await call('/api/reservations', { method: 'POST', body: { slotCode: 'B01' } })).status, 400);
-  const body = { requestId: 'q1', userId: 'u1', slotCode: 'B01', licensePlate: '29A-1' };
+  const body = { requestId: 'q1', userId: 'u1', slotCode: 'B01', licensePlate: '29A-111.11' };
   const r = await call('/api/reservations', { method: 'POST', body });
   assert.equal(r.status, 201);
   assert.equal((await call('/api/reservations', { method: 'POST', body })).status, 200);   // retry
   assert.equal((await call('/api/reservations', { method: 'POST', body: { ...body, requestId: 'q2' } })).status, 409);
+  // TC54: biển số sai định dạng -> 400; đúng thì lưu dạng chuẩn
+  assert.deepEqual((await call('/api/reservations', { method: 'POST', body: { ...body, requestId: 'q3', slotCode: 'B03', licensePlate: 'abc' } })).body, { error: 'INVALID_PLATE' });
+  assert.equal(r.body.license_plate, '29A11111');
+  assert.equal((await call('/api/slots/B03/enter', { method: 'POST', body: { licensePlate: '12' } })).status, 400);
 
   assert.equal((await call('/api/slots/B02/fly', { method: 'POST' })).status, 404);
   assert.equal((await call('/api/slots/B02/exit', { method: 'POST' })).status, 409);

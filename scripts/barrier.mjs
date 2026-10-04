@@ -2,6 +2,7 @@
 // Chứng minh xe vào/ra tại bãi không phụ thuộc trung tâm (tắt aggregator vẫn chạy được).
 //   node scripts/barrier.mjs A A05 enter [biển-số]
 //   node scripts/barrier.mjs A A05 exit
+try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const PORTS = { A: 8001, B: 8002, C: 8003, D: 8004 };
 const [parkingId, slot, action = 'enter', plate] = process.argv.slice(2);
 

@@ -7,7 +7,7 @@ const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
-  app.use(express.json());
+  app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
 
   // Chuyển tiếp tới đúng node (định tuyến theo parking_id). Node OFFLINE: từ chối ngay, không xếp hàng ngầm.

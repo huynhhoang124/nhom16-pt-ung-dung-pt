@@ -9,6 +9,7 @@ import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 
+try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { io } = createRequire(new URL('../frontend/package.json', import.meta.url))('socket.io-client');
 const AGG = 'http://localhost:8000';
@@ -85,7 +86,7 @@ test('TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo b
 test('TC09 20 request đồng thời cùng một slot (Postgres thật): đúng 1 thành công', T, async () => {
   const slot = await freeSlot('C');
   const results = await Promise.all(Array.from({ length: 20 }, (_, i) => node('C', '/api/reservations', {
-    method: 'POST', body: { requestId: `race-${randomUUID()}`, userId: `u${i}`, slotCode: slot, licensePlate: `29A-${i}` },
+    method: 'POST', body: { requestId: `race-${randomUUID()}`, userId: `u${i}`, slotCode: slot, licensePlate: `29A-${String(i).padStart(5, '0')}` },
   })));
   results.filter((r) => r.status === 201).forEach((r) => cancelLater('C', r.body.id));
   const codes = results.map((r) => r.status).sort();
@@ -96,7 +97,7 @@ test('10 lần gửi đồng thời CÙNG một Idempotency-Key: chỉ 1 reserva
   const slot = await freeSlot('C');
   const key = randomUUID();
   const rs = await Promise.all(Array.from({ length: 10 }, () => agg('/api/parkings/C/reservations', {
-    method: 'POST', token: tok.user2, key, body: { slotCode: slot, licensePlate: '29A-999' },
+    method: 'POST', token: tok.user2, key, body: { slotCode: slot, licensePlate: '29A-999.99' },
   })));
   assert.ok(rs.every((r) => r.status === 200 || r.status === 201), rs.map((r) => r.status).join(','));
   assert.equal(new Set(rs.map((r) => r.body.id)).size, 1);
@@ -128,11 +129,11 @@ test('TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B 
     await until('B OFFLINE', async () => (await statusOf('B')) === 'OFFLINE');
     const avail = await agg('/api/parkings/availability');
     assert.deepEqual(avail.body.map((p) => [p.parkingId, p.status]), [['A', 'ONLINE'], ['B', 'OFFLINE'], ['C', 'ONLINE']]);
-    const r = await agg('/api/parkings/B/reservations', { method: 'POST', token: tok.user1, key: randomUUID(), body: { slotCode: 'B02', licensePlate: 'x' } });
+    const r = await agg('/api/parkings/B/reservations', { method: 'POST', token: tok.user1, key: randomUUID(), body: { slotCode: 'B02', licensePlate: '30A-555.55' } });
     assert.deepEqual([r.status, r.body.error], [503, 'PARKING_OFFLINE']);
     const detail = await agg('/api/parkings/B');
     assert.equal(detail.body.stale, true);
-    const ok = await agg('/api/parkings/A/reservations', { method: 'POST', token: tok.user1, key: randomUUID(), body: { slotCode: await freeSlot('A'), licensePlate: 'x' } });
+    const ok = await agg('/api/parkings/A/reservations', { method: 'POST', token: tok.user1, key: randomUUID(), body: { slotCode: await freeSlot('A'), licensePlate: '30A-555.55' } });
     assert.equal(ok.status, 201);
     cancelLater('A', ok.body.id);
   } finally {

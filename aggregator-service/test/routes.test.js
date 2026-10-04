@@ -15,7 +15,7 @@ async function system(t) {
   return { a, b, agg, tokens };
 }
 
-const reserveBody = (slotCode) => ({ slotCode, licensePlate: '30A-123' });
+const reserveBody = (slotCode) => ({ slotCode, licensePlate: '30A-123.45' });
 
 test('đăng nhập: sai mật khẩu 401, đúng thì có token', async (t) => {
   const { agg, tokens } = await system(t);
@@ -97,7 +97,7 @@ test('TC19 lịch sử gửi xe: tra biển số gom từ mọi bãi, bãi treo 
     agg.call(`/api/parkings/${id}/slots/${slot}/enter`, { method: 'POST', token: tokens.admin, body: { licensePlate } });
   assert.equal((await enter('A', 'A02', '30A-999.99')).status, 200);
   await agg.call('/api/parkings/B/reservations', { method: 'POST', token: tokens.user1, key: 'k', body: reserveBody('B01') });
-  assert.equal((await enter('B', 'B01')).body.session.licensePlate, '30A-123');
+  assert.equal((await enter('B', 'B01')).body.session.licensePlate, '30A12345');
 
   const found = await agg.call('/api/sessions/search?plate=30a99999', { token: tokens['staff-a'] });
   assert.deepEqual(found.body.sessions.map((x) => [x.parkingId, x.slotCode]), [['A', 'A02']]);

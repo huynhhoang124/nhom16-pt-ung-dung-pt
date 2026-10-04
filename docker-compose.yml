@@ -1,4 +1,5 @@
 # Hệ thống bãi đỗ xe phân tán – Nhóm 16
+#   cp .env.example .env                         # lần đầu: khoá bí mật (GS-07)
 #   docker compose up -d --build                 # chạy 3 bãi A, B, C
 #   docker compose --profile extra up -d         # thêm bãi D (demo mở rộng)
 # Mỗi bãi: 1 container node + 1 Postgres riêng. SLOTS = loại:tầng:số lượng (CAR ô tô, MOTO xe máy). Node bãi này không có địa chỉ DB của bãi khác.
@@ -10,7 +11,7 @@ x-pg: &pg
   healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres -d parking"], interval: 3s, timeout: 3s, retries: 30 }
 
 x-node-env: &node-env
-  INTERNAL_KEY: ${INTERNAL_KEY:-dev}
+  INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
   RABBITMQ_URL: amqp://parking:parking@rabbitmq
   RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
 
@@ -52,8 +53,8 @@ services:
       PORT: 8000
       DATABASE_URL: "postgres://postgres:dev@db-agg/parking"
       RABBITMQ_URL: amqp://parking:parking@rabbitmq
-      INTERNAL_KEY: ${INTERNAL_KEY:-dev}
-      JWT_SECRET: ${JWT_SECRET:-dev-secret}
+      INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
+      JWT_SECRET: ${JWT_SECRET:?Thiếu JWT_SECRET (chạy cp .env.example .env)}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-123456}
       NODES: >-
         [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông"},

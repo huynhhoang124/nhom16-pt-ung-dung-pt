@@ -75,7 +75,7 @@ test('TC40 mạch mở: lỗi liên tiếp đủ ngưỡng thì OFFLINE ngay, re
 
   const token = await agg.login('user1');
   const started = performance.now();
-  const r = await agg.call('/api/parkings/X/reservations', { method: 'POST', token, key: 'k1', body: { slotCode: 'X01', licensePlate: '30A-1' } });
+  const r = await agg.call('/api/parkings/X/reservations', { method: 'POST', token, key: 'k1', body: { slotCode: 'X01', licensePlate: '30A-111.11' } });
   assert.equal(r.status, 503);
   assert.ok(performance.now() - started < 50, 'mạch mở: từ chối ngay, không gọi node');
   assert.equal(x.state.hits, 3);
@@ -93,7 +93,7 @@ test('TC41 retry 1 lần cứu được lỗi thoáng qua: GET và đặt chỗ 
 
   x.state.failures = 1;
   const token = await agg.login('user1');
-  const r = await agg.call('/api/parkings/X/reservations', { method: 'POST', token, key: 'k1', body: { slotCode: 'X01', licensePlate: '30A-1' } });
+  const r = await agg.call('/api/parkings/X/reservations', { method: 'POST', token, key: 'k1', body: { slotCode: 'X01', licensePlate: '30A-111.11' } });
   assert.equal(r.status, 201);
   assert.equal(x.state.hits, 4);
 });

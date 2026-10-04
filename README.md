@@ -9,18 +9,19 @@
 ## Chạy hệ thống
 Cần Docker Desktop đang bật.
 ```bash
+cp .env.example .env            # lần đầu: khoá bí mật; máy demo thì đổi khoá thành chuỗi ngẫu nhiên
 docker compose up -d --build
 ```
-- Web: http://localhost:3000. Tài khoản demo, mật khẩu `123456`: `user1`, `user2`, `staff-a`/`staff-b`/`staff-c` (nhân viên từng bãi), `admin`.
+- Web: http://localhost:3000. Tự đăng ký tài khoản người dùng, hoặc dùng tài khoản demo (mật khẩu `123456`): `user1`, `user2`, `staff-a`/`staff-b`/`staff-c` (nhân viên từng bãi), `admin`.
 - RabbitMQ: http://localhost:15672 (parking / parking) · Aggregator: :8000 · Parking A/B/C: :8001/:8002/:8003
 - Thêm bãi D để demo mở rộng: `docker compose --profile extra up -d`, rồi đăng ký trên trang Quản trị với `http://parking-d:8004`.
-- Giả lập barrier gọi thẳng bãi: `node scripts/barrier.mjs A A05 enter`
+- Giả lập barrier gọi thẳng bãi: `node scripts/barrier.mjs A A05 enter 30A-123.45` (đọc khoá từ `.env`)
 - Dừng: `docker compose down` (giữ dữ liệu) · `docker compose down -v` (xoá sạch)
 
 ## Kiểm thử
 ```bash
-cd parking-node && npm install && npm test          # 14 test, PGlite, không cần Docker
-cd ../aggregator-service && npm install && npm test # 11 test (cần npm install ở parking-node trước)
+cd parking-node && npm install && npm test          # PGlite, không cần Docker
+cd ../aggregator-service && npm install && npm test # cần npm install ở parking-node trước
 cd ../frontend && npm install && cd ..
 node --test tests/e2e.test.mjs                      # 9 test trên Docker; tự dọn dữ liệu sau khi chạy
 ```
