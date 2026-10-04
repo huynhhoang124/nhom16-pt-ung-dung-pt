@@ -1,0 +1,27 @@
+# GS-01: mỗi push/PR vào dev, main chạy test unit + build frontend. PR đỏ không được merge.
+name: ci
+on:
+  push: { branches: [dev, main] }
+  pull_request: { branches: [dev, main] }
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: "**/package-lock.json" }
+      # aggregator-service/test dùng lại code parking-node nên cài parking-node trước
+      - run: npm ci && npm test
+        working-directory: parking-node
+      - run: npm ci && npm test
+        working-directory: aggregator-service
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci && npm run build
+        working-directory: frontend
