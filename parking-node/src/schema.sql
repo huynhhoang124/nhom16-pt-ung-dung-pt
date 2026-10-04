@@ -57,3 +57,13 @@ CREATE TABLE IF NOT EXISTS parking_sessions (
 CREATE UNIQUE INDEX IF NOT EXISTS ux_open_session_slot  ON parking_sessions(slot_id)       WHERE exited_at IS NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS ux_open_session_plate ON parking_sessions(license_plate) WHERE exited_at IS NULL;
 CREATE INDEX IF NOT EXISTS ix_sessions_entered ON parking_sessions(entered_at DESC);
+
+-- Bảng giá của RIÊNG bãi này (mỗi bãi tự đặt giá, đổi giá bãi C không ảnh hưởng A, B). Tiền là số nguyên VND.
+CREATE TABLE IF NOT EXISTS pricing_rules (
+  vehicle_type    VARCHAR(12) PRIMARY KEY CHECK (vehicle_type IN ('CAR','MOTO')),
+  first_block_min INT NOT NULL,
+  first_block_fee INT NOT NULL,
+  next_hour_fee   INT NOT NULL,
+  overnight_fee   INT NOT NULL,
+  max_day_fee     INT
+);

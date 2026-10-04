@@ -1,6 +1,8 @@
 const express = require('express');
 const s = require('./slots');
 const { normalizePlate, isPlate } = require('./plate');
+const { invalidRule } = require('./pricing');
+const { savePricing } = require('./db');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -47,6 +49,23 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15 }) {
   app.delete('/api/reservations/:id', async (req, res) => {
     if (!UUID.test(req.params.id)) return res.status(404).json({ error: 'RESERVATION_NOT_ACTIVE' });
     send(res, await s.endReservation(pool, parkingId, req.params.id, 'CANCELLED', req.query.userId));
+  });
+
+  app.get('/api/sessions/:id/quote', async (req, res) => {
+    if (!UUID.test(req.params.id)) return res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+    const q = await s.quote(pool, req.params.id);
+    q ? res.json(q) : res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+  });
+
+  // Bảng giá của bãi (NV-03). PUT nhận mảng quy tắc, mỗi loại xe một quy tắc.
+  app.get('/api/pricing', async (_req, res) => res.json(await s.listPricing(pool)));
+  app.put('/api/pricing', async (req, res) => {
+    const rules = req.body;
+    if (!Array.isArray(rules) || !rules.length) return res.status(400).json({ error: 'body must be a non-empty array of rules' });
+    const bad = rules.map(invalidRule).find(Boolean);
+    if (bad) return res.status(400).json({ error: bad });
+    await savePricing(pool, rules);
+    res.json(await s.listPricing(pool));
   });
 
   const moves = {

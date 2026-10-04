@@ -1,6 +1,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const { DEFAULT_RULES, invalidRule } = require('./pricing');
+
 const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
 
 // Danh sách slot cần có. `slots` là số (SLOT_COUNT cũ: toàn ô tô, 10 chỗ/tầng)
@@ -21,8 +23,15 @@ function slotPlan(prefix, slots) {
   }));
 }
 
-// Tạo bảng (idempotent) rồi seed slot. Chạy lại khi khởi động không làm mất dữ liệu.
-async function init(pool, prefix, slots) {
+const savePricing = (c, rules) => Promise.all(rules.map((r) => c.query(
+  `INSERT INTO pricing_rules(vehicle_type, first_block_min, first_block_fee, next_hour_fee, overnight_fee, max_day_fee)
+   VALUES ($1,$2,$3,$4,$5,$6)
+   ON CONFLICT (vehicle_type) DO UPDATE SET first_block_min=$2, first_block_fee=$3, next_hour_fee=$4, overnight_fee=$5, max_day_fee=$6`,
+  [r.vehicleType, r.firstBlockMin, r.firstBlockFee, r.nextHourFee, r.overnightFee, r.maxDayFee ?? null])));
+
+// Tạo bảng (idempotent) rồi seed slot + bảng giá. Chạy lại khi khởi động không làm mất dữ liệu
+// (giá đã sửa qua API được giữ: chỉ seed loại xe chưa có giá). `pricing` = mảng quy tắc (env PRICING).
+async function init(pool, prefix, slots, pricing = DEFAULT_RULES) {
   await pool.query(schema);
   const plan = slotPlan(prefix, slots);
   await pool.query(
@@ -30,6 +39,10 @@ async function init(pool, prefix, slots) {
      SELECT * FROM unnest($1::text[], $2::int[], $3::text[])
      ON CONFLICT (slot_code) DO NOTHING`,
     [plan.map((s) => s.code), plan.map((s) => s.floor), plan.map((s) => s.type)]);
+  const bad = pricing.map(invalidRule).find(Boolean);
+  if (bad) throw new Error(`PRICING sai: ${bad}`);
+  const have = new Set((await pool.query('SELECT vehicle_type FROM pricing_rules')).rows.map((r) => r.vehicle_type));
+  await savePricing(pool, pricing.filter((r) => !have.has(r.vehicleType)));
 }
 
-module.exports = { init, slotPlan };
+module.exports = { init, slotPlan, savePricing };

@@ -14,7 +14,7 @@ async function start() {
       headers: { 'content-type': 'application/json', ...(key ? { 'x-internal-key': key } : {}) },
       body: body && JSON.stringify(body),
     }).then(async (r) => ({ status: r.status, body: await r.json() }));
-  return { call, close: () => server.close() };
+  return { call, pool, close: () => server.close() };
 }
 
 test('HTTP: health mở, API cần khoá nội bộ, luồng đặt/vào/ra/huỷ', async (t) => {
@@ -45,4 +45,16 @@ test('HTTP: health mở, API cần khoá nội bộ, luồng đặt/vào/ra/hu�
   assert.equal((await call('/api/reservations/not-a-uuid', { method: 'DELETE' })).status, 404);
   assert.equal((await call(`/api/reservations/${r.body.id}?userId=u1`, { method: 'DELETE' })).status, 200);
   assert.deepEqual((await call('/api/reservations?userId=u1')).body.map((x) => x.status), ['CANCELLED']);
+});
+
+test('bảng giá: xem, sửa (kiểm dữ liệu), seed không ghi đè giá đã sửa', async (t) => {
+  const { call, pool, close } = await start();
+  t.after(close);
+  const list = await call('/api/pricing');
+  assert.deepEqual(list.body.map((r) => r.vehicleType), ['CAR', 'MOTO']);
+  const car = { ...list.body[0], firstBlockFee: 30000 };
+  assert.equal((await call('/api/pricing', { method: 'PUT', body: [{ ...car, nextHourFee: -5 }] })).status, 400);
+  assert.equal((await call('/api/pricing', { method: 'PUT', body: [car] })).body[0].firstBlockFee, 30000);
+  await require('../src/db').init(pool, 'B', 3);
+  assert.equal((await call('/api/pricing')).body[0].firstBlockFee, 30000);
 });

@@ -1,4 +1,4 @@
-// NV-06: lịch sử gửi xe. Dữ liệu phiên nằm ở DB từng bãi -> gom song song, bãi lỗi thì báo thiếu.
+// NV-06: lịch sử gửi xe; NV-03: phí, bảng giá. Dữ liệu phiên nằm ở DB từng bãi -> gom song song, bãi lỗi thì báo thiếu.
 const enc = encodeURIComponent;
 
 function mountSessions(app, { reg, need, forward }) {
@@ -26,6 +26,17 @@ function mountSessions(app, { reg, need, forward }) {
   app.get('/api/parkings/:id/sessions', need('STAFF', 'ADMIN'), async (req, res) => {
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
     await forward(res, reg.get(req.params.id), '/api/sessions');
+  });
+
+  // Phí tạm tính của một phiên đang gửi (NV-03).
+  app.get('/api/parkings/:id/sessions/:sid/quote', need(), (req, res) =>
+    forward(res, reg.get(req.params.id), `/api/sessions/${enc(req.params.sid)}/quote`));
+
+  // Bảng giá: ai cũng xem được; nhân viên bãi đó hoặc quản trị được sửa.
+  app.get('/api/parkings/:id/pricing', (req, res) => forward(res, reg.get(req.params.id), '/api/pricing'));
+  app.put('/api/parkings/:id/pricing', need('STAFF', 'ADMIN'), async (req, res) => {
+    if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
+    await forward(res, reg.get(req.params.id), '/api/pricing', { method: 'PUT', body: req.body });
   });
 }
 

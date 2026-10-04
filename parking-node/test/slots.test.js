@@ -122,6 +122,22 @@ test('TC17 vào bằng đặt chỗ rồi ra: đúng 1 phiên, lấy biển số
   assert.equal((await s.listSessions(pool, { userId: 'u2' })).length, 0);
 });
 
+test('TC25 xe ra: phiên có phí theo bảng giá của bãi; xem phí tạm tính khi xe còn trong bãi', async () => {
+  const pool = await makePool();
+  await pool.query(`UPDATE pricing_rules SET overnight_fee=0`);   // test không phụ thuộc giờ chạy
+  const enter = await s.moveSlot(pool, P, 'A01', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER', '30A12345');
+  const id = enter.body.session.id;
+  await pool.query(`UPDATE parking_sessions SET entered_at = now() - interval '150 minutes' WHERE id=$1`, [id]);
+  const q = await s.quote(pool, id);
+  assert.equal(q.final, false);
+  assert.equal(q.fee, 25000 + 10000);                              // 150 phút = 2 giờ đầu + 1 giờ (tròn lên)
+  const exit = await s.moveSlot(pool, P, 'A01', ['OCCUPIED'], 'AVAILABLE', 'CAR_EXIT');
+  assert.equal(exit.body.session.fee, 35000);
+  assert.ok(exit.body.session.breakdown.length);
+  assert.equal((await s.quote(pool, id)).final, true);
+  assert.equal((await one(pool, `SELECT fee FROM parking_sessions WHERE id=$1`, [id])).fee, 35000);
+});
+
 test('TC18 cùng biển số vào lần 2 khi chưa ra: 409, slot thứ hai không bị chiếm', async () => {
   const pool = await makePool();
   const enter = (code) => s.moveSlot(pool, P, code, ['RESERVED', 'AVAILABLE'], 'OCCUPIED', 'CAR_ENTER', '29A-111.22');

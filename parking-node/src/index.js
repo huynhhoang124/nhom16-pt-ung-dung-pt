@@ -8,10 +8,13 @@ const env = (k, d) => process.env[k] ?? d;
 const parkingId = env('PARKING_ID', 'A');
 const port = Number(env('PORT', 8001));
 
+// PRICING='[{"vehicleType":"CAR","firstBlockMin":120,"firstBlockFee":30000,...}]' (không có thì dùng giá mặc định)
+const pricing = process.env.PRICING ? JSON.parse(process.env.PRICING) : undefined;
+
 async function main() {
   const pool = new Pool({ connectionString: env('DATABASE_URL') });
   for (let i = 1; ; i++) {          // DB có thể khởi động chậm hơn node
-    try { await init(pool, env('SLOT_PREFIX', parkingId), env('SLOTS') ?? Number(env('SLOT_COUNT', 20))); break; }
+    try { await init(pool, env('SLOT_PREFIX', parkingId), env('SLOTS') ?? Number(env('SLOT_COUNT', 20)), pricing); break; }
     catch (e) { if (i >= 30) throw e; console.log(`DB chưa sẵn sàng (${e.message}), thử lại...`); await new Promise((r) => setTimeout(r, 2000)); }
   }
 

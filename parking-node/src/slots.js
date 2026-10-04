@@ -1,6 +1,8 @@
 // Nghiệp vụ của một bãi. Mọi thay đổi trạng thái slot đi kèm 1 dòng parking_events (outbox)
 // trong CÙNG giao dịch => có sự kiện khi và chỉ khi DB đã commit.
 
+const { calcFee, fromRow } = require('./pricing');
+
 // Dừng giao dịch với kết quả nghiệp vụ (409, 404...) thay vì lỗi hệ thống.
 class Abort {
   constructor(code, body) { this.code = code; this.body = body; }
@@ -94,7 +96,11 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate) {
         `UPDATE parking_sessions SET exited_at=now() WHERE slot_id=$1 AND exited_at IS NULL RETURNING id, license_plate`,
         [slotId])).rows[0];
       plate = plate || open?.license_plate;
-      session = open ? await getSession(c, open.id) : null;  // xe vào trước khi có bảng phiên thì không có phiên
+      if (open) {   // xe vào trước khi có bảng phiên thì không có phiên
+        const q = await quoteIn(c, open.id);
+        await c.query(`UPDATE parking_sessions SET fee=$2 WHERE id=$1`, [open.id, q.fee]);
+        session = { ...(await getSession(c, open.id)), breakdown: q.breakdown };
+      }
     }
     await emit(c, parkingId, type, slotCode, to, s.rows[0].version, plate);
     return { code: 200, body: { slot: slotCode, status: to, version: Number(s.rows[0].version), ...(session && { session }) } };
@@ -107,6 +113,20 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate) {
 
 const getSession = async (c, id) => (await c.query(
   `SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id WHERE ps.id=$1`, [id])).rows[0];
+
+// Phí của một phiên: đã ra thì tính đến giờ ra; còn trong bãi thì tạm tính đến now() của DB bãi.
+async function quoteIn(c, sessionId) {
+  const r = (await c.query(
+    `SELECT ps.entered_at, COALESCE(ps.exited_at, now()) AS until, ps.exited_at, pr.*
+     FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
+     LEFT JOIN pricing_rules pr ON pr.vehicle_type = s.type WHERE ps.id=$1`, [sessionId])).rows[0];
+  if (!r) return null;
+  const q = r.vehicle_type ? calcFee(fromRow(r), r.entered_at, r.until) : { fee: 0, minutes: 0, breakdown: [] };
+  return { sessionId, ...q, final: !!r.exited_at };
+}
+const quote = (pool, sessionId) => quoteIn(pool, sessionId);
+
+const listPricing = async (pool) => (await pool.query('SELECT * FROM pricing_rules ORDER BY vehicle_type')).rows.map(fromRow);
 
 // Lịch sử phiên gửi xe. Biển số so khớp sau khi bỏ dấu cách/chấm/gạch, không phân biệt hoa thường.
 const listSessions = async (pool, { plate, userId, from, to } = {}) => (await pool.query(
@@ -166,4 +186,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { reserve, moveSlot, endReservation, expireDue, availability, listSlots, listReservations, listSessions, emit };
+module.exports = { reserve, moveSlot, endReservation, expireDue, availability, listSlots, listReservations, listSessions, quote, listPricing, emit };

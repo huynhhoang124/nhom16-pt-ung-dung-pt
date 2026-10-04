@@ -46,6 +46,7 @@ const MESSAGES = {
   INVALID_USERNAME: 'Tên đăng nhập 4–32 ký tự: chữ thường, số, dấu chấm, gạch dưới.',
   WEAK_PASSWORD: 'Mật khẩu cần 8–72 ký tự.',
   WRONG_PASSWORD: 'Mật khẩu hiện tại không đúng.',
+  INVALID_PLATE: 'Biển số không hợp lệ (vd 30A-123.45).',
 };
 export const message = (data) => MESSAGES[data?.error] ?? data?.error ?? 'Có lỗi xảy ra.';
 

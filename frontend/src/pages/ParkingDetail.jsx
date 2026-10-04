@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, message, newKey, STATUS_LABEL, useLive } from '../api.js';
 import { TYPE_LABEL } from './Dashboard.jsx';
+import Pricing from './Pricing.jsx';
 
 // Thao tác nhân viên theo trạng thái slot.
 const STAFF_ACTIONS = {
@@ -60,7 +61,10 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
 
   async function act(action) {
     const r = await api(`/api/parkings/${parkingId}/slots/${selected}/${action}`, { method: 'POST', body: { licensePlate: plate || undefined } });
-    setNote(r.ok ? { kind: 'ok', text: `${selected}: ${STATUS_LABEL[r.data.status]}` } : { kind: 'error', text: message(r.data) });
+    const fee = r.data?.session?.fee;
+    setNote(r.ok
+      ? { kind: 'ok', text: `${selected}: ${STATUS_LABEL[r.data.status]}${fee != null ? ` · Phí gửi xe: ${fee.toLocaleString('vi-VN')} đ` : ''}` }
+      : { kind: 'error', text: message(r.data) });
     load();
   }
 
@@ -131,6 +135,8 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
           {!pending && !isStaff && <span className="muted"> – chọn slot trống để đặt.</span>}
         </div>
       )}
+
+      {p.status === 'ONLINE' && <Pricing parkingId={parkingId} canEdit={isStaff} />}
 
       {isStaff && (
         <>
