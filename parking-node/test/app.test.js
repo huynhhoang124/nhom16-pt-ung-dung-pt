@@ -81,3 +81,20 @@ test('TC29–TC32 QR ở cổng: đúng thì vào/ra được; sửa ký tự 40
   // danh sách đặt chỗ: chỉ reservation ACTIVE mới có QR
   assert.equal((await call('/api/reservations')).body[0].qrToken, undefined);
 });
+
+test('NV-01 HTTP: kiểm giờ đến / thời lượng; đặt trước rồi xem lịch slot', async (t) => {
+  const { call, close } = await start();
+  t.after(close);
+  const body = (id, extra) => ({ requestId: id, userId: 'u1', slotCode: 'B01', licensePlate: '30A-123.45', ...extra });
+  const post = (b) => call('/api/reservations', { method: 'POST', body: b });
+  assert.deepEqual((await post(body('t1', { startTime: 'hôm qua' }))).body, { error: 'INVALID_START_TIME' });
+  assert.deepEqual((await post(body('t2', { startTime: new Date(Date.now() + 8 * 86400_000).toISOString() }))).body, { error: 'INVALID_START_TIME' });
+  assert.deepEqual((await post(body('t3', { durationMinutes: 10 }))).body, { error: 'INVALID_DURATION' });
+  const at = new Date(Date.now() + 3 * 3600_000);
+  const r = await post(body('t4', { startTime: at.toISOString(), durationMinutes: 90 }));
+  assert.equal(r.status, 201);
+  assert.equal(new Date(r.body.end_time) - new Date(r.body.start_time), 90 * 60_000);
+  const date = new Date(at.getTime() + 7 * 3600_000).toISOString().slice(0, 10);
+  assert.equal((await call(`/api/slots/B01/schedule?date=${date}`)).body.length, 1);
+  assert.equal((await call('/api/slots/B01/schedule')).status, 400);
+});

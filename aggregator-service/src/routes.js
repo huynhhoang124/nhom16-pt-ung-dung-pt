@@ -85,11 +85,17 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
   app.post('/api/parkings/:id/reservations', need('USER'), async (req, res) => {
     const key = req.get('idempotency-key');
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
-    const { slotCode, licensePlate } = req.body ?? {};
+    const { slotCode, licensePlate, startTime, durationMinutes } = req.body ?? {};
     await forward(res, reg.get(req.params.id), '/api/reservations', {
       method: 'POST', ms: reserveTimeoutMs, retry: true,   // an toàn vì requestId idempotent
-      body: { requestId: `${req.user.sub}:${key}`, userId: req.user.sub, slotCode, licensePlate },
+      body: { requestId: `${req.user.sub}:${key}`, userId: req.user.sub, slotCode, licensePlate, startTime, durationMinutes },
     });
+  });
+
+  // NV-01: lịch đặt của một slot trong ngày (để chọn khung giờ trống).
+  app.get('/api/parkings/:id/slots/:code/schedule', need(), async (req, res) => {
+    await forward(res, reg.get(req.params.id),
+      `/api/slots/${encodeURIComponent(req.params.code)}/schedule?date=${encodeURIComponent(req.query.date ?? '')}`);
   });
 
   // Huỷ: USER chỉ huỷ của mình; STAFF của bãi đó hoặc ADMIN huỷ được mọi reservation.

@@ -1,5 +1,7 @@
 -- Schema của MỘT bãi. Mỗi bãi có DB riêng (shared-nothing), node khác không truy cập được.
 
+CREATE EXTENSION IF NOT EXISTS btree_gist;   -- cho ràng buộc EXCLUDE (slot_id WITH =, khoảng thời gian WITH &&)
+
 CREATE TABLE IF NOT EXISTS parking_slots (
   id          SERIAL PRIMARY KEY,
   slot_code   VARCHAR(10) UNIQUE NOT NULL,
@@ -17,14 +19,18 @@ CREATE TABLE IF NOT EXISTS reservations (
   user_id       VARCHAR(64) NOT NULL,
   slot_id       INT NOT NULL REFERENCES parking_slots(id),
   license_plate VARCHAR(20) NOT NULL,
-  start_time    TIMESTAMPTZ NOT NULL DEFAULT now(),
-  expire_time   TIMESTAMPTZ NOT NULL,
+  start_time    TIMESTAMPTZ NOT NULL DEFAULT now(),   -- giờ đến
+  end_time      TIMESTAMPTZ NOT NULL,                 -- hết khung giờ đã đặt (NV-01)
+  expire_time   TIMESTAMPTZ NOT NULL,                 -- quá giờ này chưa đến = no-show
   status        VARCHAR(12) NOT NULL DEFAULT 'ACTIVE'
-                CHECK (status IN ('ACTIVE','USED','CANCELLED','EXPIRED')),
-  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+                CHECK (status IN ('ACTIVE','USED','DONE','CANCELLED','EXPIRED')),
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  CHECK (end_time > start_time),
+  -- Lưới đỡ ở tầng DB: trên cùng một slot, các lượt đặt còn hiệu lực không được chồng giờ.
+  -- Thay cho "mỗi slot 1 reservation ACTIVE" của bản cơ bản. DB cũ cần docker compose down -v.
+  CONSTRAINT ex_no_overlap EXCLUDE USING gist
+    (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('ACTIVE','USED'))
 );
--- Lưới đỡ cuối cùng ở tầng DB: mỗi slot tối đa 1 reservation ACTIVE
-CREATE UNIQUE INDEX IF NOT EXISTS ux_one_active_per_slot ON reservations(slot_id) WHERE status = 'ACTIVE';
 
 -- Vừa là lịch sử sự kiện, vừa là OUTBOX: ghi cùng giao dịch với dữ liệu, relay gửi lên broker sau
 CREATE TABLE IF NOT EXISTS parking_events (

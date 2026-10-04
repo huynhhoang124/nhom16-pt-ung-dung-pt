@@ -16,6 +16,9 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   const [selected, setSelected] = useState(null);    // slot đang chọn
   const [pending, setPending] = useState(null);      // lượt đặt chỗ: { slotCode, key, plate, unknown }
   const [plate, setPlate] = useState('');
+  const [when, setWhen] = useState('');               // giờ đến (datetime-local), '' = đặt ngay
+  const [duration, setDuration] = useState(120);      // phút
+  const [schedule, setSchedule] = useState([]);
   const [note, setNote] = useState(null);            // { kind: 'ok'|'error', text }
   const [reservations, setReservations] = useState([]);
   const [type, setType] = useState('');               // lọc loại xe, '' = tất cả
@@ -33,21 +36,31 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
   useLive(['SLOT_UPDATED', 'NODE_STATUS'], load);
 
+  // NV-01: đặt trước được cả slot đang bận (khác khung giờ); đặt ngay thì slot phải trống.
   function pick(slot) {
     setNote(null);
     setSelected(slot.slotCode);
-    if (user.role === 'USER' && slot.status === 'AVAILABLE') setPending({ slotCode: slot.slotCode, key: newKey(), unknown: false });
+    if (user.role === 'USER' && slot.status !== 'MAINTENANCE') setPending({ slotCode: slot.slotCode, key: newKey(), unknown: false });
     else setPending(null);
   }
 
+  // Lịch đã đặt của slot đang chọn, theo ngày của giờ đến.
+  const day = (when || new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString()).slice(0, 10);
+  useEffect(() => {
+    if (!selected || user.role !== 'USER') return setSchedule([]);
+    api(`/api/parkings/${parkingId}/slots/${selected}/schedule?date=${day}`).then((r) => setSchedule(r.ok ? r.data : []));
+  }, [parkingId, selected, day, user.role]);
+
   async function reserve(e) {
     e.preventDefault();
+    // Đổi giờ/thời lượng = yêu cầu mới -> key mới; chỉ "Thử lại" mới dùng lại key cũ.
     const r = await api(`/api/parkings/${parkingId}/reservations`, {
       method: 'POST', headers: { 'idempotency-key': pending.key },
-      body: { slotCode: pending.slotCode, licensePlate: plate },
+      body: { slotCode: pending.slotCode, licensePlate: plate, durationMinutes: duration, ...(when && { startTime: new Date(when).toISOString() }) },
     });
     if (r.ok) {
-      setNote({ kind: 'ok', text: `Đã đặt ${pending.slotCode}, giữ chỗ đến ${new Date(r.data.expire_time ?? r.data.expireTime).toLocaleTimeString('vi-VN')}. Mã QR vào cổng ở mục "Đặt chỗ của tôi".` });
+      const t = (k) => new Date(r.data[k]).toLocaleString('vi-VN');
+      setNote({ kind: 'ok', text: `Đã đặt ${pending.slotCode} từ ${t('start_time')} đến ${t('end_time')}. Đến muộn quá ${t('expire_time')} sẽ mất chỗ. Mã QR vào cổng ở mục "Đặt chỗ của tôi".` });
       setPending(null);
     } else if (r.status === 504 || r.status === 0) {
       setPending({ ...pending, unknown: true });   // giữ nguyên key để thử lại an toàn
@@ -131,8 +144,21 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
           {pending && (
             <form onSubmit={reserve} className="inline">
               <input placeholder="Biển số, vd 30A-123.45" value={plate} onChange={(e) => setPlate(e.target.value)} required />
-              <button className="primary">{pending.unknown ? 'Thử lại (cùng yêu cầu)' : 'Đặt chỗ'}</button>
+              <label className="small">Giờ đến
+                <input type="datetime-local" value={when} onChange={(e) => { setWhen(e.target.value); setPending({ ...pending, key: newKey(), unknown: false }); }} />
+              </label>
+              <select value={duration} onChange={(e) => { setDuration(Number(e.target.value)); setPending({ ...pending, key: newKey(), unknown: false }); }}>
+                {[60, 120, 180, 240, 480, 720, 1440].map((m) => <option key={m} value={m}>{m / 60} giờ</option>)}
+              </select>
+              <button className="primary">{pending.unknown ? 'Thử lại (cùng yêu cầu)' : when ? 'Đặt trước' : 'Đặt ngay'}</button>
             </form>
+          )}
+          {pending && slot.status !== 'AVAILABLE' && !when && <p className="muted small">Slot đang bận: chọn giờ đến khác để đặt trước.</p>}
+          {pending && (
+            <p className="muted small">
+              Đã có người đặt ngày {day.split('-').reverse().join('/')}:{' '}
+              {schedule.length ? schedule.map((x) => `${new Date(x.startTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}–${new Date(x.endTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}`).join(', ') : 'chưa có'}
+            </p>
           )}
           {isStaff && (
             <div className="inline">
@@ -140,7 +166,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
               {(STAFF_ACTIONS[slot.status] ?? []).map(([a, label]) => <button key={a} onClick={() => act(a)}>{label}</button>)}
             </div>
           )}
-          {!pending && !isStaff && <span className="muted"> – chọn slot trống để đặt.</span>}
+          {!pending && !isStaff && <span className="muted"> – slot đang bảo trì.</span>}
         </div>
       )}
 

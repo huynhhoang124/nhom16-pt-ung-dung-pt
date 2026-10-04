@@ -36,9 +36,23 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     }
     const licensePlate = normalizePlate(req.body.licensePlate);
     if (!isPlate(licensePlate)) return res.status(400).json({ error: 'INVALID_PLATE' });
-    const out = await s.reserve(pool, parkingId, { requestId, userId, slotCode, licensePlate }, reservationMinutes);
+    // NV-01: giờ đến (ISO, trong 7 ngày tới) + thời lượng 30 phút – 24 giờ; bỏ trống = đặt ngay 2 giờ.
+    const { startTime, durationMinutes = 120 } = req.body;
+    if (startTime !== undefined && !(Date.parse(startTime) < Date.now() + 7 * 86400_000)) {
+      return res.status(400).json({ error: 'INVALID_START_TIME' });
+    }
+    if (!Number.isInteger(durationMinutes) || durationMinutes < 30 || durationMinutes > 1440) {
+      return res.status(400).json({ error: 'INVALID_DURATION' });
+    }
+    const out = await s.reserve(pool, parkingId,
+      { requestId, userId, slotCode, licensePlate, startTime, durationMinutes }, reservationMinutes);
     if (out.code < 300) out.body = { ...out.body, qrToken: tokenFor(qrSecret, parkingId, out.body) };
     send(res, out);
+  });
+
+  app.get('/api/slots/:code/schedule', async (req, res) => {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(req.query.date ?? '')) return res.status(400).json({ error: 'date=YYYY-MM-DD is required' });
+    res.json(await s.slotSchedule(pool, req.params.code, req.query.date));
   });
 
   app.get('/api/reservations', async (req, res) => res.json((await s.listReservations(pool, req.query.userId))

@@ -69,13 +69,93 @@ test('TC03 người thứ hai đặt cùng slot: 409, không sinh reservation/s�
   assert.equal(await count(pool, 'parking_events'), 1);
 });
 
-test('unique index chặn reservation ACTIVE thứ hai cho cùng slot ở tầng DB', async () => {
+test('ràng buộc DB ex_no_overlap: chèn thẳng một khung giờ chồng lên khung đang giữ -> lỗi 23P01', async () => {
   const pool = await makePool();
   await s.reserve(pool, P, req('r1'));
   await assert.rejects(
-    pool.query(`INSERT INTO reservations(request_id,user_id,slot_id,license_plate,expire_time)
-                VALUES ('x','u9',(SELECT id FROM parking_slots WHERE slot_code='A01'),'p', now())`),
-    (e) => e.code === '23505');
+    pool.query(`INSERT INTO reservations(request_id,user_id,slot_id,license_plate,start_time,end_time,expire_time)
+                VALUES ('x','u9',(SELECT id FROM parking_slots WHERE slot_code='A01'),'p', now(), now() + interval '1 hour', now())`),
+    (e) => e.code === '23P01');
+});
+
+// ---- NV-01: đặt theo khung giờ ----
+const inHours = async (pool, h) => (await one(pool, `SELECT now() + make_interval(hours => $1) AS t`, [h])).t;
+const book = (pool, id, startTime, durationMinutes = 120, slot = 'A01') =>
+  s.reserve(pool, P, { ...req(id, slot), startTime, durationMinutes });
+
+test('TC20 đặt trước: hai khung giờ chồng nhau trên cùng slot -> cái sau 409 TIME_CONFLICT; slot vẫn AVAILABLE', async () => {
+  const pool = await makePool();
+  const t = await inHours(pool, 5);
+  const a = await book(pool, 'f1', t);
+  assert.equal(a.code, 201);
+  assert.equal((await slot(pool, 'A01')).status, 'AVAILABLE');          // đặt trước: chưa giữ chỗ
+  assert.equal(await count(pool, 'parking_events'), 0);
+  const t2 = await inHours(pool, 6);                                       // 6h < 5h + 2h -> chồng
+  assert.deepEqual(await book(pool, 'f2', t2), { code: 409, body: { error: 'TIME_CONFLICT' } });
+  assert.equal((await book(pool, 'f3', t2, 120, 'A02')).code, 201);      // slot khác thì được
+  // đặt ngay mà khung 120' chạm lượt đặt trước lúc +1h -> cũng chồng giờ, slot không bị giữ
+  const t3 = await inHours(pool, 1);
+  await book(pool, 'f4', t3, 60, 'A03');
+  assert.deepEqual(await s.reserve(pool, P, req('f5', 'A03')), { code: 409, body: { error: 'TIME_CONFLICT' } });
+  assert.equal((await slot(pool, 'A03')).status, 'AVAILABLE');
+});
+
+test('TC21 hai khung nối tiếp (10–12, 12–14) đều được; huỷ lượt sau không nhả chỗ lượt trước đang giữ', async () => {
+  const pool = await makePool();
+  const first = await s.reserve(pool, P, req('n1'));                      // đặt ngay, 120'
+  assert.equal((await slot(pool, 'A01')).status, 'RESERVED');
+  const second = await book(pool, 'n2', first.body.end_time);            // bắt đầu đúng lúc lượt 1 kết thúc
+  assert.equal(second.code, 201);
+  assert.equal((await s.endReservation(pool, P, second.body.id, 'CANCELLED', 'u1')).code, 200);
+  assert.equal((await slot(pool, 'A01')).status, 'RESERVED');           // vẫn giữ cho lượt 1
+});
+
+test('TC22 activateDue: gần đến giờ thì giữ chỗ + phát sự kiện; xe vào chỉ dùng lượt đang giữ; xe ra -> DONE', async () => {
+  const pool = await makePool();
+  const r = await book(pool, 'a1', await inHours(pool, 3));
+  const later = await book(pool, 'a2', await inHours(pool, 30));
+  assert.equal(await s.activateDue(pool, P), 0);                           // còn xa
+  await pool.query(`UPDATE reservations SET start_time=now() + interval '10 minutes', end_time=now() + interval '130 minutes',
+                    expire_time=now() + interval '25 minutes' WHERE id=$1`, [r.body.id]);
+  assert.equal(await s.activateDue(pool, P), 1);
+  assert.equal(await s.activateDue(pool, P), 0);                           // chạy lại không làm gì thêm
+  assert.equal((await slot(pool, 'A01')).status, 'RESERVED');
+  assert.equal((await one(pool, `SELECT event_type FROM parking_events ORDER BY id DESC LIMIT 1`)).event_type, 'RESERVED');
+  const enter = await s.moveSlot(pool, P, 'A01', ['RESERVED', 'AVAILABLE'], 'OCCUPIED', 'CAR_ENTER');
+  assert.equal(enter.body.session.reservationId, r.body.id);
+  const st = async (id) => (await one(pool, `SELECT status FROM reservations WHERE id=$1`, [id])).status;
+  assert.deepEqual([await st(r.body.id), await st(later.body.id)], ['USED', 'ACTIVE']);
+  await s.moveSlot(pool, P, 'A01', ['OCCUPIED'], 'AVAILABLE', 'CAR_EXIT');
+  assert.equal(await st(r.body.id), 'DONE');
+});
+
+test('TC23 đến giờ mà slot còn xe (xe trước ở quá giờ) -> chuyển lượt đặt sang slot trống cùng loại', async () => {
+  const pool = await makePool();
+  const r = await book(pool, 'm1', await inHours(pool, 3));
+  await s.moveSlot(pool, P, 'A01', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER');   // xe vãng lai vào (lượt đặt còn xa)
+  await pool.query(`UPDATE reservations SET start_time=now() + interval '5 minutes', end_time=now() + interval '2 hours' WHERE id=$1`, [r.body.id]);
+  assert.equal(await s.activateDue(pool, P), 1);
+  const moved = await one(pool, `SELECT s.slot_code FROM reservations r JOIN parking_slots s ON s.id=r.slot_id WHERE r.id=$1`, [r.body.id]);
+  assert.equal(moved.slot_code, 'A02');
+  assert.equal((await slot(pool, 'A02')).status, 'RESERVED');
+  assert.equal((await one(pool, `SELECT event_type FROM parking_events ORDER BY id DESC LIMIT 1`)).event_type, 'RESERVATION_MOVED');
+});
+
+test('xe vãng lai không được vào slot sắp có người đặt (trong 2 giờ)', async () => {
+  const pool = await makePool();
+  await book(pool, 'w1', await inHours(pool, 1));
+  const r = await s.moveSlot(pool, P, 'A01', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER');
+  assert.deepEqual([r.code, r.body.error], [409, 'SLOT_RESERVED_SOON']);
+  assert.equal((await s.moveSlot(pool, P, 'A02', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER')).code, 200);
+});
+
+test('lịch slot theo ngày (giờ VN)', async () => {
+  const pool = await makePool();
+  const r = await book(pool, 'l1', await inHours(pool, 3));
+  const date = new Date(new Date(r.body.start_time).getTime() + 7 * 3600_000).toISOString().slice(0, 10);
+  const sch = await s.slotSchedule(pool, 'A01', date);
+  assert.equal(sch.length, 1);
+  assert.deepEqual(Object.keys(sch[0]), ['startTime', 'endTime', 'status']);   // không lộ biển số / người đặt
 });
 
 test('xe vào/ra: RESERVED -> OCCUPIED -> AVAILABLE, reservation thành USED, version tăng', async () => {

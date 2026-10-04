@@ -2,7 +2,7 @@ const { Pool } = require('pg');
 const { init } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
-const { expireDue } = require('./slots');
+const { expireDue, activateDue } = require('./slots');
 
 const env = (k, d) => process.env[k] ?? d;
 const parkingId = env('PARKING_ID', 'A');
@@ -27,7 +27,11 @@ async function main() {
 
   const relayOnce = makeRelay(pool, amqpPublisher(env('RABBITMQ_URL', 'amqp://localhost')));
   setInterval(() => relayOnce().catch((e) => console.error('relay:', e.message)), 500);
-  setInterval(() => expireDue(pool, parkingId).catch((e) => console.error('expire:', e.message)), 30000);
+  // Hết hạn giữ chỗ + giữ chỗ cho lượt đặt trước sắp đến giờ (NV-01), theo đồng hồ DB của bãi.
+  const minutes = Number(env('RESERVATION_MINUTES', 15));
+  setInterval(() => expireDue(pool, parkingId)
+    .then(() => activateDue(pool, parkingId, minutes))
+    .catch((e) => console.error('expire/activate:', e.message)), 30000);
 }
 
 main().catch((e) => { console.error(e); process.exit(1); });
