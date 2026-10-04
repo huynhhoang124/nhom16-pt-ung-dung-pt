@@ -6,6 +6,7 @@ import ParkingDetail from './pages/ParkingDetail.jsx';
 import MyReservations from './pages/MyReservations.jsx';
 import Admin from './pages/Admin.jsx';
 import History from './pages/History.jsx';
+import Account from './pages/Account.jsx';
 
 const ROLE_LABEL = { USER: 'Người dùng', STAFF: 'Nhân viên', ADMIN: 'Quản trị' };
 
@@ -44,6 +45,7 @@ export default function App() {
         <span className="who">
           <span className={live ? 'dot on' : 'dot'} title={live ? 'Đang nhận realtime' : 'Mất kết nối realtime'} />
           {user.username} · {ROLE_LABEL[user.role]}{user.parkingId ? ` bãi ${user.parkingId}` : ''}
+          <button className="link" onClick={() => setView({ page: 'account' })}>Tài khoản</button>
           <button className="link" onClick={() => { session.set(null); setUser(null); setView({ page: 'dashboard' }); }}>Đăng xuất</button>
         </span>
       </header>
@@ -52,6 +54,7 @@ export default function App() {
         {view.page === 'parking' && <ParkingDetail key={view.parkingId} parkingId={view.parkingId} user={user} onBack={() => go('dashboard')} />}
         {view.page === 'mine' && <MyReservations />}
         {view.page === 'admin' && <Admin />}
+        {view.page === 'account' && <Account user={user} />}
         {view.page === 'history' && <History key={user.role} user={user} />}
       </main>
     </div>

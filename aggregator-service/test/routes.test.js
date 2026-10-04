@@ -124,3 +124,31 @@ test('quản trị: xem trạng thái node, thêm bãi mới (không sửa code)
   assert.deepEqual([ok.status, ok.body.status], [201, 'OFFLINE']);  // chờ health check đầu tiên
   assert.deepEqual((await agg.call('/api/parkings')).body.map((p) => p.parkingId), ['A', 'B', 'S', 'D']);
 });
+
+test('TC33–TC35 đăng ký, đổi mật khẩu, khoá tạm khi sai mật khẩu nhiều lần', async (t) => {
+  const { agg } = await system(t);
+  const reg = (username, password) => agg.call('/api/auth/register', { method: 'POST', body: { username, password } });
+  const login = (username, password) => agg.call('/api/auth/login', { method: 'POST', body: { username, password } });
+
+  // TC33: đăng ký xong có token vai trò USER, đăng nhập lại được
+  const r = await reg('nguyen.van_a', 'matkhau123');
+  assert.equal(r.status, 201);
+  assert.equal(r.body.user.role, 'USER');
+  assert.equal((await login('nguyen.van_a', 'matkhau123')).status, 200);
+  // TC34: trùng tên 409; tên/mật khẩu không hợp lệ 400
+  assert.equal((await reg('nguyen.van_a', 'khac12345')).status, 409);
+  assert.equal((await reg('Ab', 'matkhau123')).status, 400);
+  assert.equal((await reg('hople123', 'ngan')).status, 400);
+
+  const token = r.body.token;
+  const change = (oldPassword, newPassword) => agg.call('/api/me/password', { method: 'PUT', token, body: { oldPassword, newPassword } });
+  assert.equal((await change('sai', 'moi123456')).status, 400);
+  assert.equal((await change('matkhau123', 'moi123456')).status, 200);
+  assert.equal((await login('nguyen.van_a', 'matkhau123')).status, 401);
+  assert.equal((await login('nguyen.van_a', 'moi123456')).status, 200);
+
+  // TC35: sai 5 lần thì lần thứ 6 bị 429, kể cả mật khẩu đúng; tài khoản khác không ảnh hưởng
+  for (let i = 0; i < 5; i++) assert.equal((await login('user2', 'sai')).status, 401);
+  assert.equal((await login('user2', 'pw')).status, 429);
+  assert.equal((await login('user1', 'pw')).status, 200);
+});

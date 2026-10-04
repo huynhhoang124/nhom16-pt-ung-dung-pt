@@ -6,6 +6,7 @@ const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
 function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
   const app = express();
+  app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(express.json());
   const { need } = auth;
 
@@ -24,9 +25,35 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
 
   app.get('/health', (_req, res) => res.json({ status: 'UP' }));
 
+  // Sai mật khẩu 5 lần / 15 phút theo username + IP thì khoá tạm (chống dò mật khẩu).
   app.post('/api/auth/login', async (req, res) => {
+    const key = `login|${req.body?.username}|${req.ip}`;
+    if (auth.limiter.blocked(key)) return res.status(429).json({ error: 'TOO_MANY_ATTEMPTS' });
     const out = await auth.login(pool, req.body?.username, req.body?.password);
-    out ? res.json(out) : res.status(401).json({ error: 'INVALID_CREDENTIALS' });
+    if (!out) { auth.limiter.hit(key); return res.status(401).json({ error: 'INVALID_CREDENTIALS' }); }
+    auth.limiter.reset(key);
+    res.json(out);
+  });
+
+  const validPassword = (p) => typeof p === 'string' && p.length >= 8 && p.length <= 72;   // bcrypt chỉ dùng 72 byte đầu
+
+  app.post('/api/auth/register', async (req, res) => {
+    const { username, password } = req.body ?? {};
+    if (!/^[a-z0-9_.]{4,32}$/.test(username ?? '')) return res.status(400).json({ error: 'INVALID_USERNAME' });
+    if (!validPassword(password)) return res.status(400).json({ error: 'WEAK_PASSWORD' });
+    const key = `register|${req.ip}`;                         // chống tạo tài khoản hàng loạt
+    if (auth.limiter.blocked(key)) return res.status(429).json({ error: 'TOO_MANY_ATTEMPTS' });
+    const out = await auth.register(pool, username, password);
+    if (!out) return res.status(409).json({ error: 'USERNAME_TAKEN' });
+    auth.limiter.hit(key);
+    res.status(201).json(out);
+  });
+
+  app.put('/api/me/password', need(), async (req, res) => {
+    const { oldPassword, newPassword } = req.body ?? {};
+    if (!validPassword(newPassword)) return res.status(400).json({ error: 'WEAK_PASSWORD' });
+    (await auth.changePassword(pool, req.user.sub, oldPassword, newPassword))
+      ? res.json({ ok: true }) : res.status(400).json({ error: 'WRONG_PASSWORD' });
   });
 
   app.get('/api/parkings', (_req, res) => res.json(reg.all().map(info)));

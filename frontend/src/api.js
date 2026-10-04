@@ -41,6 +41,11 @@ const MESSAGES = {
   NETWORK: 'Không kết nối được máy chủ.',
   PLATE_ALREADY_INSIDE: 'Biển số này đang có xe gửi trong bãi.',
   PLATE_TOO_SHORT: 'Nhập ít nhất 3 ký tự biển số.',
+  TOO_MANY_ATTEMPTS: 'Thử sai quá nhiều lần. Vui lòng đợi 15 phút.',
+  USERNAME_TAKEN: 'Tên đăng nhập đã có người dùng.',
+  INVALID_USERNAME: 'Tên đăng nhập 4–32 ký tự: chữ thường, số, dấu chấm, gạch dưới.',
+  WEAK_PASSWORD: 'Mật khẩu cần 8–72 ký tự.',
+  WRONG_PASSWORD: 'Mật khẩu hiện tại không đúng.',
 };
 export const message = (data) => MESSAGES[data?.error] ?? data?.error ?? 'Có lỗi xảy ra.';
 
