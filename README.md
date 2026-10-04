@@ -19,6 +19,12 @@ docker compose up -d --build
 - Lần theo một request qua mọi dịch vụ (log JSON, mã ở header `X-Request-Id` của response): `docker compose logs | grep <mã>`
 - Dừng: `docker compose down` (giữ dữ liệu) · `docker compose down -v` (xoá sạch)
 
+## Làm giao diện không cần Docker
+```bash
+node scripts/dev-no-docker.cjs     # 3 bãi + Aggregator bằng PGlite trong 1 tiến trình (dữ liệu trong RAM)
+cd frontend && npm run dev         # http://localhost:3000
+```
+
 ## Kiểm thử
 ```bash
 cd parking-node && npm install && npm test          # PGlite, không cần Docker
