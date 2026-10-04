@@ -116,7 +116,7 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
     await forward(res, reg.get(req.params.id),
       `/api/slots/${encodeURIComponent(req.params.code)}/${req.params.action}`,
-      { method: 'POST', body: { licensePlate: req.body?.licensePlate } });
+      { method: 'POST', body: { licensePlate: req.body?.licensePlate, cash: req.body?.cash === true } });
   });
 
   app.get('/api/parkings/:id/reservations', need('STAFF', 'ADMIN'), async (req, res) => {
@@ -124,7 +124,7 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
     await forward(res, reg.get(req.params.id), '/api/reservations');
   });
 
-  mountSessions(app, { reg, need, forward });
+  mountSessions(app, { reg, need, forward, reserveTimeoutMs });
 
   // Quản trị: trạng thái các node; thêm bãi mới không cần sửa code (tính mở rộng).
   app.get('/api/admin/nodes', need('ADMIN'), (_req, res) =>

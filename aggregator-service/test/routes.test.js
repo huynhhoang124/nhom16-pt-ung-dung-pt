@@ -152,3 +152,20 @@ test('TC33–TC35 đăng ký, đổi mật khẩu, khoá tạm khi sai mật kh�
   assert.equal((await login('user2', 'pw')).status, 429);
   assert.equal((await login('user1', 'pw')).status, 200);
 });
+
+test('NV-04 người dùng trả tiền qua Aggregator: cần Idempotency-Key, bấm lại cùng key không trả lần 2', async (t) => {
+  const { a, agg, tokens } = await system(t);
+  await agg.call('/api/parkings/A/reservations', { method: 'POST', token: tokens.user1, key: 'r', body: reserveBody('A01') });
+  const sid = (await agg.call('/api/parkings/A/slots/A01/enter', { method: 'POST', token: tokens.admin, body: {} })).body.session.id;
+  await a.pool.query(`UPDATE pricing_rules SET overnight_fee=0`);
+  await a.pool.query(`UPDATE parking_sessions SET entered_at = now() - interval '150 minutes' WHERE id=$1`, [sid]);
+
+  const pay = (token, key) => agg.call(`/api/me/sessions/A/${sid}/pay`, { method: 'POST', token, key });
+  assert.equal((await pay(tokens.user1)).status, 400);                    // thiếu key
+  assert.equal((await pay(tokens.user2, 'p1')).status, 404);              // phiên của người khác
+  const first = await pay(tokens.user1, 'p1');
+  assert.deepEqual([first.status, first.body.fee], [200, 35000]);
+  assert.equal((await pay(tokens.user1, 'p1')).body.paidAt, first.body.paidAt);
+  // nhân viên: chưa trả thì 402, thu tiền mặt thì cho ra (ở đây đã trả online nên ra luôn)
+  assert.equal((await agg.call('/api/parkings/A/slots/A01/exit', { method: 'POST', token: tokens.admin, body: {} })).status, 200);
+});

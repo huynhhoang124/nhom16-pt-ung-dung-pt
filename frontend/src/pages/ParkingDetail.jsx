@@ -59,12 +59,16 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
     load();
   }
 
-  async function act(action) {
-    const r = await api(`/api/parkings/${parkingId}/slots/${selected}/${action}`, { method: 'POST', body: { licensePlate: plate || undefined } });
+  async function act(action, cash = false) {
+    const r = await api(`/api/parkings/${parkingId}/slots/${selected}/${action}`, { method: 'POST', body: { licensePlate: plate || undefined, cash } });
     const fee = r.data?.session?.fee;
-    setNote(r.ok
-      ? { kind: 'ok', text: `${selected}: ${STATUS_LABEL[r.data.status]}${fee != null ? ` · Phí gửi xe: ${fee.toLocaleString('vi-VN')} đ` : ''}` }
-      : { kind: 'error', text: message(r.data) });
+    if (r.status === 402) {   // chưa trả tiền: nhân viên thu tiền mặt rồi cho ra
+      setNote({ kind: 'error', text: `Chưa thanh toán ${r.data.fee.toLocaleString('vi-VN')} đ.`, cash: true });
+    } else {
+      setNote(r.ok
+        ? { kind: 'ok', text: `${selected}: ${STATUS_LABEL[r.data.status]}${fee != null ? ` · Phí gửi xe: ${fee.toLocaleString('vi-VN')} đ` : ''}` }
+        : { kind: 'error', text: message(r.data) });
+    }
     load();
   }
 
@@ -115,7 +119,11 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
       ))}
       {!slots.length && <p className="muted">Chưa có dữ liệu slot.</p>}
 
-      {note && <p className={note.kind === 'ok' ? 'success' : 'error'}>{note.text}</p>}
+      {note && (
+        <p className={note.kind === 'ok' ? 'success' : 'error'}>
+          {note.text} {note.cash && <button className="primary" onClick={() => act('exit', true)}>Thu tiền mặt và cho ra</button>}
+        </p>
+      )}
 
       {slot && !p.stale && (
         <div className="card panel">

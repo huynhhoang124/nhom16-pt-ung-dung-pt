@@ -74,7 +74,7 @@ const SESSION_COLS = `ps.id, s.slot_code AS "slotCode", ps.license_plate AS "lic
 
 // Đổi trạng thái slot from -> to (enter/exit/maintenance) kèm sự kiện.
 // Xe vào mở phiên gửi xe, xe ra đóng phiên, cùng giao dịch với đổi trạng thái slot.
-function moveSlot(pool, parkingId, slotCode, from, to, type, plate) {
+function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
   return tx(pool, async (c) => {
     const s = await c.query(
       `UPDATE parking_slots SET status=$3, version=version+1, updated_at=now()
@@ -92,13 +92,23 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate) {
         [slotId, plate, r?.id ?? null, r?.user_id ?? null])).rows[0].id;
       session = await getSession(c, id);
     } else if (type === 'CAR_EXIT') {
+      // Xe vào trước khi có bảng phiên thì không có phiên -> cho ra như cũ.
       const open = (await c.query(
-        `UPDATE parking_sessions SET exited_at=now() WHERE slot_id=$1 AND exited_at IS NULL RETURNING id, license_plate`,
+        `SELECT id, license_plate, paid_at, fee FROM parking_sessions WHERE slot_id=$1 AND exited_at IS NULL FOR UPDATE`,
         [slotId])).rows[0];
-      plate = plate || open?.license_plate;
-      if (open) {   // xe vào trước khi có bảng phiên thì không có phiên
+      if (open) {
+        plate = plate || open.license_plate;
         const q = await quoteIn(c, open.id);
-        await c.query(`UPDATE parking_sessions SET fee=$2 WHERE id=$1`, [open.id, q.fee]);
+        const fee = open.paid_at ? open.fee : q.fee;     // đã trả trước thì giữ số tiền đã trả
+        // NV-04: chưa trả thì không cho ra; nhân viên thu tiền mặt = trả CASH + cho ra trong một giao dịch.
+        if (!open.paid_at && fee > 0 && !opts.cash) {
+          throw new Abort(402, { error: 'PAYMENT_REQUIRED', sessionId: open.id, fee, breakdown: q.breakdown });
+        }
+        await c.query(
+          `UPDATE parking_sessions SET exited_at=now(), fee=$2,
+             paid_at = COALESCE(paid_at, CASE WHEN $2 > 0 THEN now() END),
+             payment_method = COALESCE(payment_method, CASE WHEN $2 > 0 THEN 'CASH' END)
+           WHERE id=$1`, [open.id, fee]);
         session = { ...(await getSession(c, open.id)), breakdown: q.breakdown };
       }
     }
@@ -127,6 +137,35 @@ async function quoteIn(c, sessionId) {
 const quote = (pool, sessionId) => quoteIn(pool, sessionId);
 
 const listPricing = async (pool) => (await pool.query('SELECT * FROM pricing_rules ORDER BY vehicle_type')).rows.map(fromRow);
+
+// NV-04: thanh toán (giả lập). paymentKey = "<userId>:<Idempotency-Key>": bấm lại / retry trả lại kết quả cũ,
+// không ghi nhận lần hai. Trả khi xe còn trong bãi thì khoá số tiền theo phí tạm tính lúc trả.
+async function pay(pool, { sessionId, method, paymentKey, userId }) {
+  const replay = async (fallback) => {
+    const r = (await pool.query(`SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
+                                 WHERE ps.payment_key=$1`, [paymentKey])).rows[0];
+    return r ? { code: 200, body: r, replayed: true } : fallback;
+  };
+  const prior = await replay(null);
+  if (prior) return prior;
+  try {
+    return await tx(pool, async (c) => {
+      const cur = (await c.query(
+        `SELECT paid_at, user_id FROM parking_sessions WHERE id=$1 FOR UPDATE`, [sessionId])).rows[0];
+      if (!cur || (userId && cur.user_id !== userId)) throw new Abort(404, { error: 'SESSION_NOT_FOUND' });
+      if (cur.paid_at) throw new Abort(409, { error: 'ALREADY_PAID' });
+      const q = await quoteIn(c, sessionId);
+      if (q.fee <= 0) throw new Abort(409, { error: 'NOTHING_TO_PAY' });
+      await c.query(
+        `UPDATE parking_sessions SET paid_at=now(), payment_method=$2, payment_key=$3, fee=$4 WHERE id=$1`,
+        [sessionId, method, paymentKey, q.fee]);
+      return { code: 200, body: await getSession(c, sessionId) };
+    }).then((out) => (out.code === 409 && out.body.error === 'ALREADY_PAID' ? replay(out) : out));
+  } catch (e) {
+    if (e.code !== '23505') throw e;   // payment_key trùng do 2 request cùng key chạy song song
+    return replay({ code: 409, body: { error: 'ALREADY_PAID' } });
+  }
+}
 
 // Lịch sử phiên gửi xe. Biển số so khớp sau khi bỏ dấu cách/chấm/gạch, không phân biệt hoa thường.
 const listSessions = async (pool, { plate, userId, from, to } = {}) => (await pool.query(
@@ -186,4 +225,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { reserve, moveSlot, endReservation, expireDue, availability, listSlots, listReservations, listSessions, quote, listPricing, emit };
+module.exports = { reserve, moveSlot, endReservation, expireDue, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };

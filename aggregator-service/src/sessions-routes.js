@@ -1,7 +1,7 @@
 // NV-06: lịch sử gửi xe; NV-03: phí, bảng giá. Dữ liệu phiên nằm ở DB từng bãi -> gom song song, bãi lỗi thì báo thiếu.
 const enc = encodeURIComponent;
 
-function mountSessions(app, { reg, need, forward }) {
+function mountSessions(app, { reg, need, forward, reserveTimeoutMs }) {
   const gatherSessions = async (query) => {
     const parts = await reg.gather(async (n) => ({ sessions: await reg.json(n, `/api/sessions?${query}`) }));
     return {
@@ -31,6 +31,16 @@ function mountSessions(app, { reg, need, forward }) {
   // Phí tạm tính của một phiên đang gửi (NV-03).
   app.get('/api/parkings/:id/sessions/:sid/quote', need(), (req, res) =>
     forward(res, reg.get(req.params.id), `/api/sessions/${enc(req.params.sid)}/quote`));
+
+  // NV-04: người dùng trả tiền phiên của mình. Idempotency-Key bắt buộc; timeout -> 504, bấm lại cùng key an toàn.
+  app.post('/api/me/sessions/:id/:sid/pay', need('USER'), async (req, res) => {
+    const key = req.get('idempotency-key');
+    if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
+    await forward(res, reg.get(req.params.id), `/api/sessions/${enc(req.params.sid)}/pay`, {
+      method: 'POST', ms: reserveTimeoutMs, retry: true,
+      body: { method: 'ONLINE', paymentKey: `${req.user.sub}:${key}`, userId: req.user.sub },
+    });
+  });
 
   // Bảng giá: ai cũng xem được; nhân viên bãi đó hoặc quản trị được sửa.
   app.get('/api/parkings/:id/pricing', (req, res) => forward(res, reg.get(req.params.id), '/api/pricing'));

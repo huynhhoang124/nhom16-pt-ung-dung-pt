@@ -131,11 +131,57 @@ test('TC25 xe ra: phiên có phí theo bảng giá của bãi; xem phí tạm t�
   const q = await s.quote(pool, id);
   assert.equal(q.final, false);
   assert.equal(q.fee, 25000 + 10000);                              // 150 phút = 2 giờ đầu + 1 giờ (tròn lên)
-  const exit = await s.moveSlot(pool, P, 'A01', ['OCCUPIED'], 'AVAILABLE', 'CAR_EXIT');
+  const exit = await s.moveSlot(pool, P, 'A01', ['OCCUPIED'], 'AVAILABLE', 'CAR_EXIT', undefined, { cash: true });
   assert.equal(exit.body.session.fee, 35000);
+  assert.equal(exit.body.session.paymentMethod, 'CASH');
   assert.ok(exit.body.session.breakdown.length);
   assert.equal((await s.quote(pool, id)).final, true);
   assert.equal((await one(pool, `SELECT fee FROM parking_sessions WHERE id=$1`, [id])).fee, 35000);
+});
+
+// ---- NV-04: thanh toán ----
+async function parkedFor(pool, minutes, plate = '30A12345') {
+  await pool.query(`UPDATE pricing_rules SET overnight_fee=0`);
+  const r = await s.reserve(pool, P, { ...req('rs'), licensePlate: plate });
+  const id = (await s.moveSlot(pool, P, 'A01', ['RESERVED'], 'OCCUPIED', 'CAR_ENTER')).body.session.id;
+  await pool.query(`UPDATE parking_sessions SET entered_at = now() - make_interval(mins => $2) WHERE id=$1`, [id, minutes]);
+  return { id, userId: r.body.user_id };
+}
+const exitA01 = (pool, opts) => s.moveSlot(pool, P, 'A01', ['OCCUPIED'], 'AVAILABLE', 'CAR_EXIT', undefined, opts);
+
+test('TC28 chưa trả tiền thì không cho ra (402, kèm số tiền); thu tiền mặt thì ra được; slot không đổi khi 402', async () => {
+  const pool = await makePool();
+  await parkedFor(pool, 150);
+  const r = await exitA01(pool);
+  assert.equal(r.code, 402);
+  assert.deepEqual([r.body.error, r.body.fee], ['PAYMENT_REQUIRED', 35000]);
+  assert.equal((await slot(pool, 'A01')).status, 'OCCUPIED');
+  assert.equal((await exitA01(pool, { cash: true })).code, 200);
+  // vào rồi ra ngay (phí 0) thì không cần trả
+  await s.moveSlot(pool, P, 'A01', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER');
+  assert.equal((await exitA01(pool)).code, 200);
+});
+
+test('TC26 trả 2 lần cùng key: chỉ ghi nhận 1 lần, lần 2 trả lại kết quả cũ; key khác thì 409 ALREADY_PAID', async () => {
+  const pool = await makePool();
+  const { id, userId } = await parkedFor(pool, 150);
+  const pay = (key, uid = userId) => s.pay(pool, { sessionId: id, method: 'ONLINE', paymentKey: `${uid}:${key}`, userId: uid });
+  assert.equal((await pay('k1', 'u-khac')).code, 404);           // không phải phiên của mình
+  const a = await pay('k1');
+  assert.deepEqual([a.code, a.body.fee, a.body.paymentMethod], [200, 35000, 'ONLINE']);
+  const b = await pay('k1');
+  assert.deepEqual([b.code, b.replayed, b.body.paidAt], [200, true, a.body.paidAt]);
+  assert.deepEqual(await pay('k2'), { code: 409, body: { error: 'ALREADY_PAID' } });
+  // đã trả thì cho ra, giữ đúng số tiền đã trả
+  const exit = await exitA01(pool);
+  assert.deepEqual([exit.code, exit.body.session.fee, exit.body.session.paymentMethod], [200, 35000, 'ONLINE']);
+});
+
+// TC27 (2 lần trả song song khác key) cần nhiều kết nối thật -> nằm ở tests/e2e.test.mjs.
+test('chưa đến phí (gửi dưới 5 phút) thì không cho trả', async () => {
+  const pool = await makePool();
+  const id = (await s.moveSlot(pool, P, 'A01', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER')).body.session.id;
+  assert.deepEqual(await s.pay(pool, { sessionId: id, method: 'CASH', paymentKey: 'staff:1' }), { code: 409, body: { error: 'NOTHING_TO_PAY' } });
 });
 
 test('TC18 cùng biển số vào lần 2 khi chưa ra: 409, slot thứ hai không bị chiếm', async () => {

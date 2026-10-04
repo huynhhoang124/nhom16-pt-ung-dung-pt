@@ -57,6 +57,15 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15 }) {
     q ? res.json(q) : res.status(404).json({ error: 'SESSION_NOT_FOUND' });
   });
 
+  app.post('/api/sessions/:id/pay', async (req, res) => {
+    const { method, paymentKey, userId } = req.body ?? {};
+    if (!UUID.test(req.params.id)) return res.status(404).json({ error: 'SESSION_NOT_FOUND' });
+    if (!['ONLINE', 'CASH'].includes(method) || typeof paymentKey !== 'string' || !paymentKey || paymentKey.length > 128) {
+      return res.status(400).json({ error: 'method (ONLINE|CASH) and paymentKey are required' });
+    }
+    send(res, await s.pay(pool, { sessionId: req.params.id, method, paymentKey, userId }));
+  });
+
   // Bảng giá của bãi (NV-03). PUT nhận mảng quy tắc, mỗi loại xe một quy tắc.
   app.get('/api/pricing', async (_req, res) => res.json(await s.listPricing(pool)));
   app.put('/api/pricing', async (req, res) => {
@@ -80,7 +89,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15 }) {
     // Biển số không bắt buộc (barrier có thể không đọc được); có thì phải hợp lệ.
     const plate = req.body?.licensePlate ? normalizePlate(req.body.licensePlate) : undefined;
     if (plate !== undefined && !isPlate(plate)) return res.status(400).json({ error: 'INVALID_PLATE' });
-    send(res, await s.moveSlot(pool, parkingId, req.params.code, ...m, plate));
+    send(res, await s.moveSlot(pool, parkingId, req.params.code, ...m, plate, { cash: req.body?.cash === true }));
   });
 
   app.use((err, _req, res, _next) => {

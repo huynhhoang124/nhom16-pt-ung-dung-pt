@@ -51,7 +51,7 @@ const login = async (u) => (await agg('/api/auth/login', { method: 'POST', body:
 // Dọn sau test (huỷ đặt chỗ, cho xe ra) để chạy lặp lại được nhiều lần.
 const undo = [];
 const cancelLater = (id, rid) => undo.push(() => node(id, `/api/reservations/${rid}`, { method: 'DELETE' }));
-const exitLater = (id, slot) => undo.push(() => node(id, `/api/slots/${slot}/exit`, { method: 'POST', body: {} }));
+const exitLater = (id, slot) => undo.push(() => node(id, `/api/slots/${slot}/exit`, { method: 'POST', body: { cash: true } }));
 test.after(async () => { for (const f of undo) await f(); });
 
 let tok;
@@ -102,6 +102,17 @@ test('10 lần gửi đồng thời CÙNG một Idempotency-Key: chỉ 1 reserva
   assert.ok(rs.every((r) => r.status === 200 || r.status === 201), rs.map((r) => r.status).join(','));
   assert.equal(new Set(rs.map((r) => r.body.id)).size, 1);
   cancelLater('C', rs[0].body.id);
+});
+
+test('TC27 hai lần trả tiền song song khác key cho cùng một phiên (Postgres thật): đúng 1 thành công', T, async () => {
+  const slot = await freeSlot('A');
+  const enter = await node('A', `/api/slots/${slot}/enter`, { method: 'POST', body: { licensePlate: '30A-272.72' } });
+  const sid = enter.body.session.id;
+  sql('db-a', `UPDATE parking_sessions SET entered_at = now() - interval '3 hours' WHERE id='${sid}'`);
+  const pay = (k) => node('A', `/api/sessions/${sid}/pay`, { method: 'POST', body: { method: 'CASH', paymentKey: `staff:${k}` } });
+  const codes = (await Promise.all(Array.from({ length: 10 }, (_, i) => pay(`k${i}`)))).map((r) => r.status);
+  assert.deepEqual([codes.filter((c) => c === 200).length, codes.filter((c) => c === 409).length], [1, 9]);
+  assert.equal((await node('A', `/api/slots/${slot}/exit`, { method: 'POST', body: {} })).status, 200);   // đã trả: cho ra
 });
 
 test('TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> RabbitMQ -> Aggregator -> Socket.IO', T, async () => {

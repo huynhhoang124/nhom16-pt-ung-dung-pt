@@ -7,7 +7,8 @@ const fee = (from, to) => calcFee(CAR, `${from}+07:00`, `${to}+07:00`).fee;
 
 test('TC24 tính phí: các mốc biên theo thời gian', () => {
   assert.equal(fee('2026-10-05T10:00:00', '2026-10-05T10:00:00'), 0);       // vào rồi ra ngay
-  assert.equal(fee('2026-10-05T10:00:00', '2026-10-05T10:00:30'), 25000);   // chưa đủ 1 phút vẫn tính block đầu
+  assert.equal(fee('2026-10-05T10:00:00', '2026-10-05T10:04:59'), 0);       // dưới 5 phút: miễn phí
+  assert.equal(fee('2026-10-05T10:00:00', '2026-10-05T10:05:00'), 25000);   // từ 5 phút: tính block đầu
   assert.equal(fee('2026-10-05T10:00:00', '2026-10-05T12:00:00'), 25000);   // đúng 120 phút
   assert.equal(fee('2026-10-05T10:00:00', '2026-10-05T12:01:00'), 35000);   // 121 phút: tròn lên 1 giờ
   assert.equal(fee('2026-10-05T10:00:00', '2026-10-05T15:30:00'), 65000);   // 330' = 120' + 4 giờ

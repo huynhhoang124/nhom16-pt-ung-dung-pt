@@ -5,6 +5,7 @@
 //   - firstBlockMin phút đầu: firstBlockFee
 //   - mỗi giờ tiếp theo (chưa đủ giờ tính tròn 1 giờ): nextHourFee
 //   - mỗi 24 giờ tính riêng, tối đa maxDayFee (null = không trần)
+//   - gửi dưới 5 phút: miễn phí
 //   - mỗi đêm (22:00–06:00 giờ Việt Nam) mà phiên chạm vào: cộng overnightFee (ngoài trần ngày)
 
 const DEFAULT_RULES = [
@@ -13,6 +14,7 @@ const DEFAULT_RULES = [
 ];
 
 const DAY_MIN = 24 * 60;
+const GRACE_MS = 5 * 60_000;      // 5 phút đầu miễn phí
 const VN_OFFSET = 7 * 3600_000;   // Việt Nam UTC+7, không đổi giờ mùa hè
 
 // Phí theo thời gian cho một đoạn <= 24 giờ.
@@ -40,7 +42,7 @@ function calcFee(rule, enteredAt, exitedAt) {
   const from = new Date(enteredAt);
   const to = new Date(exitedAt);
   const minutes = Math.ceil((to - from) / 60000);
-  if (minutes < 1) return { fee: 0, minutes: 0, breakdown: [] };   // vào rồi ra ngay: không tính
+  if (to - from < GRACE_MS) return { fee: 0, minutes, breakdown: [] };   // vào rồi quay ra ngay: không tính
 
   const days = Math.floor(minutes / DAY_MIN);
   const rest = minutes % DAY_MIN;

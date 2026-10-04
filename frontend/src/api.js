@@ -46,6 +46,10 @@ const MESSAGES = {
   INVALID_USERNAME: 'Tên đăng nhập 4–32 ký tự: chữ thường, số, dấu chấm, gạch dưới.',
   WEAK_PASSWORD: 'Mật khẩu cần 8–72 ký tự.',
   WRONG_PASSWORD: 'Mật khẩu hiện tại không đúng.',
+  ALREADY_PAID: 'Phiên này đã được thanh toán.',
+  NOTHING_TO_PAY: 'Chưa phát sinh phí (gửi dưới 5 phút).',
+  SESSION_NOT_FOUND: 'Không tìm thấy phiên gửi xe.',
+  PAYMENT_REQUIRED: 'Xe chưa thanh toán phí gửi.',
   INVALID_PLATE: 'Biển số không hợp lệ (vd 30A-123.45).',
 };
 export const message = (data) => MESSAGES[data?.error] ?? data?.error ?? 'Có lỗi xảy ra.';
