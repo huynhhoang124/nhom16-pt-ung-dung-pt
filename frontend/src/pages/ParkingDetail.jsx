@@ -47,7 +47,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
       body: { slotCode: pending.slotCode, licensePlate: plate },
     });
     if (r.ok) {
-      setNote({ kind: 'ok', text: `Đã đặt ${pending.slotCode}, giữ chỗ đến ${new Date(r.data.expire_time ?? r.data.expireTime).toLocaleTimeString('vi-VN')}.` });
+      setNote({ kind: 'ok', text: `Đã đặt ${pending.slotCode}, giữ chỗ đến ${new Date(r.data.expire_time ?? r.data.expireTime).toLocaleTimeString('vi-VN')}. Mã QR vào cổng ở mục "Đặt chỗ của tôi".` });
       setPending(null);
     } else if (r.status === 504 || r.status === 0) {
       setPending({ ...pending, unknown: true });   // giữ nguyên key để thử lại an toàn

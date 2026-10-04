@@ -50,6 +50,11 @@ const MESSAGES = {
   NOTHING_TO_PAY: 'Chưa phát sinh phí (gửi dưới 5 phút).',
   SESSION_NOT_FOUND: 'Không tìm thấy phiên gửi xe.',
   PAYMENT_REQUIRED: 'Xe chưa thanh toán phí gửi.',
+  INVALID_QR: 'Mã QR không hợp lệ.',
+  QR_EXPIRED: 'Mã QR đã hết hạn.',
+  QR_USED: 'Mã QR đã được dùng.',
+  WRONG_PARKING: 'Mã QR của bãi khác.',
+  NOT_INSIDE: 'Xe không có trong bãi.',
   INVALID_PLATE: 'Biển số không hợp lệ (vd 30A-123.45).',
 };
 export const message = (data) => MESSAGES[data?.error] ?? data?.error ?? 'Có lỗi xảy ra.';

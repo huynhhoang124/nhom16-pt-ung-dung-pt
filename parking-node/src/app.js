@@ -3,10 +3,12 @@ const s = require('./slots');
 const { normalizePlate, isPlate } = require('./plate');
 const { invalidRule } = require('./pricing');
 const { savePricing } = require('./db');
+const { mountGate, tokenFor } = require('./gate');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15 }) {
+// qrSecret: khoá ký QR riêng của bãi (env QR_SECRET); không đặt thì suy từ khoá nội bộ.
+function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}` }) {
   const app = express();
   app.use(express.json({ limit: '10kb' }));
 
@@ -34,10 +36,13 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15 }) {
     }
     const licensePlate = normalizePlate(req.body.licensePlate);
     if (!isPlate(licensePlate)) return res.status(400).json({ error: 'INVALID_PLATE' });
-    send(res, await s.reserve(pool, parkingId, { requestId, userId, slotCode, licensePlate }, reservationMinutes));
+    const out = await s.reserve(pool, parkingId, { requestId, userId, slotCode, licensePlate }, reservationMinutes);
+    if (out.code < 300) out.body = { ...out.body, qrToken: tokenFor(qrSecret, parkingId, out.body) };
+    send(res, out);
   });
 
-  app.get('/api/reservations', async (req, res) => res.json(await s.listReservations(pool, req.query.userId)));
+  app.get('/api/reservations', async (req, res) => res.json((await s.listReservations(pool, req.query.userId))
+    .map((r) => (r.status === 'ACTIVE' ? { ...r, qrToken: tokenFor(qrSecret, parkingId, r) } : r))));
 
   // Lịch sử gửi xe: ?plate=&userId=&from=&to= (ISO 8601)
   app.get('/api/sessions', async (req, res) => {
@@ -76,6 +81,8 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15 }) {
     await savePricing(pool, rules);
     res.json(await s.listPricing(pool));
   });
+
+  mountGate(app, { pool, parkingId, qrSecret });
 
   const moves = {
     enter: [['RESERVED', 'AVAILABLE'], 'OCCUPIED', 'CAR_ENTER'],   // AVAILABLE -> OCCUPIED: xe vào không đặt trước

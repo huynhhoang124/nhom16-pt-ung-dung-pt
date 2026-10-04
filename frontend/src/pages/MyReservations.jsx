@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, message, useLive } from '../api.js';
+import QrCode from '../QrCode.jsx';
 
 export default function MyReservations() {
   const [data, setData] = useState(null);
@@ -27,16 +28,17 @@ export default function MyReservations() {
       )}
       {note && <p className="muted">{note}</p>}
       <div className="scroll"><table>
-        <thead><tr><th>Bãi</th><th>Slot</th><th>Biển số</th><th>Hết hạn</th><th>Trạng thái</th><th /></tr></thead>
+        <thead><tr><th>Bãi</th><th>Slot</th><th>Biển số</th><th>Hết hạn</th><th>Trạng thái</th><th>QR vào cổng</th><th /></tr></thead>
         <tbody>
           {data.reservations.map((r) => (
             <tr key={r.id}>
               <td>{r.parkingId}</td><td>{r.slotCode}</td><td>{r.licensePlate}</td>
               <td>{new Date(r.expireTime).toLocaleString('vi-VN')}</td><td>{r.status}</td>
+              <td>{r.qrToken && <QrCode value={r.qrToken} />}</td>
               <td>{r.status === 'ACTIVE' && <button className="link" onClick={() => cancel(r)}>Huỷ</button>}</td>
             </tr>
           ))}
-          {!data.reservations.length && <tr><td colSpan="6" className="muted">Bạn chưa đặt chỗ nào.</td></tr>}
+          {!data.reservations.length && <tr><td colSpan="7" className="muted">Bạn chưa đặt chỗ nào.</td></tr>}
         </tbody>
       </table></div>
     </>

@@ -78,3 +78,4 @@ th { font-size: 0.85em; color: var(--muted); }
 .login h1 { margin: 0; }
 .floor { margin: 0.8rem 0 0; font-size: 0.95rem; color: var(--muted); }
 .num { width: 7rem; }
+.qr { image-rendering: pixelated; cursor: zoom-in; background: #fff; }

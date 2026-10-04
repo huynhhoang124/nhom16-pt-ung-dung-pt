@@ -58,3 +58,26 @@ test('bảng giá: xem, sửa (kiểm dữ liệu), seed không ghi đè giá đ
   await require('../src/db').init(pool, 'B', 3);
   assert.equal((await call('/api/pricing')).body[0].firstBlockFee, 30000);
 });
+
+test('TC29–TC32 QR ở cổng: đúng thì vào/ra được; sửa ký tự 401; QR bãi khác 403; dùng lại 409', async (t) => {
+  const { call, close } = await start();
+  t.after(close);
+  const res = await call('/api/reservations', { method: 'POST', body: { requestId: 'qr1', userId: 'u1', slotCode: 'B01', licensePlate: '30A-123.45' } });
+  const { qrToken } = res.body;
+  assert.ok(qrToken);
+  const scan = (token, action = 'enter') => call('/api/gate/scan', { method: 'POST', body: { token, action } });
+
+  assert.equal((await scan(qrToken.slice(0, 5) + (qrToken[5] === 'x' ? 'y' : 'x') + qrToken.slice(6))).status, 401);   // TC30
+  const other = require('../src/qr').sign('k:qr:A', { p: 'A', r: res.body.id, e: 9e9 });
+  assert.equal((await scan(other)).status, 401);                                       // khoá bãi A không hợp lệ ở bãi B
+  const forged = require('../src/qr').sign('k:qr:B', { p: 'A', r: res.body.id, e: 9e9 });
+  assert.deepEqual((await scan(forged)).body, { error: 'WRONG_PARKING' });             // TC31
+
+  const enter = await scan(qrToken);                                                   // TC29
+  assert.deepEqual([enter.status, enter.body.status, enter.body.session.licensePlate], [200, 'OCCUPIED', '30A12345']);
+  assert.deepEqual([(await scan(qrToken)).status, (await scan(qrToken)).body.error], [409, 'QR_USED']);   // TC32
+  assert.equal((await scan(qrToken, 'exit')).body.status, 'AVAILABLE');               // ra bằng QR (dưới 5 phút: miễn phí)
+  assert.deepEqual((await scan(qrToken, 'exit')).body, { error: 'NOT_INSIDE' });
+  // danh sách đặt chỗ: chỉ reservation ACTIVE mới có QR
+  assert.equal((await call('/api/reservations')).body[0].qrToken, undefined);
+});

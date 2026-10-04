@@ -21,6 +21,7 @@ async function main() {
   const app = makeApp({
     pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
     reservationMinutes: Number(env('RESERVATION_MINUTES', 15)),
+    ...(process.env.QR_SECRET && { qrSecret: process.env.QR_SECRET }),
   });
   app.listen(port, () => console.log(`Parking ${parkingId} chạy ở cổng ${port}`));
 
