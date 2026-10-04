@@ -39,12 +39,15 @@ test('TC01/TC04 tra cứu song song: bãi chậm bị bỏ qua, vẫn trả kế
   const r = await agg.call('/api/parkings/availability');
   const ms = performance.now() - started;
   assert.deepEqual(r.body, [
-    { parkingId: 'A', status: 'ONLINE', available: 4, total: 4 },
-    { parkingId: 'B', status: 'ONLINE', available: 2, total: 2 },
+    { parkingId: 'A', status: 'ONLINE', available: 4, total: 4, byType: { CAR: { available: 4, total: 4 } } },
+    { parkingId: 'B', status: 'ONLINE', available: 2, total: 2, byType: { CAR: { available: 2, total: 2 } } },
     { parkingId: 'C', status: 'OFFLINE' },
   ]);
   assert.ok(ms < 1500, `phải trả trong khoảng timeout, mất ${ms.toFixed(0)}ms`);
 
   const search = await agg.call('/api/parkings/search?available=true');
   assert.deepEqual(search.body.map((p) => p.parkingId), ['A', 'B']);
+  // TC16 (Aggregator): bãi chỉ có ô tô -> lọc xe máy không còn bãi nào; type lạ -> 400
+  assert.deepEqual((await agg.call('/api/parkings/search?available=true&type=MOTO')).body, []);
+  assert.equal((await agg.call('/api/parkings/search?type=BUS')).status, 400);
 });

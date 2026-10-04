@@ -1,7 +1,7 @@
 # Hệ thống bãi đỗ xe phân tán – Nhóm 16
 #   docker compose up -d --build                 # chạy 3 bãi A, B, C
 #   docker compose --profile extra up -d         # thêm bãi D (demo mở rộng)
-# Mỗi bãi: 1 container node + 1 Postgres riêng. Node bãi này không có địa chỉ DB của bãi khác.
+# Mỗi bãi: 1 container node + 1 Postgres riêng. SLOTS = loại:tầng:số lượng (CAR ô tô, MOTO xe máy). Node bãi này không có địa chỉ DB của bãi khác.
 name: nhom16-parking
 
 x-pg: &pg
@@ -30,19 +30,19 @@ services:
   parking-a:
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, PARKING_ID: A, PORT: 8001, SLOT_COUNT: 20, DATABASE_URL: "postgres://postgres:dev@db-a/parking" }
+    environment: { <<: *node-env, PARKING_ID: A, PORT: 8001, SLOTS: "CAR:1:10,CAR:2:10,MOTO:1:20", DATABASE_URL: "postgres://postgres:dev@db-a/parking" }
     ports: ["8001:8001"]
     depends_on: { db-a: { condition: service_healthy } }
   parking-b:
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, PARKING_ID: B, PORT: 8002, SLOT_COUNT: 30, DATABASE_URL: "postgres://postgres:dev@db-b/parking" }
+    environment: { <<: *node-env, PARKING_ID: B, PORT: 8002, SLOTS: "CAR:1:10,CAR:2:10,CAR:3:10,MOTO:1:30", DATABASE_URL: "postgres://postgres:dev@db-b/parking" }
     ports: ["8002:8002"]
     depends_on: { db-b: { condition: service_healthy } }
   parking-c:
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, PARKING_ID: C, PORT: 8003, SLOT_COUNT: 15, DATABASE_URL: "postgres://postgres:dev@db-c/parking" }
+    environment: { <<: *node-env, PARKING_ID: C, PORT: 8003, SLOTS: "CAR:1:10,CAR:2:5,MOTO:1:15", DATABASE_URL: "postgres://postgres:dev@db-c/parking" }
     ports: ["8003:8003"]
     depends_on: { db-c: { condition: service_healthy } }
 

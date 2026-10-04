@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS parking_slots (
   id          SERIAL PRIMARY KEY,
   slot_code   VARCHAR(10) UNIQUE NOT NULL,
   floor       INT NOT NULL DEFAULT 1,
-  type        VARCHAR(12) NOT NULL DEFAULT 'CAR',
+  type        VARCHAR(12) NOT NULL DEFAULT 'CAR' CHECK (type IN ('CAR','MOTO')),
   status      VARCHAR(12) NOT NULL DEFAULT 'AVAILABLE'
               CHECK (status IN ('AVAILABLE','RESERVED','OCCUPIED','MAINTENANCE')),
   version     BIGINT NOT NULL DEFAULT 0,              -- tăng mỗi lần đổi: sắp thứ tự sự kiện, chống tin cũ/trùng

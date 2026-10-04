@@ -24,7 +24,7 @@ test('HTTP: health mở, API cần khoá nội bộ, luồng đặt/vào/ra/hu�
   assert.deepEqual(await call('/health', { key: null }), { status: 200, body: { status: 'UP', parkingId: 'B' } });
   assert.equal((await call('/api/availability', { key: null })).status, 401);
   assert.equal((await call('/api/availability', { key: 'sai' })).status, 401);
-  assert.deepEqual((await call('/api/availability')).body, { parkingId: 'B', available: 3, total: 3 });
+  assert.deepEqual((await call('/api/availability')).body, { parkingId: 'B', available: 3, total: 3, byType: { CAR: { available: 3, total: 3 } } });
 
   assert.equal((await call('/api/reservations', { method: 'POST', body: { slotCode: 'B01' } })).status, 400);
   const body = { requestId: 'q1', userId: 'u1', slotCode: 'B01', licensePlate: '29A-1' };

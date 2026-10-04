@@ -33,8 +33,12 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
   // Nghiệp vụ 1: tra cứu toàn hệ thống (scatter–gather, kết quả một phần khi có bãi lỗi)
   const availability = () => reg.gather((n) => reg.json(n, '/api/availability'));
   app.get('/api/parkings/availability', async (_req, res) => res.json(await availability()));
+  // ?type=CAR|MOTO: số chỗ tính theo loại xe đó; ?available=true: chỉ bãi đang chạy còn chỗ.
   app.get('/api/parkings/search', async (req, res) => {
-    const all = await availability();
+    const { type } = req.query;
+    if (type && !['CAR', 'MOTO'].includes(type)) return res.status(400).json({ error: 'type must be CAR or MOTO' });
+    let all = await availability();
+    if (type) all = all.map((p) => (p.status === 'ONLINE' ? { ...p, ...(p.byType?.[type] ?? { available: 0, total: 0 }) } : p));
     res.json(req.query.available === 'true' ? all.filter((p) => p.status === 'ONLINE' && p.available > 0) : all);
   });
 

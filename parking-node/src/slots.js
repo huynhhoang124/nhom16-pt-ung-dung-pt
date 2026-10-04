@@ -105,15 +105,23 @@ async function expireDue(pool, parkingId) {
   return due.rows.length;
 }
 
+// Tổng chỗ trống + theo từng loại xe (CAR/MOTO).
 const availability = async (pool, parkingId) => {
-  const r = await pool.query(
-    `SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available, count(*)::int AS total FROM parking_slots`);
-  return { parkingId, ...r.rows[0] };
+  const rows = (await pool.query(
+    `SELECT type, count(*) FILTER (WHERE status='AVAILABLE')::int AS available, count(*)::int AS total
+     FROM parking_slots GROUP BY type ORDER BY type`)).rows;
+  const sum = (k) => rows.reduce((n, r) => n + r[k], 0);
+  return {
+    parkingId, available: sum('available'), total: sum('total'),
+    byType: Object.fromEntries(rows.map((r) => [r.type, { available: r.available, total: r.total }])),
+  };
 };
 
-const listSlots = async (pool, onlyAvailable) => (await pool.query(
+const listSlots = async (pool, onlyAvailable, type) => (await pool.query(
   `SELECT slot_code AS "slotCode", floor, type, status, version::int AS version
-   FROM parking_slots ${onlyAvailable ? "WHERE status='AVAILABLE'" : ''} ORDER BY slot_code`)).rows;
+   FROM parking_slots
+   WHERE ($1::bool IS NOT TRUE OR status='AVAILABLE') AND ($2::text IS NULL OR type=$2)
+   ORDER BY slot_code`, [!!onlyAvailable, type ?? null])).rows;
 
 const listReservations = async (pool, userId) => (await pool.query(
   `SELECT r.id, r.request_id AS "requestId", r.user_id AS "userId", s.slot_code AS "slotCode",

@@ -15,6 +15,30 @@ test('seed tạo đủ slot, chạy init lần 2 không nhân đôi', async () =
   assert.deepEqual(await one(pool, `SELECT floor FROM parking_slots WHERE slot_code='A11'`), { floor: 2 });
 });
 
+test('TC15 SLOTS: đúng số slot từng loại/tầng, mã ô tô A01.., xe máy AM01..; init lần 2 không nhân đôi', async () => {
+  const { init, slotPlan } = require('../src/db');
+  const pool = await makePool('A', 0);
+  await init(pool, 'A', 'CAR:1:3,CAR:2:2,MOTO:1:4');
+  await init(pool, 'A', 'CAR:1:3,CAR:2:2,MOTO:1:4');
+  const rows = (await pool.query(`SELECT type, floor, count(*)::int AS n FROM parking_slots GROUP BY type, floor ORDER BY type, floor`)).rows;
+  assert.deepEqual(rows, [{ type: 'CAR', floor: 1, n: 3 }, { type: 'CAR', floor: 2, n: 2 }, { type: 'MOTO', floor: 1, n: 4 }]);
+  assert.deepEqual(await one(pool, `SELECT floor, type FROM parking_slots WHERE slot_code='A04'`), { floor: 2, type: 'CAR' });
+  assert.ok(await one(pool, `SELECT 1 FROM parking_slots WHERE slot_code='AM04'`));
+  assert.throws(() => slotPlan('A', 'BUS:1:3'), /SLOTS sai/);
+});
+
+test('TC16 tra cứu theo loại xe: byType và lọc type=MOTO', async () => {
+  const pool = await makePool('A', 0);
+  await require('../src/db').init(pool, 'A', 'CAR:1:2,MOTO:1:3');
+  await s.reserve(pool, P, req('r1', 'AM01'));
+  assert.deepEqual(await s.availability(pool, P), {
+    parkingId: 'A', available: 4, total: 5,
+    byType: { CAR: { available: 2, total: 2 }, MOTO: { available: 2, total: 3 } },
+  });
+  assert.deepEqual((await s.listSlots(pool, true, 'MOTO')).map((x) => x.slotCode), ['AM02', 'AM03']);
+  assert.equal((await s.listSlots(pool, false, 'CAR')).length, 2);
+});
+
 test('đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện', async () => {
   const pool = await makePool();
   const r = await s.reserve(pool, P, req('r1'));
@@ -104,7 +128,7 @@ test('availability, danh sách slot và reservation của user', async () => {
   const pool = await makePool('A', 5);
   await s.reserve(pool, P, req('r1', 'A01', 'u1'));
   await s.reserve(pool, P, req('r2', 'A02', 'u2'));
-  assert.deepEqual(await s.availability(pool, P), { parkingId: 'A', available: 3, total: 5 });
+  assert.deepEqual(await s.availability(pool, P), { parkingId: 'A', available: 3, total: 5, byType: { CAR: { available: 3, total: 5 } } });
   assert.equal((await s.listSlots(pool, true)).length, 3);
   assert.deepEqual((await s.listSlots(pool, false))[0], { slotCode: 'A01', floor: 1, type: 'CAR', status: 'RESERVED', version: 1 });
   const mine = await s.listReservations(pool, 'u1');

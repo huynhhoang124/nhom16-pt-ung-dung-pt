@@ -20,8 +20,9 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15 }) {
   const send = (res, r) => res.status(r.code).json(r.body);
 
   app.get('/api/availability', async (_req, res) => res.json(await s.availability(pool, parkingId)));
-  app.get('/api/slots', async (_req, res) => res.json(await s.listSlots(pool, false)));
-  app.get('/api/slots/available', async (_req, res) => res.json(await s.listSlots(pool, true)));
+  const type = (req) => (['CAR', 'MOTO'].includes(req.query.type) ? req.query.type : undefined);
+  app.get('/api/slots', async (req, res) => res.json(await s.listSlots(pool, false, type(req))));
+  app.get('/api/slots/available', async (req, res) => res.json(await s.listSlots(pool, true, type(req))));
 
   app.post('/api/reservations', async (req, res) => {
     const { requestId, userId, slotCode, licensePlate } = req.body ?? {};

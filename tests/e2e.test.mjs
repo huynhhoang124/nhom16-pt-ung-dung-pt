@@ -67,7 +67,7 @@ test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bã
 
 test('TC01 tra cứu tổng hợp 3 bãi', T, async () => {
   const r = await agg('/api/parkings/availability');
-  assert.deepEqual(r.body.map((p) => [p.parkingId, p.status, p.total]), [['A', 'ONLINE', 20], ['B', 'ONLINE', 30], ['C', 'ONLINE', 15]]);
+  assert.deepEqual(r.body.map((p) => [p.parkingId, p.status, p.total]), [['A', 'ONLINE', 40], ['B', 'ONLINE', 60], ['C', 'ONLINE', 30]]);
 });
 
 test('TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai', T, async () => {

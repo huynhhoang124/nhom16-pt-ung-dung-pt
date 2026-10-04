@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, message, newKey, STATUS_LABEL, useLive } from '../api.js';
+import { TYPE_LABEL } from './Dashboard.jsx';
 
 // Thao tác nhân viên theo trạng thái slot.
 const STAFF_ACTIONS = {
@@ -16,6 +17,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   const [plate, setPlate] = useState('');
   const [note, setNote] = useState(null);            // { kind: 'ok'|'error', text }
   const [reservations, setReservations] = useState([]);
+  const [type, setType] = useState('');               // lọc loại xe, '' = tất cả
   const isStaff = user.role === 'ADMIN' || (user.role === 'STAFF' && user.parkingId === parkingId);
 
   const load = useCallback(async () => {
@@ -70,7 +72,10 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
 
   if (!p) return <p className="muted">Đang tải…</p>;
   const slot = p.slots.find((s) => s.slotCode === selected);
-  const counts = p.slots.reduce((m, s) => ({ ...m, [s.status]: (m[s.status] ?? 0) + 1 }), {});
+  const slots = p.slots.filter((s) => !type || s.type === type);
+  const counts = slots.reduce((m, s) => ({ ...m, [s.status]: (m[s.status] ?? 0) + 1 }), {});
+  // Nhóm theo tầng. Bản cache khi bãi mất kết nối không có tầng -> một nhóm chung.
+  const floors = Object.entries(slots.reduce((m, s) => ({ ...m, [s.floor ?? '']: [...(m[s.floor ?? ''] ?? []), s] }), {}));
 
   return (
     <>
@@ -83,24 +88,34 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
         <p className="banner">Bãi đang mất kết nối. Đây là trạng thái cuối cùng Aggregator biết (có thể đã cũ); tạm thời không nhận đặt chỗ.</p>
       )}
       <p className="legend">
+        {[['', 'Tất cả'], ...Object.entries(TYPE_LABEL)].map(([k, v]) => (
+          <button key={k} className={type === k ? 'tab active' : 'tab'} onClick={() => setType(k)}>{v}</button>
+        ))}
+      </p>
+      <p className="legend">
         {Object.entries(STATUS_LABEL).map(([k, v]) => <span key={k} className={`chip ${k}`}>{v}: {counts[k] ?? 0}</span>)}
       </p>
 
-      <div className="grid">
-        {p.slots.map((s) => (
-          <button key={s.slotCode} className={`slot ${s.status} ${s.slotCode === selected ? 'sel' : ''}`} onClick={() => pick(s)}
-            title={`${s.slotCode} – ${STATUS_LABEL[s.status]} (v${s.version})`}>
-            {s.slotCode}
-          </button>
-        ))}
-      </div>
-      {!p.slots.length && <p className="muted">Chưa có dữ liệu slot.</p>}
+      {floors.map(([floor, list]) => (
+        <section key={floor}>
+          {floor && <h3 className="floor">Tầng {floor}</h3>}
+          <div className="grid">
+            {list.map((s) => (
+              <button key={s.slotCode} className={`slot ${s.status} ${s.slotCode === selected ? 'sel' : ''}`} onClick={() => pick(s)}
+                title={`${s.slotCode} – ${TYPE_LABEL[s.type] ?? ''} – ${STATUS_LABEL[s.status]} (v${s.version})`}>
+                {s.slotCode}
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+      {!slots.length && <p className="muted">Chưa có dữ liệu slot.</p>}
 
       {note && <p className={note.kind === 'ok' ? 'success' : 'error'}>{note.text}</p>}
 
       {slot && !p.stale && (
         <div className="card panel">
-          <strong>{slot.slotCode}</strong> · {STATUS_LABEL[slot.status]}
+          <strong>{slot.slotCode}</strong> · {TYPE_LABEL[slot.type] ?? ''} · {STATUS_LABEL[slot.status]}
           {pending && (
             <form onSubmit={reserve} className="inline">
               <input placeholder="Biển số, vd 30A-123.45" value={plate} onChange={(e) => setPlate(e.target.value)} required />
