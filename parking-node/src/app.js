@@ -50,6 +50,26 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     send(res, out);
   });
 
+  // NV-09: thêm / sửa / gỡ slot. Aggregator kiểm quyền (nhân viên bãi này hoặc quản trị).
+  const SLOT_CODE = /^[A-Z0-9-]{1,10}$/;
+  const slotFields = (b, partial) => {
+    const { floor, type } = b ?? {};
+    if (!(partial && floor === undefined) && !(Number.isInteger(floor) && floor >= -5 && floor <= 50)) return 'floor must be an integer -5..50';
+    if (!(partial && type === undefined) && !['CAR', 'MOTO'].includes(type)) return 'type must be CAR or MOTO';
+    return null;
+  };
+  app.post('/api/slots', async (req, res) => {
+    const bad = !SLOT_CODE.test(req.body?.slotCode ?? '') ? 'slotCode must match [A-Z0-9-]{1,10}' : slotFields(req.body);
+    if (bad) return res.status(400).json({ error: bad });
+    send(res, await s.addSlot(pool, parkingId, req.body));
+  });
+  app.patch('/api/slots/:code', async (req, res) => {
+    const bad = slotFields(req.body, true);
+    if (bad) return res.status(400).json({ error: bad });
+    send(res, await s.updateSlot(pool, parkingId, req.params.code, req.body));
+  });
+  app.delete('/api/slots/:code', async (req, res) => send(res, await s.hideSlot(pool, parkingId, req.params.code)));
+
   app.get('/api/slots/:code/schedule', async (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(req.query.date ?? '')) return res.status(400).json({ error: 'date=YYYY-MM-DD is required' });
     res.json(await s.slotSchedule(pool, req.params.code, req.query.date));

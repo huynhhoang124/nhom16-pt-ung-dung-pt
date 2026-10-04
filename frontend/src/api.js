@@ -54,6 +54,8 @@ const MESSAGES = {
   SLOT_RESERVED_SOON: 'Slot sắp có người đặt trước, chọn slot khác.',
   INVALID_START_TIME: 'Giờ đến phải trong 7 ngày tới.',
   INVALID_DURATION: 'Thời lượng từ 30 phút đến 24 giờ.',
+  SLOT_EXISTS: 'Mã slot đã tồn tại.',
+  SLOT_IN_USE: 'Slot đang có xe hoặc có lượt đặt còn hiệu lực.',
   INVALID_QR: 'Mã QR không hợp lệ.',
   QR_EXPIRED: 'Mã QR đã hết hạn.',
   QR_USED: 'Mã QR đã được dùng.',

@@ -63,7 +63,7 @@ async function reserve(pool, parkingId, { requestId, userId, slotCode, licensePl
           `UPDATE parking_slots SET status='RESERVED', version=version+1, updated_at=now()
            WHERE slot_code=$1 AND status='AVAILABLE' RETURNING id, version`, [slotCode])).rows[0];
       } else {
-        slot = (await c.query(`SELECT id FROM parking_slots WHERE slot_code=$1 AND status <> 'MAINTENANCE'`, [slotCode])).rows[0];
+        slot = (await c.query(`SELECT id FROM parking_slots WHERE slot_code=$1 AND status NOT IN ('MAINTENANCE','HIDDEN')`, [slotCode])).rows[0];
       }
       if (!slot) throw new Abort(409, { error: 'SLOT_TAKEN' });
       const r = await c.query(
@@ -275,6 +275,50 @@ async function activateDue(pool, parkingId, minutes = 15) {
   return done;
 }
 
+// NV-09: quản lý slot. Gỡ slot = xoá mềm (status HIDDEN): giữ lịch sử phiên/đặt chỗ, thêm lại được.
+// Mọi thay đổi đi kèm sự kiện để cache của Aggregator cập nhật.
+function addSlot(pool, parkingId, { slotCode, floor, type }) {
+  return tx(pool, async (c) => {
+    // mã đã từng có nhưng đang ẩn -> bật lại với tầng/loại mới; đang dùng -> 409
+    const s = (await c.query(
+      `INSERT INTO parking_slots(slot_code, floor, type) VALUES ($1,$2,$3)
+       ON CONFLICT (slot_code) DO UPDATE SET status='AVAILABLE', floor=$2, type=$3, version=parking_slots.version+1, updated_at=now()
+         WHERE parking_slots.status='HIDDEN'
+       RETURNING slot_code, floor, type, status, version`, [slotCode, floor, type])).rows[0];
+    if (!s) throw new Abort(409, { error: 'SLOT_EXISTS' });
+    await emit(c, parkingId, 'SLOT_ADDED', s.slot_code, s.status, s.version);
+    return { code: 201, body: { slotCode: s.slot_code, floor: s.floor, type: s.type, status: s.status, version: Number(s.version) } };
+  });
+}
+
+// Đổi tầng/loại: chỉ khi slot không có xe và không có lượt đặt còn hiệu lực (tránh đổi loại xe dưới chân người đã đặt).
+function updateSlot(pool, parkingId, slotCode, { floor, type }) {
+  return tx(pool, async (c) => {
+    const s = (await c.query(
+      `UPDATE parking_slots p SET floor=COALESCE($2, floor), type=COALESCE($3, type), version=version+1, updated_at=now()
+       WHERE slot_code=$1 AND status IN ('AVAILABLE','MAINTENANCE')
+         AND NOT EXISTS (SELECT 1 FROM reservations r WHERE r.slot_id=p.id AND r.status IN ('ACTIVE','USED'))
+       RETURNING slot_code, floor, type, status, version`, [slotCode, floor ?? null, type ?? null])).rows[0];
+    if (!s) throw new Abort(409, { error: 'SLOT_IN_USE' });
+    await emit(c, parkingId, 'SLOT_CHANGED', s.slot_code, s.status, s.version);
+    return { code: 200, body: { slotCode: s.slot_code, floor: s.floor, type: s.type, status: s.status, version: Number(s.version) } };
+  });
+}
+
+// Gỡ slot bằng MỘT câu UPDATE có điều kiện: không có xe, không có lượt đặt còn hiệu lực.
+function hideSlot(pool, parkingId, slotCode) {
+  return tx(pool, async (c) => {
+    const s = (await c.query(
+      `UPDATE parking_slots p SET status='HIDDEN', version=version+1, updated_at=now()
+       WHERE slot_code=$1 AND status IN ('AVAILABLE','MAINTENANCE')
+         AND NOT EXISTS (SELECT 1 FROM reservations r WHERE r.slot_id=p.id AND r.status IN ('ACTIVE','USED'))
+       RETURNING slot_code, version`, [slotCode])).rows[0];
+    if (!s) throw new Abort(409, { error: 'SLOT_IN_USE' });
+    await emit(c, parkingId, 'SLOT_HIDDEN', s.slot_code, 'HIDDEN', s.version);
+    return { code: 200, body: { slotCode: s.slot_code, status: 'HIDDEN', version: Number(s.version) } };
+  });
+}
+
 // Lịch đặt của một slot trong một ngày (giờ VN), không kèm thông tin cá nhân.
 const slotSchedule = async (pool, slotCode, date) => (await pool.query(
   `SELECT r.start_time AS "startTime", r.end_time AS "endTime", r.status
@@ -288,7 +332,7 @@ const slotSchedule = async (pool, slotCode, date) => (await pool.query(
 const availability = async (pool, parkingId) => {
   const rows = (await pool.query(
     `SELECT type, count(*) FILTER (WHERE status='AVAILABLE')::int AS available, count(*)::int AS total
-     FROM parking_slots GROUP BY type ORDER BY type`)).rows;
+     FROM parking_slots WHERE status <> 'HIDDEN' GROUP BY type ORDER BY type`)).rows;
   const sum = (k) => rows.reduce((n, r) => n + r[k], 0);
   return {
     parkingId, available: sum('available'), total: sum('total'),
@@ -299,7 +343,7 @@ const availability = async (pool, parkingId) => {
 const listSlots = async (pool, onlyAvailable, type) => (await pool.query(
   `SELECT slot_code AS "slotCode", floor, type, status, version::int AS version
    FROM parking_slots
-   WHERE ($1::bool IS NOT TRUE OR status='AVAILABLE') AND ($2::text IS NULL OR type=$2)
+   WHERE status <> 'HIDDEN' AND ($1::bool IS NOT TRUE OR status='AVAILABLE') AND ($2::text IS NULL OR type=$2)
    ORDER BY slot_code`, [!!onlyAvailable, type ?? null])).rows;
 
 const listReservations = async (pool, userId) => (await pool.query(
@@ -309,4 +353,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { reserve, moveSlot, endReservation, expireDue, activateDue, slotSchedule, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };
+module.exports = { reserve, moveSlot, endReservation, expireDue, activateDue, slotSchedule, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };

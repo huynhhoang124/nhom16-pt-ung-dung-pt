@@ -307,3 +307,32 @@ test('availability, danh sách slot và reservation của user', async () => {
   const mine = await s.listReservations(pool, 'u1');
   assert.deepEqual(mine.map((r) => [r.slotCode, r.status]), [['A01', 'ACTIVE']]);
 });
+
+// ---- NV-09: quản lý slot ----
+test('TC38 gỡ slot đang có xe / đang có lượt đặt -> 409; slot trống thì gỡ được, không còn trong danh sách và tổng số', async () => {
+  const pool = await makePool();
+  await s.moveSlot(pool, P, 'A01', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER');
+  assert.deepEqual(await s.hideSlot(pool, P, 'A01'), { code: 409, body: { error: 'SLOT_IN_USE' } });
+  await book(pool, 'h1', await inHours(pool, 5), 120, 'A02');                  // lượt đặt trước còn hiệu lực
+  assert.equal((await s.hideSlot(pool, P, 'A02')).code, 409);
+  const h = await s.hideSlot(pool, P, 'A03');
+  assert.deepEqual([h.code, h.body.status], [200, 'HIDDEN']);
+  assert.equal((await s.listSlots(pool, false)).some((x) => x.slotCode === 'A03'), false);
+  assert.equal((await s.availability(pool, P)).total, 4);
+  assert.equal((await s.reserve(pool, P, req('h2', 'A03'))).code, 409);        // slot đã gỡ không đặt được
+  assert.equal((await s.moveSlot(pool, P, 'A03', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER')).code, 409);
+  assert.equal((await one(pool, `SELECT event_type FROM parking_events ORDER BY id DESC LIMIT 1`)).event_type, 'SLOT_HIDDEN');
+});
+
+test('TC39 thêm slot mới / bật lại slot đã gỡ; trùng mã 409; đổi tầng-loại khi slot rảnh', async () => {
+  const pool = await makePool();
+  const add = await s.addSlot(pool, P, { slotCode: 'AM09', floor: 1, type: 'MOTO' });
+  assert.deepEqual([add.code, add.body.status], [201, 'AVAILABLE']);
+  assert.deepEqual((await s.availability(pool, P)).byType.MOTO, { available: 1, total: 1 });
+  assert.deepEqual(await s.addSlot(pool, P, { slotCode: 'A01', floor: 1, type: 'CAR' }), { code: 409, body: { error: 'SLOT_EXISTS' } });
+  await s.hideSlot(pool, P, 'A05');
+  assert.equal((await s.addSlot(pool, P, { slotCode: 'A05', floor: 3, type: 'CAR' })).code, 201);   // bật lại
+  assert.equal((await s.updateSlot(pool, P, 'A05', { floor: 2 })).body.floor, 2);
+  await s.reserve(pool, P, req('u1', 'A04'));
+  assert.equal((await s.updateSlot(pool, P, 'A04', { type: 'MOTO' })).code, 409);
+});

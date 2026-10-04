@@ -85,6 +85,14 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
     load();
   }
 
+  // NV-09: quản lý slot (nhân viên bãi này, quản trị)
+  async function manage(method, body, code = '') {
+    const r = await api(`/api/parkings/${parkingId}/slots${code && `/${code}`}`, { method, body });
+    setNote(r.ok ? { kind: 'ok', text: method === 'DELETE' ? `Đã gỡ ${code}.` : `Đã lưu ${r.data.slotCode}.` } : { kind: 'error', text: message(r.data) });
+    if (r.ok && method === 'DELETE') setSelected(null);
+    load();
+  }
+
   async function cancel(id) {
     const r = await api(`/api/parkings/${parkingId}/reservations/${id}`, { method: 'DELETE' });
     setNote(r.ok ? { kind: 'ok', text: 'Đã huỷ đặt chỗ.' } : { kind: 'error', text: message(r.data) });
@@ -93,7 +101,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
 
   if (!p) return <p className="muted">Đang tải…</p>;
   const slot = p.slots.find((s) => s.slotCode === selected);
-  const slots = p.slots.filter((s) => !type || s.type === type);
+  const slots = p.slots.filter((s) => s.status !== 'HIDDEN' && (!type || s.type === type));
   const counts = slots.reduce((m, s) => ({ ...m, [s.status]: (m[s.status] ?? 0) + 1 }), {});
   // Nhóm theo tầng. Bản cache khi bãi mất kết nối không có tầng -> một nhóm chung.
   const floors = Object.entries(slots.reduce((m, s) => ({ ...m, [s.floor ?? '']: [...(m[s.floor ?? ''] ?? []), s] }), {}));
@@ -166,8 +174,32 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
               {(STAFF_ACTIONS[slot.status] ?? []).map(([a, label]) => <button key={a} onClick={() => act(a)}>{label}</button>)}
             </div>
           )}
+          {isStaff && ['AVAILABLE', 'MAINTENANCE'].includes(slot.status) && (
+            <div className="inline small">
+              Tầng <input type="number" className="num" defaultValue={slot.floor} key={`f${slot.slotCode}`}
+                onBlur={(e) => Number(e.target.value) !== slot.floor && manage('PATCH', { floor: Number(e.target.value) }, slot.slotCode)} />
+              <select value={slot.type} onChange={(e) => manage('PATCH', { type: e.target.value }, slot.slotCode)}>
+                {Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+              <button className="link" onClick={() => confirm(`Gỡ slot ${slot.slotCode}?`) && manage('DELETE', undefined, slot.slotCode)}>Gỡ slot</button>
+            </div>
+          )}
           {!pending && !isStaff && <span className="muted"> – slot đang bảo trì.</span>}
         </div>
+      )}
+
+      {isStaff && p.status === 'ONLINE' && (
+        <form className="inline small" onSubmit={(e) => {
+          e.preventDefault();
+          const f = new FormData(e.target);
+          manage('POST', { slotCode: f.get('code').toUpperCase(), floor: Number(f.get('floor')), type: f.get('type') });
+        }}>
+          <strong>Thêm slot</strong>
+          <input name="code" placeholder="Mã, vd A21" required maxLength="10" />
+          <input name="floor" type="number" className="num" defaultValue="1" required />
+          <select name="type">{Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+          <button>Thêm</button>
+        </form>
       )}
 
       {p.status === 'ONLINE' && <Pricing parkingId={parkingId} canEdit={isStaff} />}

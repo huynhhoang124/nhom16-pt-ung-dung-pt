@@ -169,3 +169,13 @@ test('NV-04 người dùng trả tiền qua Aggregator: cần Idempotency-Key, b
   // nhân viên: chưa trả thì 402, thu tiền mặt thì cho ra (ở đây đã trả online nên ra luôn)
   assert.equal((await agg.call('/api/parkings/A/slots/A01/exit', { method: 'POST', token: tokens.admin, body: {} })).status, 200);
 });
+
+test('NV-09 quản lý slot qua Aggregator: nhân viên chỉ bãi mình, người dùng không được', async (t) => {
+  const { agg, tokens } = await system(t);
+  const add = (token, id) => agg.call(`/api/parkings/${id}/slots`, { method: 'POST', token, body: { slotCode: `${id}09`, floor: 2, type: 'MOTO' } });
+  assert.equal((await add(tokens.user1, 'A')).status, 403);
+  assert.equal((await add(tokens['staff-a'], 'B')).status, 403);
+  assert.equal((await add(tokens['staff-a'], 'A')).status, 201);
+  assert.equal((await agg.call('/api/parkings/A/slots/A09', { method: 'PATCH', token: tokens.admin, body: { floor: 3 } })).body.floor, 3);
+  assert.equal((await agg.call('/api/parkings/A/slots/A09', { method: 'DELETE', token: tokens['staff-a'] })).body.status, 'HIDDEN');
+});

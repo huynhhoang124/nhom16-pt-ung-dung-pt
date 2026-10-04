@@ -8,7 +8,7 @@ CREATE TABLE IF NOT EXISTS parking_slots (
   floor       INT NOT NULL DEFAULT 1,
   type        VARCHAR(12) NOT NULL DEFAULT 'CAR' CHECK (type IN ('CAR','MOTO')),
   status      VARCHAR(12) NOT NULL DEFAULT 'AVAILABLE'
-              CHECK (status IN ('AVAILABLE','RESERVED','OCCUPIED','MAINTENANCE')),
+              CHECK (status IN ('AVAILABLE','RESERVED','OCCUPIED','MAINTENANCE','HIDDEN')),   -- HIDDEN = đã gỡ (xoá mềm)
   version     BIGINT NOT NULL DEFAULT 0,              -- tăng mỗi lần đổi: sắp thứ tự sự kiện, chống tin cũ/trùng
   updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
