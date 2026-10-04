@@ -5,6 +5,7 @@ import Dashboard from './pages/Dashboard.jsx';
 import ParkingDetail from './pages/ParkingDetail.jsx';
 import MyReservations from './pages/MyReservations.jsx';
 import Admin from './pages/Admin.jsx';
+import History from './pages/History.jsx';
 
 const ROLE_LABEL = { USER: 'Người dùng', STAFF: 'Nhân viên', ADMIN: 'Quản trị' };
 
@@ -25,7 +26,7 @@ export default function App() {
 
   const tabs = [
     ['dashboard', 'Tổng quan'],
-    ...(user.role === 'USER' ? [['mine', 'Đặt chỗ của tôi']] : []),
+    ...(user.role === 'USER' ? [['mine', 'Đặt chỗ của tôi'], ['history', 'Lịch sử gửi xe']] : [['history', 'Tra biển số']]),
     ...(user.role === 'STAFF' ? [['parking', `Bãi ${user.parkingId}`]] : []),
     ...(user.role === 'ADMIN' ? [['admin', 'Quản trị']] : []),
   ];
@@ -51,6 +52,7 @@ export default function App() {
         {view.page === 'parking' && <ParkingDetail key={view.parkingId} parkingId={view.parkingId} user={user} onBack={() => go('dashboard')} />}
         {view.page === 'mine' && <MyReservations />}
         {view.page === 'admin' && <Admin />}
+        {view.page === 'history' && <History key={user.role} user={user} />}
       </main>
     </div>
   );

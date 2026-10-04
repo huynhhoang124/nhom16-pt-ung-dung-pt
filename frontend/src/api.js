@@ -39,6 +39,8 @@ const MESSAGES = {
   INVALID_CREDENTIALS: 'Sai tên đăng nhập hoặc mật khẩu.',
   PARKING_EXISTS: 'Mã bãi đã tồn tại.',
   NETWORK: 'Không kết nối được máy chủ.',
+  PLATE_ALREADY_INSIDE: 'Biển số này đang có xe gửi trong bãi.',
+  PLATE_TOO_SHORT: 'Nhập ít nhất 3 ký tự biển số.',
 };
 export const message = (data) => MESSAGES[data?.error] ?? data?.error ?? 'Có lỗi xảy ra.';
 

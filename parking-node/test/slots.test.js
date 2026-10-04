@@ -82,10 +82,12 @@ test('xe vào/ra: RESERVED -> OCCUPIED -> AVAILABLE, reservation thành USED, ve
   const pool = await makePool();
   await s.reserve(pool, P, req('r1'));
   const enter = await s.moveSlot(pool, P, 'A01', ['RESERVED', 'AVAILABLE'], 'OCCUPIED', 'CAR_ENTER', 'x');
-  assert.deepEqual(enter.body, { slot: 'A01', status: 'OCCUPIED', version: 2 });
+  const { session, ...enterBody } = enter.body;
+  assert.deepEqual(enterBody, { slot: 'A01', status: 'OCCUPIED', version: 2 });
+  assert.equal(session.licensePlate, 'x');
   assert.equal((await one(pool, `SELECT status FROM reservations WHERE request_id='r1'`)).status, 'USED');
   const exit = await s.moveSlot(pool, P, 'A01', ['OCCUPIED'], 'AVAILABLE', 'CAR_EXIT');
-  assert.deepEqual(exit.body, { slot: 'A01', status: 'AVAILABLE', version: 3 });
+  assert.deepEqual({ ...exit.body, session: undefined }, { slot: 'A01', status: 'AVAILABLE', version: 3, session: undefined });
   // ra khi slot đang trống: sai trạng thái, không sinh sự kiện
   const bad = await s.moveSlot(pool, P, 'A01', ['OCCUPIED'], 'AVAILABLE', 'CAR_EXIT');
   assert.equal(bad.code, 409);
@@ -100,6 +102,35 @@ test('xe vào không đặt trước (AVAILABLE -> OCCUPIED); slot bảo trì kh
   assert.equal((await s.reserve(pool, P, req('r3', 'A03'))).code, 409);
   assert.equal((await s.moveSlot(pool, P, 'A03', ['MAINTENANCE'], 'AVAILABLE', 'MAINTENANCE_OFF')).code, 200);
   assert.equal((await s.reserve(pool, P, req('r3', 'A03'))).code, 201);
+});
+
+test('TC17 vào bằng đặt chỗ rồi ra: đúng 1 phiên, lấy biển số + user từ đặt chỗ, có exitedAt', async () => {
+  const pool = await makePool();
+  const r = await s.reserve(pool, P, req('r1'));
+  const enter = await s.moveSlot(pool, P, 'A01', ['RESERVED', 'AVAILABLE'], 'OCCUPIED', 'CAR_ENTER');
+  assert.equal(enter.body.session.licensePlate, '30A-r1');
+  assert.equal(enter.body.session.userId, 'u1');
+  assert.equal(enter.body.session.reservationId, r.body.id);
+  assert.equal(enter.body.session.exitedAt, null);
+  const exit = await s.moveSlot(pool, P, 'A01', ['OCCUPIED'], 'AVAILABLE', 'CAR_EXIT');
+  assert.equal(exit.body.session.id, enter.body.session.id);
+  assert.ok(exit.body.session.exitedAt);
+  assert.equal(await count(pool, 'parking_sessions'), 1);
+  // tra theo biển số không phân biệt cách viết; theo user
+  assert.equal((await s.listSessions(pool, { plate: '30a r1' })).length, 1);
+  assert.equal((await s.listSessions(pool, { userId: 'u1' })).length, 1);
+  assert.equal((await s.listSessions(pool, { userId: 'u2' })).length, 0);
+});
+
+test('TC18 cùng biển số vào lần 2 khi chưa ra: 409, slot thứ hai không bị chiếm', async () => {
+  const pool = await makePool();
+  const enter = (code) => s.moveSlot(pool, P, code, ['RESERVED', 'AVAILABLE'], 'OCCUPIED', 'CAR_ENTER', '29A-111.22');
+  assert.equal((await enter('A01')).code, 200);
+  assert.deepEqual(await enter('A02'), { code: 409, body: { error: 'PLATE_ALREADY_INSIDE' } });
+  assert.equal((await slot(pool, 'A02')).status, 'AVAILABLE');
+  // xe không rõ biển số (NULL) thì vào nhiều slot được
+  assert.equal((await s.moveSlot(pool, P, 'A03', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER')).code, 200);
+  assert.equal((await s.moveSlot(pool, P, 'A04', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER')).code, 200);
 });
 
 test('huỷ: chỉ chủ reservation huỷ được; slot về AVAILABLE; huỷ lần 2 -> 404', async () => {

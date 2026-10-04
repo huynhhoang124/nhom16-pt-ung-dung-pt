@@ -37,3 +37,23 @@ CREATE TABLE IF NOT EXISTS parking_events (
   published_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS ix_events_unpublished ON parking_events(id) WHERE published_at IS NULL;
+
+-- Phiên gửi xe: mở khi xe vào, đóng khi xe ra (lịch sử, tính phí, thanh toán).
+CREATE TABLE IF NOT EXISTS parking_sessions (
+  id             UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  slot_id        INT NOT NULL REFERENCES parking_slots(id),
+  license_plate  VARCHAR(20),                         -- NULL khi barrier không đọc được biển số và không có đặt chỗ
+  reservation_id UUID REFERENCES reservations(id),
+  user_id        VARCHAR(64),                         -- có khi xe vào bằng đặt chỗ
+  entered_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  exited_at      TIMESTAMPTZ,
+  fee            INT,                                 -- VND, tính khi xe ra
+  paid_at        TIMESTAMPTZ,
+  payment_method VARCHAR(8),                          -- ONLINE | CASH
+  payment_key    VARCHAR(128) UNIQUE                  -- Idempotency-Key của lần thanh toán
+);
+-- Mỗi slot tối đa 1 phiên đang mở; mỗi biển số tối đa 1 phiên đang mở TRONG BÃI NÀY
+-- (chặn trên toàn hệ thống cần phối hợp nhiều bãi -> chọn sẵn sàng, phát hiện bằng tra cứu gom).
+CREATE UNIQUE INDEX IF NOT EXISTS ux_open_session_slot  ON parking_sessions(slot_id)       WHERE exited_at IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS ux_open_session_plate ON parking_sessions(license_plate) WHERE exited_at IS NULL;
+CREATE INDEX IF NOT EXISTS ix_sessions_entered ON parking_sessions(entered_at DESC);

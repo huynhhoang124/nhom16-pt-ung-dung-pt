@@ -91,6 +91,27 @@ test('nhân viên chỉ thao tác bãi của mình; lịch sử và huỷ của 
   assert.deepEqual(staffList.body.map((r) => r.status), ['CANCELLED']);
 });
 
+test('TC19 lịch sử gửi xe: tra biển số gom từ mọi bãi, bãi treo báo thiếu; USER chỉ thấy của mình', async (t) => {
+  const { agg, tokens } = await system(t);
+  const enter = (id, slot, licensePlate) =>
+    agg.call(`/api/parkings/${id}/slots/${slot}/enter`, { method: 'POST', token: tokens.admin, body: { licensePlate } });
+  assert.equal((await enter('A', 'A02', '30A-999.99')).status, 200);
+  await agg.call('/api/parkings/B/reservations', { method: 'POST', token: tokens.user1, key: 'k', body: reserveBody('B01') });
+  assert.equal((await enter('B', 'B01')).body.session.licensePlate, '30A-123');
+
+  const found = await agg.call('/api/sessions/search?plate=30a99999', { token: tokens['staff-a'] });
+  assert.deepEqual(found.body.sessions.map((x) => [x.parkingId, x.slotCode]), [['A', 'A02']]);
+  assert.deepEqual(found.body.unavailable, ['S']);
+  assert.equal((await agg.call('/api/sessions/search?plate=30', { token: tokens.admin })).status, 400);
+  assert.equal((await agg.call('/api/sessions/search?plate=30A999', { token: tokens.user1 })).status, 403);
+
+  const mine = await agg.call('/api/me/sessions', { token: tokens.user1 });
+  assert.deepEqual(mine.body.sessions.map((x) => [x.parkingId, x.slotCode]), [['B', 'B01']]);
+  assert.deepEqual((await agg.call('/api/me/sessions', { token: tokens.user2 })).body.sessions, []);
+  assert.equal((await agg.call('/api/parkings/B/sessions', { token: tokens['staff-a'] })).status, 403);
+  assert.equal((await agg.call('/api/parkings/A/sessions', { token: tokens['staff-a'] })).body.length, 1);
+});
+
 test('quản trị: xem trạng thái node, thêm bãi mới (không sửa code)', async (t) => {
   const { agg, tokens } = await system(t);
   assert.equal((await agg.call('/api/admin/nodes', { token: tokens.user1 })).status, 403);

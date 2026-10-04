@@ -66,20 +66,57 @@ async function reserve(pool, parkingId, { requestId, userId, slotCode, licensePl
   }
 }
 
+const SESSION_COLS = `ps.id, s.slot_code AS "slotCode", ps.license_plate AS "licensePlate", ps.user_id AS "userId",
+  ps.reservation_id AS "reservationId", ps.entered_at AS "enteredAt", ps.exited_at AS "exitedAt",
+  ps.fee, ps.paid_at AS "paidAt", ps.payment_method AS "paymentMethod"`;
+
 // Đổi trạng thái slot from -> to (enter/exit/maintenance) kèm sự kiện.
+// Xe vào mở phiên gửi xe, xe ra đóng phiên, cùng giao dịch với đổi trạng thái slot.
 function moveSlot(pool, parkingId, slotCode, from, to, type, plate) {
   return tx(pool, async (c) => {
     const s = await c.query(
       `UPDATE parking_slots SET status=$3, version=version+1, updated_at=now()
        WHERE slot_code=$1 AND status = ANY($2) RETURNING id, version`, [slotCode, from, to]);
     if (!s.rowCount) throw new Abort(409, { error: 'INVALID_STATE' });
+    const slotId = s.rows[0].id;
+    let session = null;
     if (type === 'CAR_ENTER') {
-      await c.query(`UPDATE reservations SET status='USED' WHERE status='ACTIVE' AND slot_id=$1`, [s.rows[0].id]);
+      const r = (await c.query(
+        `UPDATE reservations SET status='USED' WHERE status='ACTIVE' AND slot_id=$1
+         RETURNING id, user_id, license_plate`, [slotId])).rows[0];
+      plate = plate || r?.license_plate || null;          // xe đặt trước: lấy biển số từ đặt chỗ
+      const id = (await c.query(
+        `INSERT INTO parking_sessions(slot_id, license_plate, reservation_id, user_id) VALUES ($1,$2,$3,$4) RETURNING id`,
+        [slotId, plate, r?.id ?? null, r?.user_id ?? null])).rows[0].id;
+      session = await getSession(c, id);
+    } else if (type === 'CAR_EXIT') {
+      const open = (await c.query(
+        `UPDATE parking_sessions SET exited_at=now() WHERE slot_id=$1 AND exited_at IS NULL RETURNING id, license_plate`,
+        [slotId])).rows[0];
+      plate = plate || open?.license_plate;
+      session = open ? await getSession(c, open.id) : null;  // xe vào trước khi có bảng phiên thì không có phiên
     }
     await emit(c, parkingId, type, slotCode, to, s.rows[0].version, plate);
-    return { code: 200, body: { slot: slotCode, status: to, version: Number(s.rows[0].version) } };
+    return { code: 200, body: { slot: slotCode, status: to, version: Number(s.rows[0].version), ...(session && { session }) } };
+  }).catch((e) => {
+    // ux_open_session_plate: biển số này đang có xe trong bãi
+    if (e.code === '23505') return { code: 409, body: { error: 'PLATE_ALREADY_INSIDE' } };
+    throw e;
   });
 }
+
+const getSession = async (c, id) => (await c.query(
+  `SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id WHERE ps.id=$1`, [id])).rows[0];
+
+// Lịch sử phiên gửi xe. Biển số so khớp sau khi bỏ dấu cách/chấm/gạch, không phân biệt hoa thường.
+const listSessions = async (pool, { plate, userId, from, to } = {}) => (await pool.query(
+  `SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
+   WHERE ($1::text IS NULL OR regexp_replace(upper(ps.license_plate), '[^A-Z0-9]', '', 'g')
+                              = regexp_replace(upper($1), '[^A-Z0-9]', '', 'g'))
+     AND ($2::text IS NULL OR ps.user_id = $2)
+     AND ($3::timestamptz IS NULL OR ps.entered_at >= $3)
+     AND ($4::timestamptz IS NULL OR ps.entered_at < $4)
+   ORDER BY ps.entered_at DESC LIMIT 200`, [plate || null, userId || null, from || null, to || null])).rows;
 
 // Kết thúc một reservation ACTIVE (huỷ hoặc hết hạn): không xoá cứng, đổi status (dấu vết để đối soát).
 function endReservation(pool, parkingId, id, status, userId) {
@@ -129,4 +166,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { reserve, moveSlot, endReservation, expireDue, availability, listSlots, listReservations, emit };
+module.exports = { reserve, moveSlot, endReservation, expireDue, availability, listSlots, listReservations, listSessions, emit };

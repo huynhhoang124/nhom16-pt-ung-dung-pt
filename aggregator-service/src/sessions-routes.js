@@ -1,0 +1,32 @@
+// NV-06: lịch sử gửi xe. Dữ liệu phiên nằm ở DB từng bãi -> gom song song, bãi lỗi thì báo thiếu.
+const enc = encodeURIComponent;
+
+function mountSessions(app, { reg, need, forward }) {
+  const gatherSessions = async (query) => {
+    const parts = await reg.gather(async (n) => ({ sessions: await reg.json(n, `/api/sessions?${query}`) }));
+    return {
+      sessions: parts.flatMap((p) => (p.sessions ?? []).map((x) => ({ parkingId: p.parkingId, ...x })))
+        .sort((a, b) => b.enteredAt.localeCompare(a.enteredAt)),
+      unavailable: parts.filter((p) => p.status === 'OFFLINE').map((p) => p.parkingId),
+    };
+  };
+
+  // Tra biển số trên toàn hệ thống (nhân viên, quản trị).
+  app.get('/api/sessions/search', need('STAFF', 'ADMIN'), async (req, res) => {
+    const plate = String(req.query.plate ?? '').trim();
+    if (plate.replace(/[^a-z0-9]/gi, '').length < 3) return res.status(400).json({ error: 'PLATE_TOO_SHORT' });
+    res.json(await gatherSessions(`plate=${enc(plate)}`));
+  });
+
+  // Lịch sử gửi xe của tôi (các phiên vào bằng đặt chỗ của tài khoản này).
+  app.get('/api/me/sessions', need('USER'), async (req, res) =>
+    res.json(await gatherSessions(`userId=${enc(req.user.sub)}`)));
+
+  // Phiên gần đây của một bãi.
+  app.get('/api/parkings/:id/sessions', need('STAFF', 'ADMIN'), async (req, res) => {
+    if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
+    await forward(res, reg.get(req.params.id), '/api/sessions');
+  });
+}
+
+module.exports = { mountSessions };

@@ -34,6 +34,13 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15 }) {
 
   app.get('/api/reservations', async (req, res) => res.json(await s.listReservations(pool, req.query.userId)));
 
+  // Lịch sử gửi xe: ?plate=&userId=&from=&to= (ISO 8601)
+  app.get('/api/sessions', async (req, res) => {
+    const { plate, userId, from, to } = req.query;
+    if ([from, to].some((d) => d && Number.isNaN(Date.parse(d)))) return res.status(400).json({ error: 'from/to must be ISO dates' });
+    res.json(await s.listSessions(pool, { plate, userId, from, to }));
+  });
+
   app.delete('/api/reservations/:id', async (req, res) => {
     if (!UUID.test(req.params.id)) return res.status(404).json({ error: 'RESERVATION_NOT_ACTIVE' });
     send(res, await s.endReservation(pool, parkingId, req.params.id, 'CANCELLED', req.query.userId));

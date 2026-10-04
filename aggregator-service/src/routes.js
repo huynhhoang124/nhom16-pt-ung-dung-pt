@@ -1,5 +1,6 @@
 const express = require('express');
 const { slotsFromCache } = require('./events');
+const { mountSessions } = require('./sessions-routes');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
@@ -95,6 +96,8 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
     await forward(res, reg.get(req.params.id), '/api/reservations');
   });
+
+  mountSessions(app, { reg, need, forward });
 
   // Quản trị: trạng thái các node; thêm bãi mới không cần sửa code (tính mở rộng).
   app.get('/api/admin/nodes', need('ADMIN'), (_req, res) =>
