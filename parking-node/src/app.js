@@ -4,12 +4,14 @@ const { normalizePlate, isPlate } = require('./plate');
 const { invalidRule } = require('./pricing');
 const { savePricing } = require('./db');
 const { mountGate, tokenFor } = require('./gate');
+const { log, withRequestId } = require('./log');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // qrSecret: khoá ký QR riêng của bãi (env QR_SECRET); không đặt thì suy từ khoá nội bộ.
 function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}` }) {
   const app = express();
+  app.use(withRequestId);
   app.use(express.json({ limit: '10kb' }));
 
   // /health không cần khoá: Aggregator dùng làm failure detector. Kiểm tra cả DB.
@@ -134,7 +136,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
   });
 
   app.use((err, _req, res, _next) => {
-    console.error(err);
+    log.error('lỗi xử lý request', { error: err.message, stack: err.stack });
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   });
   return app;

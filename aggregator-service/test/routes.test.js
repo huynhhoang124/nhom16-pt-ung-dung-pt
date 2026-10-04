@@ -179,3 +179,19 @@ test('NV-09 quản lý slot qua Aggregator: nhân viên chỉ bãi mình, ngư�
   assert.equal((await agg.call('/api/parkings/A/slots/A09', { method: 'PATCH', token: tokens.admin, body: { floor: 3 } })).body.floor, 3);
   assert.equal((await agg.call('/api/parkings/A/slots/A09', { method: 'DELETE', token: tokens['staff-a'] })).body.status, 'HIDDEN');
 });
+
+test('GS-03 mã truy vết: X-Request-Id từ client đi qua Aggregator -> node -> sự kiện outbox; trả lại trong response', async (t) => {
+  const { a, agg, tokens } = await system(t);
+  const url = agg.server.address();
+  const r = await fetch(`http://127.0.0.1:${url.port}/api/parkings/A/reservations`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${tokens.user1}`, 'idempotency-key': 'trace', 'x-request-id': 'trace-123' },
+    body: JSON.stringify({ slotCode: 'A01', licensePlate: '30A-123.45' }),
+  });
+  assert.equal(r.status, 201);
+  assert.equal(r.headers.get('x-request-id'), 'trace-123');
+  const ev = (await a.pool.query(`SELECT payload FROM parking_events ORDER BY id DESC LIMIT 1`)).rows[0];
+  assert.equal(ev.payload.requestId, 'trace-123');
+  // không gửi thì tự sinh
+  assert.match((await fetch(`http://127.0.0.1:${url.port}/api/parkings`)).headers.get('x-request-id'), /^[0-9a-f-]{36}$/);
+});

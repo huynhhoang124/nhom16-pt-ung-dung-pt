@@ -7,6 +7,7 @@ const { makeRegistry } = require('./nodes');
 const { applyEvent, reconcile, startConsumer } = require('./events');
 const { makeAuth, seedUsers } = require('./auth');
 const { makeApp } = require('./routes');
+const { log } = require('./log');
 
 const env = (k, d) => process.env[k] ?? d;
 
@@ -25,7 +26,7 @@ async function main() {
   const pool = new Pool({ connectionString: env('DATABASE_URL') });
   for (let i = 1; ; i++) {
     try { await init(pool); break; }
-    catch (e) { if (i >= 30) throw e; console.log(`DB chưa sẵn sàng (${e.message}), thử lại...`); await new Promise((r) => setTimeout(r, 2000)); }
+    catch (e) { if (i >= 30) throw e; log.info('DB chưa sẵn sàng, thử lại', { error: e.message }); await new Promise((r) => setTimeout(r, 2000)); }
   }
 
   const reg = makeRegistry({
@@ -41,23 +42,27 @@ async function main() {
   const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS
 
   const push = (e) => io.emit('SLOT_UPDATED', e);
-  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e) => { if (applyEvent(cache, e)) push(e); });
+  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e) => {
+    const fresh = applyEvent(cache, e);
+    log.info('nhận sự kiện', { requestId: e.requestId, type: e.type, parkingId: e.parkingId, slot: e.slot, version: e.version, fresh });
+    if (fresh) push(e);
+  }, log);
 
   const onChange = (n, prev) => {
-    console.log(`Bãi ${n.id}: ${prev} -> ${n.status}`);
+    log.info(`Bãi ${n.id}: ${prev} -> ${n.status}`);
     io.emit('NODE_STATUS', { parkingId: n.id, status: n.status });
     if (n.status === 'ONLINE') {
       reconcile(reg, cache, n, push)
-        .then((k) => console.log(`Đối soát bãi ${n.id}: cập nhật ${k} slot`))
-        .catch((e) => console.error(`Đối soát bãi ${n.id} lỗi:`, e.message));
+        .then((k) => log.info(`Đối soát bãi ${n.id}: cập nhật ${k} slot`))
+        .catch((e) => log.error(`Đối soát bãi ${n.id} lỗi`, { error: e.message }));
     }
   };
-  const check = () => reg.check(onChange).catch((e) => console.error('health:', e.message));
+  const check = () => reg.check(onChange).catch((e) => log.error('health check lỗi', { error: e.message }));
   check();
   setInterval(check, Number(env('HEALTH_INTERVAL_MS', 5000)));
 
   const port = Number(env('PORT', 8000));
-  server.listen(port, () => console.log(`Aggregator chạy ở cổng ${port}`));
+  server.listen(port, () => log.info(`Aggregator chạy ở cổng ${port}`));
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => { log.error('khởi động thất bại', { error: e.message, stack: e.stack }); process.exit(1); });

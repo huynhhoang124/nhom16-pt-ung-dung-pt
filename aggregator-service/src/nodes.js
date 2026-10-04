@@ -8,6 +8,8 @@
 // request sau bị từ chối tức thì thay vì chờ timeout. Health check định kỳ là phép thử "nửa mở":
 // thành công thì "đóng mạch" (ONLINE) và đối soát.
 
+const { requestId } = require('./log');
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
@@ -23,7 +25,8 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
   const raw = (n, path, { method = 'GET', body, ms = timeoutMs } = {}) =>
     fetch(n.url + path, {
       method,
-      headers: { 'content-type': 'application/json', 'x-internal-key': internalKey },
+      // gửi tiếp mã truy vết sang node (GS-03)
+      headers: { 'content-type': 'application/json', 'x-internal-key': internalKey, ...(requestId() && { 'x-request-id': requestId() }) },
       body: body && JSON.stringify(body),
       signal: AbortSignal.timeout(ms),
     });

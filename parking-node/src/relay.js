@@ -30,7 +30,7 @@ function amqpPublisher(url) {
     try {
       const c = await channel();
       c.publish(EXCHANGE, routingKey, Buffer.from(JSON.stringify(payload)),
-        { persistent: true, contentType: 'application/json' });
+        { persistent: true, contentType: 'application/json', ...(payload.requestId && { correlationId: payload.requestId }) });
       await c.waitForConfirms();
       return true;
     } catch {

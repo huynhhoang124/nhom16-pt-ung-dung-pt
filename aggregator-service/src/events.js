@@ -46,12 +46,12 @@ function startConsumer(url, onEvent, log = console) {
       await ch.consume(QUEUE, (m) => {
         if (!m) return;
         try { onEvent(JSON.parse(m.content.toString())); }
-        catch (e) { log.error('Bỏ tin lỗi:', e.message); }
+        catch (e) { log.error('Bỏ tin lỗi', { error: e.message }); }
         ch.ack(m);
       });
       log.log('Đã kết nối RabbitMQ, đang nhận sự kiện');
     } catch (e) {
-      log.error(`RabbitMQ chưa sẵn sàng (${e.message}), thử lại sau 5s`);
+      log.error('RabbitMQ chưa sẵn sàng, thử lại sau 5s', { error: e.message });
       if (conn) conn.close().catch(() => {});   // sự kiện 'close' sẽ hẹn lần thử lại
       else setTimeout(run, 5000);
     }

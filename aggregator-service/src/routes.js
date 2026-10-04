@@ -1,12 +1,14 @@
 const express = require('express');
 const { slotsFromCache } = require('./events');
 const { mountSessions } = require('./sessions-routes');
+const { log, withRequestId } = require('./log');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
 function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
+  app.use(withRequestId);
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
 
@@ -166,7 +168,7 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
   });
 
   app.use((err, _req, res, _next) => {
-    console.error(err);
+    log.error('lỗi xử lý request', { error: err.message, stack: err.stack });
     res.status(500).json({ error: 'INTERNAL_ERROR' });
   });
   return app;

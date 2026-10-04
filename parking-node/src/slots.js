@@ -2,6 +2,7 @@
 // trong CÙNG giao dịch => có sự kiện khi và chỉ khi DB đã commit.
 
 const { calcFee, fromRow } = require('./pricing');
+const { requestId } = require('./log');
 
 // Dừng giao dịch với kết quả nghiệp vụ (409, 404...) thay vì lỗi hệ thống.
 class Abort {
@@ -28,7 +29,7 @@ function emit(c, parkingId, type, slotCode, status, version, plate) {
   return c.query(
     `INSERT INTO parking_events(event_type, slot_code, license_plate, payload) VALUES ($1,$2,$3,$4)`,
     [type, slotCode, plate ?? null,
-     { event: 'SLOT_UPDATED', type, parkingId, slot: slotCode, status, version: Number(version) }]);
+     { event: 'SLOT_UPDATED', type, parkingId, slot: slotCode, status, version: Number(version), requestId: requestId() }]);
 }
 
 const findByRequest = (pool, requestId) =>
