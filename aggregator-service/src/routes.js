@@ -60,7 +60,7 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
     const { slotCode, licensePlate } = req.body ?? {};
     await forward(res, reg.get(req.params.id), '/api/reservations', {
-      method: 'POST', ms: reserveTimeoutMs,
+      method: 'POST', ms: reserveTimeoutMs, retry: true,   // an toàn vì requestId idempotent
       body: { requestId: `${req.user.sub}:${key}`, userId: req.user.sub, slotCode, licensePlate },
     });
   });

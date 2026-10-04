@@ -43,6 +43,20 @@ async function startStub(delayMs) {
   return { server, url, setDelay: (d) => { delay = d; } };
 }
 
+// Node "chập chờn": `failures` request đầu trả 500, sau đó trả 200. Đếm số request nhận được (trừ /health).
+async function startFlaky(failures) {
+  const state = { failures, hits: 0 };
+  const { server, url } = await listen((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/health') return res.end('{"status":"UP"}');
+    state.hits++;
+    if (state.failures-- > 0) { res.statusCode = 500; return res.end('{"error":"INTERNAL_ERROR"}'); }
+    res.statusCode = req.method === 'POST' ? 201 : 200;
+    res.end('{"ok":true}');
+  });
+  return { server, url, state };
+}
+
 async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400 } = {}) {
   const pool = await pglitePool();
   await pool.query(fs.readFileSync(path.join(__dirname, '../src/schema.sql'), 'utf8'));
@@ -72,4 +86,4 @@ async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400 
   return { pool, reg, cache, server, call, login };
 }
 
-module.exports = { startNode, startStub, startAggregator, KEY };
+module.exports = { startNode, startStub, startFlaky, startAggregator, KEY };
