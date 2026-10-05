@@ -127,6 +127,13 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
       { method: 'POST', body: { licensePlate: req.body?.licensePlate, cash: req.body?.cash === true } });
   });
 
+  // UX-04: cổng bãi quét QR qua Aggregator (node vẫn là bên kiểm chữ ký QR). Không tự retry: xe vào/ra không idempotent.
+  app.post('/api/parkings/:id/gate/scan', need('STAFF', 'ADMIN'), async (req, res) => {
+    if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
+    await forward(res, reg.get(req.params.id), '/api/gate/scan', {
+      method: 'POST', body: { token: req.body?.token, action: req.body?.action } });
+  });
+
   // NV-09: quản lý slot — chỉ bãi của mình (ADMIN mọi bãi).
   const ownParking = (req, res) => {
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) { res.status(403).json({ error: 'FORBIDDEN' }); return false; }

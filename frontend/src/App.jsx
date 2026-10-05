@@ -9,6 +9,7 @@ import Admin from './pages/Admin.jsx';
 import History from './pages/History.jsx';
 import Account from './pages/Account.jsx';
 import Stats from './pages/Stats.jsx';
+import Gate from './pages/Gate.jsx';
 
 const ROLE_LABEL = { USER: 'Người dùng', STAFF: 'Nhân viên', ADMIN: 'Quản trị' };
 
@@ -39,7 +40,7 @@ export default function App() {
   const tabs = [
     ['dashboard', 'Tổng quan'],
     ...(user.role === 'USER' ? [['mine', 'Đặt chỗ của tôi'], ['history', 'Lịch sử gửi xe']] : [['history', 'Tra biển số']]),
-    ...(user.role === 'STAFF' ? [['parking', `Bãi ${user.parkingId}`]] : []),
+    ...(user.role === 'STAFF' ? [['parking', `Bãi ${user.parkingId}`], ['gate', 'Cổng']] : []),
     ...(user.role !== 'USER' ? [['stats', 'Thống kê']] : []),
     ...(user.role === 'ADMIN' ? [['admin', 'Quản trị']] : []),
   ];
@@ -68,6 +69,7 @@ export default function App() {
         {view.page === 'admin' && <Admin />}
         {view.page === 'account' && <Account user={user} />}
         {view.page === 'stats' && <Stats />}
+        {view.page === 'gate' && <Gate parkingId={user.parkingId} />}
         {view.page === 'history' && <History key={user.role} user={user} />}
       </main>
       <Toaster />

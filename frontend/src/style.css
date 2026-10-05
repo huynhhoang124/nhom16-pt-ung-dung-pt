@@ -102,3 +102,13 @@ th { font-size: 0.85em; color: var(--muted); }
 .barcol { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px; }
 .hbar { width: 100%; min-height: 1px; background: var(--primary); border-radius: 3px 3px 0 0; }
 .barcol span { line-height: 1.2em; }
+
+/* UX-04: màn hình cổng (máy tính bảng) */
+.gate { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 0.8rem; }
+.gate textarea { font: inherit; padding: 0.6rem; border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: inherit; }
+.gate-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 0.8rem; }
+.big-btn { font-size: 1.4rem; font-weight: 700; padding: 1.2rem; border-radius: 12px; }
+.cam { width: 100%; border-radius: 12px; background: #000; }
+.gate-result { display: flex; flex-direction: column; gap: 0.3rem; padding: 1.2rem; border-radius: 12px; font-size: 1.2rem; }
+.gate-result.ok { background: var(--available); color: var(--ok); }
+.gate-result.bad { background: var(--occupied); color: var(--bad); }

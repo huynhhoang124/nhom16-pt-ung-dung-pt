@@ -242,3 +242,13 @@ test('PT-05 Aggregator ký RS256 -> node tự kiểm được bằng khoá công
   auth.need()(req(forged), { status: (c) => { status = c; return { json: () => {} }; } }, () => {});
   assert.equal(status, 401);
 });
+
+test('UX-04 cổng quét QR qua Aggregator: nhân viên bãi mình vào/ra được; bãi khác 403', async (t) => {
+  const { agg, tokens } = await system(t);
+  const res = await agg.call('/api/parkings/A/reservations', { method: 'POST', token: tokens.user1, key: 'g', body: reserveBody('A01') });
+  const scan = (token, id, action) => agg.call(`/api/parkings/${id}/gate/scan`, { method: 'POST', token, body: { token: res.body.qrToken, action } });
+  assert.equal((await scan(tokens.user1, 'A', 'enter')).status, 403);
+  assert.equal((await scan(tokens['staff-a'], 'B', 'enter')).status, 403);
+  assert.equal((await scan(tokens['staff-a'], 'A', 'enter')).body.status, 'OCCUPIED');
+  assert.equal((await scan(tokens['staff-a'], 'A', 'exit')).body.status, 'AVAILABLE');
+});
