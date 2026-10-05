@@ -8,9 +8,22 @@
 // request sau bị từ chối tức thì thay vì chờ timeout. Health check định kỳ là phép thử "nửa mở":
 // thành công thì "đóng mạch" (ONLINE) và đối soát.
 
+const dns = require('node:dns');
 const { requestId } = require('./log');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Tra DNS tên bãi -> IP mỗi vòng health check, request thật gọi thẳng IP. Lý do: fetch mở kết nối mới nào cũng
+// tra DNS bằng getaddrinfo, chạy trên thread pool 4 luồng của Node; 250 người vào cùng lúc = vài trăm lần tra
+// xếp hàng (đo được 375 lần mất 4,2 s) -> vượt timeout 2 s -> cả 3 bãi bị đánh dấu OFFLINE dù bãi vẫn khoẻ.
+// Container đổi IP (khởi động lại) thì vòng health check sau (≤ 5 s) tra lại; tra lỗi thì dùng tên như cũ.
+async function resolveUrl(url) {
+  const u = new URL(url);
+  if (!/^[\d.]+$/.test(u.hostname)) {
+    try { u.hostname = (await dns.promises.lookup(u.hostname, { family: 4 })).address; } catch { return url; }
+  }
+  return u.href.replace(/\/$/, '');
+}
 
 function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
   const nodes = new Map();
@@ -23,7 +36,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
 
   // Timeout dùng AbortSignal.timeout: bộ đếm của runtime, không phụ thuộc giờ hệ thống bị chỉnh.
   const raw = (n, path, { method = 'GET', body, ms = timeoutMs } = {}) =>
-    fetch(n.url + path, {
+    fetch((n.target ?? n.url) + path, {
       method,
       // gửi tiếp mã truy vết sang node (GS-03)
       headers: { 'content-type': 'application/json', 'x-internal-key': internalKey, ...(requestId() && { 'x-request-id': requestId() }) },
@@ -70,6 +83,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
   };
 
   async function checkOne(n) {
+    n.target = await resolveUrl(n.url);
     const ok = await raw(n, '/health').then((r) => r.ok).catch(() => false);
     if (ok) {
       n.fails = 0;
@@ -100,4 +114,4 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
   return api;
 }
 
-module.exports = { makeRegistry };
+module.exports = { makeRegistry, resolveUrl };

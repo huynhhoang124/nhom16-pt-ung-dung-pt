@@ -123,3 +123,10 @@ test('PT-01 X-Instance và nạp bãi do bản Aggregator khác thêm (dùng chu
   assert.deepEqual(agg.reg.sync([{ parking_id: 'X', name: 'X', api_url: 'http://x' }, { parking_id: 'Z', name: 'Z', api_url: 'http://z' }]), ['Z']);
   assert.equal(agg.reg.get('Z').status, 'OFFLINE');   // bãi mới: chờ health check
 });
+
+test('resolveUrl: tên -> IP (request thật không phải tra DNS); IP giữ nguyên; tra lỗi thì giữ tên', async () => {
+  const { resolveUrl } = require('../src/nodes');
+  assert.equal(await resolveUrl('http://localhost:8001'), 'http://127.0.0.1:8001');
+  assert.equal(await resolveUrl('http://10.0.0.5:8002'), 'http://10.0.0.5:8002');
+  assert.equal(await resolveUrl('http://khong-ton-tai.invalid:8003'), 'http://khong-ton-tai.invalid:8003');
+});
