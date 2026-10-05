@@ -27,6 +27,7 @@ async function init(pool) {
 
 async function main() {
   const pool = new Pool({ connectionString: env('DATABASE_URL') });
+  pool.on('error', (e) => log.error('mất kết nối DB điều phối', { error: e.message }));   // không bắt thì DB khởi động lại làm sập Aggregator
   for (let i = 1; ; i++) {
     try { await init(pool); break; }
     catch (e) { if (i >= 30) throw e; log.info('DB chưa sẵn sàng, thử lại', { error: e.message }); await new Promise((r) => setTimeout(r, 2000)); }

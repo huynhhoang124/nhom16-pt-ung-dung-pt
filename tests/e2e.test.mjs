@@ -160,6 +160,15 @@ test('TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B 
   assert.equal((await agg('/api/parkings/B')).body.stale, false);
 });
 
+test('DB bãi C khởi động lại: node C không sập, DB về thì tự kết nối lại và ghi được', T, async () => {
+  compose('restart db-c');   // kết nối nhàn rỗi trong pool bị cắt -> trước đây làm sập cả tiến trình node
+  await until('node C khoẻ lại', async () => (await node('C', '/health')).status === 200, 60_000);
+  assert.match(compose('ps parking-c --format "{{.Status}}"'), /^Up/);
+  const slot = await freeSlot('C');
+  assert.equal((await node('C', `/api/slots/${slot}/enter`, { method: 'POST', body: {} })).status, 200);
+  exitLater('C', slot);
+});
+
 test('TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật lại thì được xử lý hết', T, async () => {
   compose('stop aggregator');
   try {

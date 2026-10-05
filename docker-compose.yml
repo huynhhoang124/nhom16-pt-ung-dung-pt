@@ -69,7 +69,7 @@ services:
     image: nhom16/parking-node
     # READ_DATABASE_URL: chỉ đặt (trong .env) khi bật profile ha. Trỏ tới bản sao không tồn tại thì lần đọc phải chờ
     # kết nối hỏng mới rơi về bản chính -> chậm. Để trống = đọc bản chính.
-    environment: { <<: *node-env, READ_DATABASE_URL: "${A_READ_DATABASE_URL:-}", PARKING_ID: A, PORT: 8001, SLOTS: "CAR:1:10,CAR:2:10,MOTO:1:20", DATABASE_URL: "postgres://postgres:dev@db-a/parking" }
+    environment: { <<: *node-env, READ_DATABASE_URL: "${A_READ_DATABASE_URL:-}", PARKING_ID: A, PORT: 8001, SLOTS: "CAR:1:10,CAR:2:10,MOTO:1:20", DATABASE_URL: "${A_DATABASE_URL:-postgres://postgres:dev@db-a/parking}" }   # A_DATABASE_URL: failover (runbook-failover.md)
     ports: ["8001:8001"]
     depends_on: { db-a: { condition: service_healthy } }
   parking-b:

@@ -13,7 +13,7 @@
 | Việc | Kiểm chứng |
 |---|---|
 | NV-01..09, PT-04, PT-05, PT-07, GS-01, GS-03, GS-07, UX-01..04 | test unit + thử trình duyệt (camera QR chưa thử: máy test không có camera) |
-| GS-02 e2e | 10/10 trên Docker, 3 lần liên tiếp; cũng đạt khi bật `ha` và khi bật chaos (`CHAOS=1`, thêm TC47 = 11 test); đạt trên CI |
+| GS-02 e2e | 11/11 (gồm test DB bãi khởi động lại) trên Docker, 3 lần liên tiếp; cũng đạt khi bật `ha` và khi bật chaos (`CHAOS=1`, thêm TC47 = 11 test); đạt trên CI |
 | PT-01 nhiều Aggregator | tắt `aggregator` -> web qua nginx vẫn 200 |
 | PT-02 bản sao DB A | `pg_stat_replication` = streaming/async, `replication_lag_seconds` = 0 |
 | PT-03 cụm RabbitMQ | 3 nút, quorum queue đủ 3 bản; tắt `rabbitmq` -> sự kiện vẫn đi qua nút 2/3, outbox không ứ |
@@ -35,11 +35,15 @@ Test unit: parking-node 46, aggregator-service 29, notification-service 2 — đ
    Sửa: Aggregator tra tên bãi -> IP mỗi vòng health check, gọi thẳng IP (k6 lỗi 0%).
 7. Thanh toán: key đã dùng cho phiên khác trả lại kết quả của phiên kia như thể đã trả -> nay trả 422 `IDEMPOTENCY_KEY_REUSED`.
 8. `net.mjs latency` đặt cả 2 chiều nên 1500 thành ~3 s; dashboard Grafana nhân đôi ô trạng thái; Prometheus lấy số ngẫu nhiên 1 trong 2 Aggregator.
-9. Test e2e chập chờn: biển số cố định (lần chạy hỏng trước để xe trong bãi), sự kiện test trước đến muộn, kết nối keep-alive cũ trên CI.
+9. **Node / Aggregator sập khi DB mất kết nối** (pool `pg` không bắt sự kiện `error`): tắt hay khởi động lại DB một bãi là node bãi đó
+   chết luôn. Tìm ra khi tập failover. Đã sửa + thêm test e2e "DB bãi C khởi động lại".
+10. Runbook failover: `docker compose up -d parking-a` bật lại db-a cũ (do `depends_on`) -> phải dùng `--no-deps`. Node A trỏ DB qua
+   biến `A_DATABASE_URL` trong `.env` thay vì sửa compose. Đã tập trọn runbook: OFFLINE sau ~19 s, ONLINE lại ~12 s sau bước 3.
+11. Test e2e chập chờn: biển số cố định (lần chạy hỏng trước để xe trong bãi), sự kiện test trước đến muộn, kết nối keep-alive cũ trên CI.
 
 ## 4. Việc tiếp theo (ưu tiên)
 1. Việc của người không code (đánh dấu **[Tên]** trong `danh-sach-viec-nho.md`): ghi số liệu test tải/mạng xấu/hỗn loạn chạy lâu hơn (Trang, `MINUTES=10 node tests/chaos.mjs`),
-   tập failover DB theo `runbook-failover.md` (Loan + Hùng — runbook chưa ai chạy thử), sơ đồ mới + báo cáo + slide (Hiệp).
+   tập failover DB theo `runbook-failover.md` (Loan + Hùng — Claude đã chạy thử và sửa runbook, nhóm tập lại và bấm giờ), sơ đồ mới + báo cáo + slide (Hiệp).
 2. Thử giao diện trên bản Docker (bản trước chỉ thử bản không Docker), đặc biệt màn hình cổng + QR bằng điện thoại thật.
 3. Mỗi người đọc hiểu phần code của mình (bảng "Ai" trong plan) — code do Claude viết, người phụ trách phải giải thích được.
 4. Mở PR `dev` -> `main` khi nhóm xem xong.
