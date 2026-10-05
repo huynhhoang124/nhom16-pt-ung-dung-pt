@@ -51,6 +51,7 @@ async function main() {
     if (u) socket.join(`user:${u.sub}`);
     next();
   });
+  const instance = env('INSTANCE_ID', '1');
   startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (n) => {
     (n.to === '*' ? io : io.to(`user:${n.to}`)).emit('NOTIFICATION', n);
   }, log, { exchange: 'user.notifications', queue: `aggregator.notifications.${instance}`, pattern: '#' });
@@ -58,7 +59,6 @@ async function main() {
   const push = (e) => io.emit('SLOT_UPDATED', e);
   // PT-01: mỗi bản Aggregator một queue riêng -> bản nào cũng nhận đủ sự kiện, đẩy cho client đang nối với nó
   // (không cần Redis adapter). Queue durable: bản này tắt thì tin chờ, bật lại xử lý tiếp.
-  const instance = env('INSTANCE_ID', '1');
   startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e) => {
     const fresh = applyEvent(cache, e);
     log.info('nhận sự kiện', { requestId: e.requestId, type: e.type, parkingId: e.parkingId, slot: e.slot, version: e.version, fresh });

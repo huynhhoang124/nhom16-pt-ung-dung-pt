@@ -45,6 +45,8 @@ async function until(what, fn, ms = 60_000) {
   }
 }
 const statusOf = async (id) => (await agg('/api/parkings')).body?.find((p) => p.parkingId === id)?.status;
+// biển số ngẫu nhiên: lần chạy trước hỏng giữa chừng để xe còn trong bãi thì lần sau không bị PLATE_ALREADY_INSIDE
+const plate = () => `30A-${String(Math.random()).slice(2, 5)}.${String(Math.random()).slice(2, 4)}`;
 const freeSlot = async (id) => (await node(id, '/api/slots/available')).body[0].slotCode;
 const login = async (u) => (await agg('/api/auth/login', { method: 'POST', body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' } })).body.token;
 
@@ -106,20 +108,21 @@ test('10 lần gửi đồng thời CÙNG một Idempotency-Key: chỉ 1 reserva
 
 test('TC27 hai lần trả tiền song song khác key cho cùng một phiên (Postgres thật): đúng 1 thành công', T, async () => {
   const slot = await freeSlot('A');
-  const enter = await node('A', `/api/slots/${slot}/enter`, { method: 'POST', body: { licensePlate: '30A-272.72' } });
+  const enter = await node('A', `/api/slots/${slot}/enter`, { method: 'POST', body: { licensePlate: plate() } });
   const sid = enter.body.session.id;
   sql('db-a', `UPDATE parking_sessions SET entered_at = now() - interval '3 hours' WHERE id='${sid}'`);
-  const pay = (k) => node('A', `/api/sessions/${sid}/pay`, { method: 'POST', body: { method: 'CASH', paymentKey: `staff:${k}` } });
+  const pay = (k) => node('A', `/api/sessions/${sid}/pay`, { method: 'POST', body: { method: 'CASH', paymentKey: `staff:${k}-${sid}` } });
   const codes = (await Promise.all(Array.from({ length: 10 }, (_, i) => pay(`k${i}`)))).map((r) => r.status);
   assert.deepEqual([codes.filter((c) => c === 200).length, codes.filter((c) => c === 409).length], [1, 9]);
   assert.equal((await node('A', `/api/slots/${slot}/exit`, { method: 'POST', body: {} })).status, 200);   // đã trả: cho ra
 });
 
 test('TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> RabbitMQ -> Aggregator -> Socket.IO', T, async () => {
-  const slot = await freeSlot('A');
+  const { slotCode: slot, version: v0 } = (await node('A', '/api/slots/available')).body[0];
   const socket = io(AGG, { transports: ['websocket'] });
   const got = [];
-  socket.on('SLOT_UPDATED', (e) => e.slot === slot && got.push(e.status));
+  // chỉ đếm sự kiện mới hơn lúc bắt đầu: sự kiện của test trước trên cùng slot có thể đến muộn (giao nhận cuối cùng)
+  socket.on('SLOT_UPDATED', (e) => e.slot === slot && e.version > v0 && got.push(e.status));
   await until('socket kết nối', () => socket.connected, 10_000);
 
   const enter = await agg(`/api/parkings/A/slots/${slot}/enter`, { method: 'POST', token: tok.staffA, body: {} });

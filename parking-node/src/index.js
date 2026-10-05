@@ -20,7 +20,7 @@ async function main() {
   }
 
   // PT-02: có READ_DATABASE_URL (bản sao) thì đọc thuần đi bản sao; kèm số đo độ trễ sao chép
-  const replica = process.env.READ_DATABASE_URL && new Pool({ connectionString: process.env.READ_DATABASE_URL, connectionTimeoutMillis: 2000 });
+  const replica = process.env.READ_DATABASE_URL ? new Pool({ connectionString: process.env.READ_DATABASE_URL, connectionTimeoutMillis: 500 }) : null;
   replica?.on('error', () => {});   // kết nối nhàn rỗi tới bản sao bị đứt: không để sập cả node
   const readPool = replica ? readThrough(replica, pool, { onFallback: (e) => log.error('bản sao lỗi, đọc bản chính 10s', { error: e.message }) }) : pool;
   const lagMetric = (registry, client) => replica && new client.Gauge({

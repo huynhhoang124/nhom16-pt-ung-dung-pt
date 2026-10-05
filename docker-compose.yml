@@ -10,13 +10,15 @@ x-pg: &pg
   environment: { POSTGRES_PASSWORD: dev, POSTGRES_DB: parking }
   healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres -d parking"], interval: 3s, timeout: 3s, retries: 30 }
 
-# PT-03: danh sách nút RabbitMQ; client tự chuyển nút khi nút đang nối chết (nút 2, 3 chỉ có khi bật profile ha)
-x-amqp: &amqp amqp://parking:parking@rabbitmq,amqp://parking:parking@rabbitmq-2,amqp://parking:parking@rabbitmq-3
+# PT-03: danh sách nút RabbitMQ; client tự chuyển nút khi nút đang nối chết. Mặc định 1 nút; bật profile ha thì đặt
+# danh sách 3 nút trong .env. KHÔNG để sẵn tên rabbitmq-2/3 khi chúng không chạy: tra DNS tên không tồn tại mất ~3,6 s
+# và chặn luôn các lần tra tên khác trong tiến trình (vd parking-a) -> Aggregator thấy cả 3 bãi timeout cùng lúc.
+x-amqp: &amqp ${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}
 
 x-rabbit: &rabbit
   image: rabbitmq:3.13-management-alpine
   environment: { RABBITMQ_DEFAULT_USER: parking, RABBITMQ_DEFAULT_PASS: parking, RABBITMQ_ERLANG_COOKIE: nhom16-cookie }
-  healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"], interval: 5s, timeout: 5s, retries: 30 }
+  healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"], interval: 5s, timeout: 5s, retries: 30 }
 
 x-node-env: &node-env
   INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
@@ -33,7 +35,6 @@ services:
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
       - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro   # bật rabbitmq_prometheus (:15692) cho GS-04
-      - ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
   # --- PT-03: thêm 2 nút thành cụm 3 nút (docker compose --profile ha up -d). Demo: docker compose stop rabbitmq ---
   rabbitmq-2:
     <<: *rabbit
@@ -67,8 +68,9 @@ services:
   parking-a:
     build: ./parking-node
     image: nhom16/parking-node
-    # READ_DATABASE_URL: chỉ có tác dụng khi bật profile ha; không có bản sao thì tự đọc bản chính
-    environment: { <<: *node-env, READ_DATABASE_URL: "postgres://postgres:dev@db-a-replica/parking", PARKING_ID: A, PORT: 8001, SLOTS: "CAR:1:10,CAR:2:10,MOTO:1:20", DATABASE_URL: "postgres://postgres:dev@db-a/parking" }
+    # READ_DATABASE_URL: chỉ đặt (trong .env) khi bật profile ha. Trỏ tới bản sao không tồn tại thì lần đọc phải chờ
+    # kết nối hỏng mới rơi về bản chính -> chậm. Để trống = đọc bản chính.
+    environment: { <<: *node-env, READ_DATABASE_URL: "${A_READ_DATABASE_URL:-}", PARKING_ID: A, PORT: 8001, SLOTS: "CAR:1:10,CAR:2:10,MOTO:1:20", DATABASE_URL: "postgres://postgres:dev@db-a/parking" }
     ports: ["8001:8001"]
     depends_on: { db-a: { condition: service_healthy } }
   parking-b:

@@ -260,6 +260,18 @@ test('TC26 trả 2 lần cùng key: chỉ ghi nhận 1 lần, lần 2 trả lạ
   assert.deepEqual([exit.code, exit.body.session.fee, exit.body.session.paymentMethod], [200, 35000, 'ONLINE']);
 });
 
+test('key thanh toán đã dùng cho phiên khác: 422, không trả lại kết quả của phiên kia, phiên này vẫn chưa trả', async () => {
+  const pool = await makePool();
+  const { id } = await parkedFor(pool, 150);
+  assert.equal((await s.pay(pool, { sessionId: id, method: 'CASH', paymentKey: 'staff:k1' })).code, 200);
+  await exitA01(pool);
+  const other = (await s.moveSlot(pool, P, 'A02', ['AVAILABLE'], 'OCCUPIED', 'CAR_ENTER')).body.session.id;
+  await pool.query(`UPDATE parking_sessions SET entered_at = now() - interval '3 hours' WHERE id=$1`, [other]);
+  assert.deepEqual(await s.pay(pool, { sessionId: other, method: 'CASH', paymentKey: 'staff:k1' }),
+    { code: 422, body: { error: 'IDEMPOTENCY_KEY_REUSED' } });
+  assert.equal((await s.pay(pool, { sessionId: other, method: 'CASH', paymentKey: 'staff:k2' })).code, 200);
+});
+
 // TC27 (2 lần trả song song khác key) cần nhiều kết nối thật -> nằm ở tests/e2e.test.mjs.
 test('chưa đến phí (gửi dưới 5 phút) thì không cho trả', async () => {
   const pool = await makePool();

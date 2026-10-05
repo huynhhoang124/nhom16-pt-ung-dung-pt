@@ -179,7 +179,7 @@ const listPricing = async (pool) => (await pool.query('SELECT * FROM pricing_rul
 async function pay(pool, { sessionId, method, paymentKey, userId }) {
   const replay = async (fallback) => {
     const r = (await pool.query(`SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
-                                 WHERE ps.payment_key=$1`, [paymentKey])).rows[0];
+                                 WHERE ps.payment_key=$1 AND ps.id=$2`, [paymentKey, sessionId])).rows[0];
     return r ? { code: 200, body: r, replayed: true } : fallback;
   };
   const prior = await replay(null);
@@ -198,8 +198,9 @@ async function pay(pool, { sessionId, method, paymentKey, userId }) {
       return { code: 200, body: await getSession(c, sessionId) };
     }).then((out) => (out.code === 409 && out.body.error === 'ALREADY_PAID' ? replay(out) : out));
   } catch (e) {
-    if (e.code !== '23505') throw e;   // payment_key trùng do 2 request cùng key chạy song song
-    return replay({ code: 409, body: { error: 'ALREADY_PAID' } });
+    if (e.code !== '23505') throw e;   // payment_key trùng: 2 request cùng key chạy song song (replay thấy) hoặc
+    // key đã dùng cho phiên KHÁC -> từ chối, không được trả kết quả của phiên kia như thể đã trả tiền phiên này
+    return replay({ code: 422, body: { error: 'IDEMPOTENCY_KEY_REUSED' } });
   }
 }
 
