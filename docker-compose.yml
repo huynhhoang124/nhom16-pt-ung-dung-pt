@@ -57,9 +57,9 @@ services:
       JWT_SECRET: ${JWT_SECRET:?Thiếu JWT_SECRET (chạy cp .env.example .env)}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-123456}
       NODES: >-
-        [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông"},
-         {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội"},
-         {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội"}]
+        [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875},
+         {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906},
+         {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội","lat":21.0287,"lng":105.8524}]
     ports: ["8000:8000"]
     depends_on: { db-agg: { condition: service_healthy } }
 

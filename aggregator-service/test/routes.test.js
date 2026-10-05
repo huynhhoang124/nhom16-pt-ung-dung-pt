@@ -195,3 +195,12 @@ test('GS-03 mã truy vết: X-Request-Id từ client đi qua Aggregator -> node 
   // không gửi thì tự sinh
   assert.match((await fetch(`http://127.0.0.1:${url.port}/api/parkings`)).headers.get('x-request-id'), /^[0-9a-f-]{36}$/);
 });
+
+test('UX-01 toạ độ bãi: thêm bãi kèm lat/lng, /api/parkings trả toạ độ; toạ độ sai -> 400', async (t) => {
+  const { agg, tokens } = await system(t);
+  const add = (body) => agg.call('/api/admin/nodes', { method: 'POST', token: tokens.admin, body: { name: 'Bãi E', apiUrl: 'http://e', ...body } });
+  assert.equal((await add({ parkingId: 'E', lat: 95, lng: 105 })).status, 400);
+  assert.equal((await add({ parkingId: 'E', lat: '21.03', lng: 105.85 })).status, 201);
+  const e = (await agg.call('/api/parkings')).body.find((p) => p.parkingId === 'E');
+  assert.deepEqual([e.lat, e.lng], [21.03, 105.85]);
+});

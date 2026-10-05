@@ -14,3 +14,7 @@ CREATE TABLE IF NOT EXISTS users (
   role          VARCHAR(8) NOT NULL CHECK (role IN ('USER','STAFF','ADMIN')),
   parking_id    VARCHAR(8)                              -- STAFF chỉ thao tác được bãi của mình
 );
+
+-- UX-01: toạ độ để hiện bản đồ, tìm bãi gần nhất
+ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
+ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;

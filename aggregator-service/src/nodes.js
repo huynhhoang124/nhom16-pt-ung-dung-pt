@@ -17,7 +17,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
 
   // Bãi mới bắt đầu ở OFFLINE: lần health check thành công đầu tiên = chuyển ONLINE = đối soát luôn.
   const add = (row) => nodes.set(row.parking_id, {
-    id: row.parking_id, name: row.name, url: row.api_url, address: row.address ?? null,
+    id: row.parking_id, name: row.name, url: row.api_url, address: row.address ?? null, lat: row.lat ?? null, lng: row.lng ?? null,
     status: 'OFFLINE', fails: failThreshold, lastSeen: null,
   });
 

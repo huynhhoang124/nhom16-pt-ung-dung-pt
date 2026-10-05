@@ -15,9 +15,11 @@ const env = (k, d) => process.env[k] ?? d;
 async function init(pool) {
   await pool.query(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
   for (const n of JSON.parse(env('NODES', '[]'))) {
+    // bãi đã có: giữ nguyên, chỉ bổ sung toạ độ nếu chưa có
     await pool.query(
-      `INSERT INTO parking_nodes(parking_id, name, api_url, address) VALUES ($1,$2,$3,$4)
-       ON CONFLICT (parking_id) DO NOTHING`, [n.parkingId, n.name, n.apiUrl, n.address ?? null]);
+      `INSERT INTO parking_nodes(parking_id, name, api_url, address, lat, lng) VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (parking_id) DO UPDATE SET lat = COALESCE(parking_nodes.lat, EXCLUDED.lat), lng = COALESCE(parking_nodes.lng, EXCLUDED.lng)`,
+      [n.parkingId, n.name, n.apiUrl, n.address ?? null, n.lat ?? null, n.lng ?? null]);
   }
   await seedUsers(pool, env('DEMO_PASSWORD', '123456'));
 }

@@ -23,7 +23,7 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
     res.status(r.status).json(await r.json());
   }
 
-  const info = (n) => ({ parkingId: n.id, name: n.name, address: n.address, status: n.status, lastSeen: n.lastSeen });
+  const info = (n) => ({ parkingId: n.id, name: n.name, address: n.address, lat: n.lat, lng: n.lng, status: n.status, lastSeen: n.lastSeen });
 
   app.get('/health', (_req, res) => res.json({ status: 'UP' }));
 
@@ -155,14 +155,17 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
     res.json(reg.all().map((n) => ({ ...info(n), url: n.url, fails: n.fails }))));
 
   app.post('/api/admin/nodes', need('ADMIN'), async (req, res) => {
-    const { parkingId, name, apiUrl, address } = req.body ?? {};
+    const { parkingId, name, apiUrl, address, lat, lng } = req.body ?? {};
+    const coord = (v, max) => v == null || v === '' ? null : (Number.isFinite(Number(v)) && Math.abs(Number(v)) <= max ? Number(v) : NaN);
+    const [la, ln] = [coord(lat, 90), coord(lng, 180)];
+    if (Number.isNaN(la) || Number.isNaN(ln)) return res.status(400).json({ error: 'lat/lng must be valid coordinates' });
     if (!/^[A-Z0-9]{1,8}$/.test(parkingId ?? '') || !name || !/^https?:\/\//.test(apiUrl ?? '')) {
       return res.status(400).json({ error: 'parkingId (A-Z0-9), name, apiUrl (http...) are required' });
     }
     if (reg.get(parkingId)) return res.status(409).json({ error: 'PARKING_EXISTS' });
     const row = (await pool.query(
-      `INSERT INTO parking_nodes(parking_id, name, api_url, address) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [parkingId, name, apiUrl, address ?? null])).rows[0];
+      `INSERT INTO parking_nodes(parking_id, name, api_url, address, lat, lng) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [parkingId, name, apiUrl, address ?? null, la, ln])).rows[0];
     reg.add(row);
     res.status(201).json(info(reg.get(parkingId)));
   });
