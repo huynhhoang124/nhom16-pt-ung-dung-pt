@@ -1,12 +1,13 @@
 // Message relay của Transactional Outbox: đọc parking_events chưa gửi, publish lên broker theo thứ tự id,
 // chỉ đánh dấu published_at SAU khi broker xác nhận (publisher confirm).
 // Chết giữa "publish" và "đánh dấu" => lần sau gửi lại (at-least-once); Aggregator bỏ tin trùng nhờ version.
-const amqp = require('amqplib');
+const { makeConnector } = require('./amqp-connect');
 
 const EXCHANGE = 'parking.events';
 
 // publish(routingKey, payload) -> true nếu broker đã xác nhận. Tự kết nối lại khi broker sập.
 function amqpPublisher(url) {
+  const connectAny = makeConnector(url);   // PT-03: url có thể là danh sách nút của cụm
   let conn = null;
   let ch = null;
   const reset = () => {
@@ -16,7 +17,7 @@ function amqpPublisher(url) {
   };
   async function channel() {
     if (ch) return ch;
-    conn = await amqp.connect(url);
+    conn = await connectAny();
     conn.on('error', () => {});
     conn.on('close', () => { conn = ch = null; });
     const c = await conn.createConfirmChannel();

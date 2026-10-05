@@ -2,23 +2,24 @@
 //   parking.events (queue notification.events) -> rules -> exchange user.notifications (user.<id> | broadcast)
 //   -> mỗi Aggregator đẩy cho trình duyệt qua Socket.IO.
 // Dịch vụ này tắt thì đặt chỗ vẫn chạy bình thường; bật lại thì xử lý tiếp tin còn nằm trong queue (durable).
-const amqp = require('amqplib');
+const { makeConnector } = require('./amqp-connect');
 const { makeRules } = require('./rules');
 
 const url = process.env.RABBITMQ_URL ?? 'amqp://localhost';
 const log = (level, msg, f) => console.log(JSON.stringify({ ts: new Date().toISOString(), level, service: 'notification', msg, ...f }));
 const rules = makeRules();
+const connectAny = makeConnector(url);   // PT-03: danh sách nút của cụm
 
 async function run() {
   let conn;
   try {
-    conn = await amqp.connect(url);
+    conn = await connectAny();
     conn.on('error', () => {});
     conn.on('close', () => { log('error', 'RabbitMQ mất kết nối, thử lại sau 5s'); setTimeout(run, 5000); });
     const ch = await conn.createConfirmChannel();
     await ch.assertExchange('parking.events', 'topic', { durable: true });
     await ch.assertExchange('user.notifications', 'topic', { durable: true });
-    await ch.assertQueue('notification.events', { durable: true });
+    await ch.assertQueue('notification.events', { durable: true, arguments: { 'x-queue-type': 'quorum' } });
     await ch.bindQueue('notification.events', 'parking.events', 'parking.#');
     await ch.prefetch(20);
     await ch.consume('notification.events', async (m) => {

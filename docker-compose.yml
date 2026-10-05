@@ -10,22 +10,43 @@ x-pg: &pg
   environment: { POSTGRES_PASSWORD: dev, POSTGRES_DB: parking }
   healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres -d parking"], interval: 3s, timeout: 3s, retries: 30 }
 
+# PT-03: danh sách nút RabbitMQ; client tự chuyển nút khi nút đang nối chết (nút 2, 3 chỉ có khi bật profile ha)
+x-amqp: &amqp amqp://parking:parking@rabbitmq,amqp://parking:parking@rabbitmq-2,amqp://parking:parking@rabbitmq-3
+
+x-rabbit: &rabbit
+  image: rabbitmq:3.13-management-alpine
+  environment: { RABBITMQ_DEFAULT_USER: parking, RABBITMQ_DEFAULT_PASS: parking, RABBITMQ_ERLANG_COOKIE: nhom16-cookie }
+  healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"], interval: 5s, timeout: 5s, retries: 30 }
+
 x-node-env: &node-env
   INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
-  RABBITMQ_URL: amqp://parking:parking@rabbitmq
+  RABBITMQ_URL: *amqp
   RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
   JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}          # PT-05: nhân viên gọi thẳng node khi Aggregator sập
   CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
 
 services:
   rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    environment: { RABBITMQ_DEFAULT_USER: parking, RABBITMQ_DEFAULT_PASS: parking }
+    <<: *rabbit
+    hostname: rabbitmq                            # tên nút rabbit@rabbitmq (cố định để tạo cụm)
     ports: ["5672:5672", "15672:15672"]          # 15672 = giao diện quản lý (parking/parking)
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
       - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro   # bật rabbitmq_prometheus (:15692) cho GS-04
-    healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"], interval: 5s, timeout: 5s, retries: 30 }
+      - ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro
+  # --- PT-03: thêm 2 nút thành cụm 3 nút (docker compose --profile ha up -d). Demo: docker compose stop rabbitmq ---
+  rabbitmq-2:
+    <<: *rabbit
+    profiles: [ha]
+    hostname: rabbitmq-2
+    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro]
+    depends_on: { rabbitmq: { condition: service_healthy } }
+  rabbitmq-3:
+    <<: *rabbit
+    profiles: [ha]
+    hostname: rabbitmq-3
+    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro]
+    depends_on: { rabbitmq: { condition: service_healthy } }
 
   db-a: { <<: *pg, volumes: [db-a-data:/var/lib/postgresql/data] }
   db-b: { <<: *pg, volumes: [db-b-data:/var/lib/postgresql/data] }
@@ -58,7 +79,7 @@ services:
       INSTANCE_ID: "1"
       PORT: 8000
       DATABASE_URL: "postgres://postgres:dev@db-agg/parking"
-      RABBITMQ_URL: amqp://parking:parking@rabbitmq
+      RABBITMQ_URL: *amqp
       INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
       JWT_SECRET: ${JWT_SECRET:?Thiếu JWT_SECRET (chạy cp .env.example .env)}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-123456}
@@ -83,7 +104,7 @@ services:
   # NV-08: dịch vụ thông báo (nghe parking.events, gửi user.notifications); tắt thì hệ thống vẫn chạy
   notification:
     build: ./notification-service
-    environment: { RABBITMQ_URL: amqp://parking:parking@rabbitmq }
+    environment: { RABBITMQ_URL: *amqp }
     depends_on: { rabbitmq: { condition: service_healthy } }
 
   frontend:
@@ -123,6 +144,8 @@ services:
 
 volumes:
   rabbitmq-data:
+  rabbitmq-2-data:
+  rabbitmq-3-data:
   db-a-data:
   db-b-data:
   db-c-data:

@@ -13,4 +13,4 @@ scrape_configs:
       - targets: [aggregator-2:8000] # chỉ có khi bật profile ha
   - job_name: rabbitmq
     static_configs:
-      - targets: [rabbitmq:15692]
+      - targets: [rabbitmq:15692, rabbitmq-2:15692, rabbitmq-3:15692]   # nút 2, 3: profile ha

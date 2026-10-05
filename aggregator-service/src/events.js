@@ -1,5 +1,5 @@
 // Nhận sự kiện slot từ RabbitMQ và giữ cache trạng thái slot trong RAM (chỉ-đọc, nguồn gốc ở DB bãi).
-const amqp = require('amqplib');
+const { makeConnector } = require('./amqp-connect');
 
 const EXCHANGE = 'parking.events';
 const QUEUE = 'aggregator.slot-updates';
@@ -33,15 +33,17 @@ const slotsFromCache = (cache, parkingId) =>
 // Consumer: queue durable, ack thủ công sau khi xử lý, tự kết nối lại sau 5 s nếu broker sập.
 // Mặc định nghe sự kiện slot; NV-08 dùng lại cho exchange user.notifications.
 function startConsumer(url, onEvent, log = console, { exchange = EXCHANGE, queue = QUEUE, pattern = 'parking.#' } = {}) {
+  const connectAny = makeConnector(url);   // PT-03: url có thể là danh sách nút của cụm
   async function run() {
     let conn;
     try {
-      conn = await amqp.connect(url);
+      conn = await connectAny();
       conn.on('error', () => {});
       conn.on('close', () => { log.error('RabbitMQ mất kết nối, thử lại sau 5s'); setTimeout(run, 5000); });
       const ch = await conn.createChannel();
       await ch.assertExchange(exchange, 'topic', { durable: true });
-      await ch.assertQueue(queue, { durable: true });
+      // PT-03: quorum queue = nhân bản trên các nút bằng Raft, ghi khi đa số xác nhận (1 nút vẫn chạy được)
+      await ch.assertQueue(queue, { durable: true, arguments: { 'x-queue-type': 'quorum' } });
       await ch.bindQueue(queue, exchange, pattern);
       await ch.prefetch(50);
       await ch.consume(queue, (m) => {
