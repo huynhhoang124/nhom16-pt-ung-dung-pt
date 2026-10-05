@@ -181,3 +181,24 @@ test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lạ
   }
   await until('outbox gửi hết', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 90_000);
 });
+
+// PT-06 (TC47): chỉ chạy khi dựng kèm toxiproxy: CHAOS=1 node --test tests/e2e.test.mjs
+// (docker compose -f docker-compose.yml -f docker-compose.chaos.yml --profile chaos up -d)
+test('TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùng key -> đúng 1 lượt đặt', { ...T, skip: !process.env.CHAOS }, async () => {
+  const net = (...a) => sh(`node scripts/net.mjs ${a.join(' ')}`);
+  const slot = await freeSlot('B');
+  const key = randomUUID();
+  const body = { slotCode: slot, licensePlate: '30A-474.74' };
+  try {
+    net('B', 'latency', 3500);
+    const slow = await agg('/api/parkings/B/reservations', { method: 'POST', token: tok.user1, key, body });
+    assert.equal(slow.status, 504);
+  } finally {
+    net('B', 'reset');
+  }
+  await sleep(4000);   // yêu cầu chậm vẫn tới bãi B và được xử lý
+  const again = await agg('/api/parkings/B/reservations', { method: 'POST', token: tok.user1, key, body });
+  assert.ok([200, 201].includes(again.status), String(again.status));
+  assert.equal(sql('db-b', `SELECT count(*) FROM reservations WHERE license_plate='30A47474'`), '1');
+  cancelLater('B', again.body.id);
+});

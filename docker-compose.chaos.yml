@@ -1,0 +1,18 @@
+# PT-06: chèn toxiproxy giữa Aggregator và bãi B để giả lập mạng xấu.
+#   docker compose -f docker-compose.yml -f docker-compose.chaos.yml --profile chaos up -d
+#   node scripts/net.mjs B latency 3500     # xem: node scripts/net.mjs
+# Bãi B vẫn chạy bình thường, chỉ ĐƯỜNG MẠNG Aggregator -> B bị làm xấu (barrier gọi thẳng :8002 không bị ảnh hưởng).
+services:
+  toxiproxy:
+    profiles: [chaos]
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes: [./toxiproxy/toxiproxy.json:/config/toxiproxy.json:ro]
+    ports: ["8474:8474"]          # API điều khiển
+    depends_on: [parking-b]
+  aggregator:
+    environment:
+      NODES: >-
+        [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875,"publicUrl":"http://localhost:8001"},
+         {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://toxiproxy:18002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002"},
+         {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội","lat":21.0287,"lng":105.8524,"publicUrl":"http://localhost:8003"}]
