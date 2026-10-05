@@ -22,11 +22,14 @@ const compose = (args) => sh(`docker compose ${args}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sql = (db, q) => compose(`exec -T ${db} psql -U postgres -d parking -tAc "${q}"`);
 
-async function http(url, { method = 'GET', body, headers = {} } = {}) {
+// GET lỗi kết nối thì thử lại 1 lần: kết nối keep-alive cũ có thể vừa bị server đóng (gặp trên CI sau khi
+// stop/start container). Ghi không tự thử lại (không idempotent) -> status 0.
+async function http(url, { method = 'GET', body, headers = {} } = {}, retry = method === 'GET') {
   try {
     const r = await fetch(url, { method, headers: { 'content-type': 'application/json', ...headers }, body: body && JSON.stringify(body) });
     return { status: r.status, body: await r.json().catch(() => null) };
   } catch {
+    if (retry) { await sleep(300); return http(url, { method, body, headers }, false); }
     return { status: 0, body: null };
   }
 }

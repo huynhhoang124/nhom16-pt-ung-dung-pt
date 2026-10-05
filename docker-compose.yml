@@ -35,19 +35,18 @@ services:
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
       - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro   # bật rabbitmq_prometheus (:15692) cho GS-04
+      - ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro
   # --- PT-03: thêm 2 nút thành cụm 3 nút (docker compose --profile ha up -d). Demo: docker compose stop rabbitmq ---
   rabbitmq-2:
     <<: *rabbit
     profiles: [ha]
     hostname: rabbitmq-2
-    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro]
-    depends_on: { rabbitmq: { condition: service_healthy } }
+    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro]
   rabbitmq-3:
     <<: *rabbit
     profiles: [ha]
     hostname: rabbitmq-3
-    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro]
-    depends_on: { rabbitmq: { condition: service_healthy } }
+    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro]
 
   db-a:                                           # PT-02: bản chính của bãi A, có user 'replicator' cho bản sao
     <<: *pg
