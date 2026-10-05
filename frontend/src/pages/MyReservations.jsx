@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, formatPlate, message, RESERVATION_LABEL, useLive } from '../api.js';
 import QrCode from '../QrCode.jsx';
+import GroupBooking from '../GroupBooking.jsx';
 
 export default function MyReservations() {
   const [data, setData] = useState(null);
@@ -27,6 +28,7 @@ export default function MyReservations() {
         <p className="banner">Không lấy được dữ liệu từ bãi {data.unavailable.join(', ')} (đang mất kết nối). Danh sách dưới đây có thể thiếu.</p>
       )}
       {note && <p className="muted">{note}</p>}
+      <GroupBooking onDone={load} />
       <div className="scroll"><table>
         <thead><tr><th>Bãi</th><th>Slot</th><th>Biển số</th><th>Khung giờ</th><th>Đến trước</th><th>Trạng thái</th><th>QR vào cổng</th><th /></tr></thead>
         <tbody>

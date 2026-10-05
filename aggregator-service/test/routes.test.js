@@ -252,3 +252,42 @@ test('UX-04 cổng quét QR qua Aggregator: nhân viên bãi mình vào/ra đư�
   assert.equal((await scan(tokens['staff-a'], 'A', 'enter')).body.status, 'OCCUPIED');
   assert.equal((await scan(tokens['staff-a'], 'A', 'exit')).body.status, 'AVAILABLE');
 });
+
+// ---- PT-07: Saga ----
+const group = (agg, token, key, items) => agg.call('/api/group-reservations', { method: 'POST', token, key, body: { items } });
+const item = (parkingId, slotCode) => ({ parkingId, slotCode, licensePlate: '30A-123.45' });
+
+test('PT-07 saga thành công: đặt ở 2 bãi; gửi lại cùng key trả saga cũ, không đặt lần hai', async (t) => {
+  const { a, b, agg, tokens } = await system(t);
+  const r = await group(agg, tokens.user1, 'g1', [item('A', 'A01'), item('B', 'B01')]);
+  assert.deepEqual([r.status, r.body.status, r.body.steps.map((s) => s.state)], [201, 'COMPLETED', ['DONE', 'DONE']]);
+  const again = await group(agg, tokens.user1, 'g1', [item('A', 'A01'), item('B', 'B01')]);
+  assert.deepEqual([again.status, again.body.id], [200, r.body.id]);
+  for (const p of [a, b]) assert.equal((await p.pool.query(`SELECT count(*)::int AS n FROM reservations`)).rows[0].n, 1);
+  assert.equal((await agg.call(`/api/group-reservations/${r.body.id}`, { token: tokens.user1 })).body.status, 'COMPLETED');
+  assert.equal((await agg.call(`/api/group-reservations/${r.body.id}`, { token: tokens.user2 })).status, 404);
+});
+
+test('TC52 saga: bãi B OFFLINE -> chỗ đã giữ ở A được trả lại (bù trừ), saga FAILED', async (t) => {
+  const { a, agg, tokens } = await system(t);
+  agg.reg.get('B').status = 'OFFLINE';
+  const r = await group(agg, tokens.user1, 'g2', [item('A', 'A01'), item('B', 'B01')]);
+  assert.deepEqual([r.body.status, r.body.steps.map((s) => s.state)], ['FAILED', ['COMPENSATED', 'FAILED']]);
+  const st = (await a.pool.query(`SELECT r.status, s.status AS slot FROM reservations r JOIN parking_slots s ON s.id=r.slot_id`)).rows[0];
+  assert.deepEqual(st, { status: 'CANCELLED', slot: 'AVAILABLE' });
+  assert.equal((await group(agg, tokens.user1, 'g3', [item('A', 'A01')])).status, 400);   // phải từ 2 xe
+});
+
+test('TC53 Aggregator chết giữa saga: khởi động lại thì bù trừ nốt (huỷ chỗ đã giữ)', async (t) => {
+  const { a, agg } = await system(t);
+  const id = '11111111-1111-4111-8111-111111111111';
+  // bước 0 đã đặt xong ở A, chưa kịp làm bước 1 thì "chết"
+  const res = await agg.reg.call(agg.reg.get('A'), '/api/reservations', { method: 'POST',
+    body: { requestId: `${id}:0`, userId: 'u-x', slotCode: 'A02', licensePlate: '30A-123.45' } });
+  const rid = (await res.json()).id;
+  await agg.pool.query(`INSERT INTO sagas(id, request_id, user_id, status, steps) VALUES ($1, 'u-x:k', 'u-x', 'RUNNING', $2)`,
+    [id, JSON.stringify([{ ...item('A', 'A02'), state: 'DONE', reservationId: rid }, { ...item('B', 'B02'), state: 'PENDING' }])]);
+  assert.equal(await agg.app.locals.sagas.recover(), 1);
+  assert.equal((await agg.pool.query('SELECT status FROM sagas WHERE id=$1', [id])).rows[0].status, 'FAILED');
+  assert.equal((await a.pool.query('SELECT status FROM reservations WHERE id=$1', [rid])).rows[0].status, 'CANCELLED');
+});

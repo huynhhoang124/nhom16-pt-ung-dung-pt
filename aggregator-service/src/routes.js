@@ -2,6 +2,7 @@ const express = require('express');
 const { slotsFromCache } = require('./events');
 const { mountSessions } = require('./sessions-routes');
 const { log, withRequestId } = require('./log');
+const { makeSagas } = require('./saga');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
@@ -98,6 +99,25 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
   app.get('/api/parkings/:id/slots/:code/schedule', need(), async (req, res) => {
     await forward(res, reg.get(req.params.id),
       `/api/slots/${encodeURIComponent(req.params.code)}/schedule?date=${encodeURIComponent(req.query.date ?? '')}`);
+  });
+
+  // PT-07: đặt chỗ cho nhiều xe ở nhiều bãi (Saga). Cùng Idempotency-Key -> trả lại saga cũ.
+  const sagas = makeSagas({ pool, reg, timeoutMs: reserveTimeoutMs });
+  app.locals.sagas = sagas;
+  app.post('/api/group-reservations', need('USER'), async (req, res) => {
+    const key = req.get('idempotency-key');
+    if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
+    const items = req.body?.items;
+    if (!Array.isArray(items) || items.length < 2 || items.length > 5
+      || !items.every((x) => [x?.parkingId, x?.slotCode, x?.licensePlate].every((v) => typeof v === 'string' && v && v.length <= 32))) {
+      return res.status(400).json({ error: 'items: 2–5 x { parkingId, slotCode, licensePlate }' });
+    }
+    const { replayed, saga } = await sagas.start(req.user.sub, key, items);
+    res.status(replayed ? 200 : 201).json(saga);
+  });
+  app.get('/api/group-reservations/:id', need('USER'), async (req, res) => {
+    const saga = /^[0-9a-f-]{36}$/.test(req.params.id) && await sagas.get(req.params.id, req.user.sub);
+    saga ? res.json(saga) : res.status(404).json({ error: 'NOT_FOUND' });
   });
 
   // Huỷ: USER chỉ huỷ của mình; STAFF của bãi đó hoặc ADMIN huỷ được mọi reservation.

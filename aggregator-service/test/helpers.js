@@ -84,7 +84,7 @@ async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400 
     return { status: r.status, body: await r.json() };
   };
   const login = async (username) => (await call('/api/auth/login', { method: 'POST', body: { username, password: 'pw' } })).body.token;
-  return { pool, reg, cache, server, call, login };
+  return { pool, reg, cache, server, call, login, app };
 }
 
 module.exports = { startNode, startStub, startFlaky, startAggregator, KEY };

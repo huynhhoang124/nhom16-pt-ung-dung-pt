@@ -72,7 +72,10 @@ async function main() {
     }
   };
   const check = () => reg.check(onChange).catch((e) => log.error('health check lỗi', { error: e.message }));
-  check();
+  // Lần health check đầu xong (biết bãi nào sống) thì bù trừ các saga dở dang từ lần chạy trước (PT-07).
+  check().then(() => app.locals.sagas.recover())
+    .then((k) => k && log.info(`Khôi phục ${k} saga dở dang`))
+    .catch((e) => log.error('khôi phục saga lỗi', { error: e.message }));
   setInterval(check, Number(env('HEALTH_INTERVAL_MS', 5000)));
 
   const port = Number(env('PORT', 8000));
