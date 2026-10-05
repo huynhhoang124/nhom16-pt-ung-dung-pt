@@ -25,6 +25,7 @@ export default function App() {
     socket.on('connect', on);
     socket.on('disconnect', off);
     socket.on('NODE_STATUS', node);
+    setLive(socket.connected);   // socket có thể đã nối xong trước khi gắn listener
     return () => { socket.off('connect', on); socket.off('disconnect', off); socket.off('NODE_STATUS', node); };
   }, []);
 
