@@ -17,9 +17,10 @@ async function init(pool) {
   for (const n of JSON.parse(env('NODES', '[]'))) {
     // bãi đã có: giữ nguyên, chỉ bổ sung toạ độ nếu chưa có
     await pool.query(
-      `INSERT INTO parking_nodes(parking_id, name, api_url, address, lat, lng) VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (parking_id) DO UPDATE SET lat = COALESCE(parking_nodes.lat, EXCLUDED.lat), lng = COALESCE(parking_nodes.lng, EXCLUDED.lng)`,
-      [n.parkingId, n.name, n.apiUrl, n.address ?? null, n.lat ?? null, n.lng ?? null]);
+      `INSERT INTO parking_nodes(parking_id, name, api_url, address, lat, lng, public_url) VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (parking_id) DO UPDATE SET lat = COALESCE(parking_nodes.lat, EXCLUDED.lat), lng = COALESCE(parking_nodes.lng, EXCLUDED.lng),
+         public_url = COALESCE(parking_nodes.public_url, EXCLUDED.public_url)`,
+      [n.parkingId, n.name, n.apiUrl, n.address ?? null, n.lat ?? null, n.lng ?? null, n.publicUrl ?? null]);
   }
   await seedUsers(pool, env('DEMO_PASSWORD', '123456'));
 }
@@ -39,7 +40,9 @@ async function main() {
   for (const row of (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows) reg.add(row);
 
   const cache = new Map();
-  const app = makeApp({ pool, reg, cache, auth: makeAuth(env('JWT_SECRET', 'dev-secret')) });
+  const b64 = (k) => (process.env[k] ? Buffer.from(process.env[k], 'base64').toString() : undefined);
+  const auth = makeAuth(env('JWT_SECRET', 'dev-secret'), { privateKey: b64('JWT_PRIVATE_KEY_B64'), publicKey: b64('JWT_PUBLIC_KEY_B64') });
+  const app = makeApp({ pool, reg, cache, auth });
   const server = http.createServer(app);
   const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS
 

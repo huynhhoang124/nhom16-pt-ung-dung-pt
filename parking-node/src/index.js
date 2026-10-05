@@ -23,6 +23,9 @@ async function main() {
     pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
     reservationMinutes: Number(env('RESERVATION_MINUTES', 15)),
     ...(process.env.QR_SECRET && { qrSecret: process.env.QR_SECRET }),
+    // PT-05: khoá công khai của Aggregator (PEM, base64) -> nhân viên gọi thẳng node khi trung tâm sập
+    jwtPublicKey: process.env.JWT_PUBLIC_KEY_B64 ? Buffer.from(process.env.JWT_PUBLIC_KEY_B64, 'base64').toString() : undefined,
+    corsOrigins: env('CORS_ORIGIN', 'http://localhost:3000').split(','),
   });
   app.listen(port, () => log.info(`Parking ${parkingId} chạy ở cổng ${port}`));
 

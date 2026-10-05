@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, formatPlate, message, newKey, RESERVATION_LABEL, STATUS_LABEL, useLive } from '../api.js';
+import { api, centralDown, formatPlate, knownNode, message, newKey, nodeApi, rememberNodes, RESERVATION_LABEL, STATUS_LABEL, useLive } from '../api.js';
 import { TYPE_LABEL } from './Dashboard.jsx';
 import Pricing from './Pricing.jsx';
 
@@ -25,11 +25,22 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   const [type, setType] = useState('');               // lọc loại xe, '' = tất cả
   const isStaff = user.role === 'ADMIN' || (user.role === 'STAFF' && user.parkingId === parkingId);
 
+  // PT-05: Aggregator sập -> nhân viên đọc/ghi thẳng node của bãi (p.direct = true)
   const load = useCallback(async () => {
     const r = await api(`/api/parkings/${parkingId}`);
-    if (r.ok) setP(r.data);
+    if (r.ok) { setP(r.data); rememberNodes([r.data]); }
+    else if (isStaff && centralDown(r) && knownNode(parkingId)) {
+      const slots = await nodeApi(parkingId, '/api/slots');
+      if (slots.ok) {
+        setP({ parkingId, name: knownNode(parkingId).name, status: 'ONLINE', stale: false, direct: true, slots: slots.data });
+        setLoadError('');
+        const rs = await nodeApi(parkingId, '/api/reservations');
+        setReservations(rs.ok ? rs.data : []);
+        return;
+      }
+    }
     setLoadError(r.ok ? '' : message(r.data));
-    if (isStaff) {
+    if (isStaff && r.ok) {
       const rs = await api(`/api/parkings/${parkingId}/reservations`);
       setReservations(rs.ok ? rs.data : []);
     }
@@ -75,7 +86,11 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   }
 
   async function act(action, cash = false) {
-    const r = await api(`/api/parkings/${parkingId}/slots/${selected}/${action}`, { method: 'POST', body: { licensePlate: plate || undefined, cash } });
+    const body = { licensePlate: plate || undefined, cash };
+    let r = p.direct ? { status: 0 } : await api(`/api/parkings/${parkingId}/slots/${selected}/${action}`, { method: 'POST', body });
+    // Trung tâm không trả lời -> làm thẳng với bãi. An toàn kể cả khi lệnh trước thực ra đã tới bãi:
+    // xe vào/ra kiểm trạng thái slot (compare-and-swap), lặp lại chỉ nhận 409 chứ không làm hai lần.
+    if (isStaff && centralDown(r)) r = await nodeApi(parkingId, `/api/slots/${selected}/${action}`, { method: 'POST', body });
     const fee = r.data?.session?.fee;
     if (r.status === 402) {   // chưa trả tiền: nhân viên thu tiền mặt rồi cho ra
       setNote({ kind: 'error', text: `Chưa thanh toán ${r.data.fee.toLocaleString('vi-VN')} đ.`, cash: true });
@@ -115,6 +130,10 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
         <h2>{p.name}</h2>
         <span className={`badge ${p.status}`}>{p.status}</span>
       </div>
+      {p.direct && (
+        <p className="banner">Trung tâm (Aggregator) đang mất kết nối: bạn đang làm việc <strong>trực tiếp với bãi {parkingId}</strong>.
+          Xe vào/ra vẫn ghi vào bãi; trung tâm sẽ tự đồng bộ khi hoạt động lại.</p>
+      )}
       {p.stale && (
         <p className="banner">Bãi đang mất kết nối. Đây là trạng thái cuối cùng Aggregator biết (có thể đã cũ); tạm thời không nhận đặt chỗ.</p>
       )}
@@ -190,7 +209,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
         </div>
       )}
 
-      {isStaff && p.status === 'ONLINE' && (
+      {isStaff && p.status === 'ONLINE' && !p.direct && (
         <form className="inline small" onSubmit={(e) => {
           e.preventDefault();
           const f = new FormData(e.target);
@@ -204,7 +223,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
         </form>
       )}
 
-      {p.status === 'ONLINE' && <Pricing parkingId={parkingId} canEdit={isStaff} />}
+      {p.status === 'ONLINE' && !p.direct && <Pricing parkingId={parkingId} canEdit={isStaff} />}
 
       {isStaff && (
         <>

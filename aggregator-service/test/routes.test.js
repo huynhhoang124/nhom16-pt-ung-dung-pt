@@ -217,3 +217,28 @@ test('UX-02 thống kê gom các bãi: bãi treo báo thiếu; STAFF chỉ thấ
   assert.deepEqual(mine.body.unavailable, []);
   assert.equal((await agg.call('/api/admin/stats', { token: tokens.user1 })).status, 403);
 });
+
+test('PT-05 Aggregator ký RS256 -> node tự kiểm được bằng khoá công khai (không cần Aggregator)', async () => {
+  const crypto = require('node:crypto');
+  const { makeAuth } = require('../src/auth');
+  const { verifyRS256 } = require('../../parking-node/src/jwt');
+  const k = crypto.generateKeyPairSync('rsa', { modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+  const auth = makeAuth('secret', k);
+  const pool = { query: async () => ({ rows: [{ id: 'u', username: 'staff-a', role: 'STAFF', parking_id: 'A',
+    password_hash: await require('bcryptjs').hash('pw', 4) }] }) };
+  const { token } = await auth.login(pool, 'staff-a', 'pw');
+  assert.deepEqual([verifyRS256(token, k.publicKey).role, verifyRS256(token, k.publicKey).parkingId], ['STAFF', 'A']);
+  // middleware need() của Aggregator vẫn chấp nhận token RS256 và từ chối HS256 giả mạo
+  const req = (t) => ({ get: () => `Bearer ${t}` });
+  let ok = false;
+  auth.need('STAFF')(req(token), {}, () => { ok = true; });
+  assert.ok(ok);
+  // tấn công đổi thuật toán: ký HS256 với "secret" là chính khoá công khai
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const data = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ role: 'ADMIN' })}`;
+  const forged = `${data}.${crypto.createHmac('sha256', k.publicKey).update(data).digest('base64url')}`;
+  let status;
+  auth.need()(req(forged), { status: (c) => { status = c; return { json: () => {} }; } }, () => {});
+  assert.equal(status, 401);
+});

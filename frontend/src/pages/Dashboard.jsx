@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
-import { api, message, useLive } from '../api.js';
+import { api, message, rememberNodes, useLive } from '../api.js';
 
 export const TYPE_LABEL = { CAR: 'Ô tô', MOTO: 'Xe máy' };
 
@@ -31,6 +31,7 @@ export default function Dashboard({ onOpen }) {
 
   const load = useCallback(async () => {
     const [list, avail] = await Promise.all([api('/api/parkings'), api('/api/parkings/availability')]);
+    if (list.ok) rememberNodes(list.data);
     if (!list.ok || !avail.ok) return setError(message((list.ok ? avail : list).data));
     setError('');
     const counts = Object.fromEntries(avail.data.map((a) => [a.parkingId, a]));

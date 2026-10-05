@@ -8,7 +8,8 @@ export const session = {
   set(v) { try { v ? localStorage.setItem(KEY, JSON.stringify(v)) : localStorage.removeItem(KEY); } catch { /* bỏ qua */ } },
 };
 
-export async function api(path, { method = 'GET', body, headers = {} } = {}) {
+// keepSession: lỗi 401 từ node (không phải Aggregator) không được làm đăng xuất người dùng.
+export async function api(path, { method = 'GET', body, headers = {}, keepSession = false } = {}) {
   const s = session.get();
   let r;
   try {
@@ -21,9 +22,30 @@ export async function api(path, { method = 'GET', body, headers = {} } = {}) {
     return { ok: false, status: 0, data: { error: 'NETWORK' } };
   }
   const data = await r.json().catch(() => ({}));
-  if (r.status === 401 && s) { session.set(null); location.reload(); }
+  if (r.status === 401 && s && !keepSession) { session.set(null); location.reload(); }
   return { ok: r.ok, status: r.status, data };
 }
+
+// PT-05: nhớ địa chỉ công khai của từng bãi (lấy từ Aggregator khi còn sống) để nhân viên gọi thẳng bãi khi trung tâm sập.
+const NODES_KEY = 'parking.nodes';
+export function rememberNodes(list) {
+  try {
+    const m = JSON.parse(localStorage.getItem(NODES_KEY) ?? '{}');
+    for (const n of list) if (n.publicUrl) m[n.parkingId] = { url: n.publicUrl, name: n.name };
+    localStorage.setItem(NODES_KEY, JSON.stringify(m));
+  } catch { /* bỏ qua */ }
+}
+export function knownNode(parkingId) {
+  try { return JSON.parse(localStorage.getItem(NODES_KEY) ?? '{}')[parkingId] ?? null; } catch { return null; }
+}
+// Gọi thẳng node của bãi bằng JWT của nhân viên (node tự kiểm chữ ký RS256).
+export async function nodeApi(parkingId, path, opts = {}) {
+  const n = knownNode(parkingId);
+  if (!n) return { ok: false, status: 0, data: { error: 'NETWORK' } };
+  return api(n.url + path, { ...opts, keepSession: true });
+}
+// Aggregator không trả lời (sập / proxy báo lỗi) — khác với bãi trả lỗi nghiệp vụ.
+export const centralDown = (r) => r.status === 0 || r.status === 500 || r.status === 502 || r.status === 503 && !r.data?.parkingId;
 
 // Idempotency-Key: sinh MỘT lần cho mỗi lượt đặt, giữ nguyên khi bấm "Thử lại".
 export const newKey = () =>

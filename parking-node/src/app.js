@@ -5,11 +5,18 @@ const { invalidRule } = require('./pricing');
 const { savePricing } = require('./db');
 const { mountGate, tokenFor } = require('./gate');
 const { log, withRequestId } = require('./log');
+const { verifyRS256 } = require('./jwt');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Nhân viên gọi thẳng node (PT-05) được làm những gì: xem mọi thứ (GET), xe vào/ra, khoá slot, quét QR.
+const STAFF_WRITE = [/^\/slots\/[^/]+\/(enter|exit|maintenance|unmaintenance)$/, /^\/gate\/scan$/];
+
 // qrSecret: khoá ký QR riêng của bãi (env QR_SECRET); không đặt thì suy từ khoá nội bộ.
-function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}` }) {
+// jwtPublicKey: khoá công khai RS256 của Aggregator; có thì nhân viên bãi này gọi thẳng được (PT-05).
+// corsOrigins: trang web nào được gọi thẳng node từ trình duyệt.
+function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`,
+  jwtPublicKey, corsOrigins = ['http://localhost:3000'] }) {
   const app = express();
   app.use(withRequestId);
   app.use(express.json({ limit: '10kb' }));
@@ -20,9 +27,28 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     catch { res.status(503).json({ status: 'DOWN', parkingId }); }
   });
 
-  // Chỉ Aggregator (và barrier của bãi) được gọi API nghiệp vụ.
-  app.use('/api', (req, res, next) =>
-    req.get('x-internal-key') === internalKey ? next() : res.status(401).json({ error: 'UNAUTHORIZED' }));
+  // CORS: giao diện nhân viên gọi thẳng node khi Aggregator sập (PT-05)
+  app.use((req, res, next) => {
+    const origin = req.get('origin');
+    if (origin && corsOrigins.includes(origin)) {
+      res.set({ 'access-control-allow-origin': origin, vary: 'Origin',
+        'access-control-allow-headers': 'authorization, content-type, x-request-id', 'access-control-expose-headers': 'x-request-id' });
+      if (req.method === 'OPTIONS') return res.status(204).end();
+    }
+    next();
+  });
+
+  // API nghiệp vụ: Aggregator / barrier (khoá nội bộ), hoặc nhân viên của CHÍNH bãi này / quản trị với JWT RS256.
+  app.use('/api', (req, res, next) => {
+    if (req.get('x-internal-key') === internalKey) return next();
+    const bearer = (req.get('authorization') ?? '').replace(/^Bearer /, '');
+    const user = jwtPublicKey && bearer && verifyRS256(bearer, jwtPublicKey);
+    if (!user) return res.status(401).json({ error: 'UNAUTHORIZED' });
+    const ownStaff = user.role === 'ADMIN' || (user.role === 'STAFF' && user.parkingId === parkingId);
+    const allowed = req.method === 'GET' || (req.method === 'POST' && STAFF_WRITE.some((r) => r.test(req.path)));
+    if (!ownStaff || !allowed) return res.status(403).json({ error: 'FORBIDDEN' });
+    next();
+  });
 
   const send = (res, r) => res.status(r.code).json(r.body);
 

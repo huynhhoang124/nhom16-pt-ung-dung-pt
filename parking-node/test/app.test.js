@@ -98,3 +98,35 @@ test('NV-01 HTTP: kiểm giờ đến / thời lượng; đặt trước rồi x
   assert.equal((await call(`/api/slots/B01/schedule?date=${date}`)).body.length, 1);
   assert.equal((await call('/api/slots/B01/schedule')).status, 400);
 });
+
+test('PT-05 nhân viên gọi thẳng node bằng JWT: chỉ bãi mình, chỉ thao tác được phép; CORS cho trang web', async (t) => {
+  const crypto = require('node:crypto');
+  const k = crypto.generateKeyPairSync('rsa', { modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const tok = (p) => {
+    const data = `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64({ ...p, exp: Date.now() / 1000 + 600 })}`;
+    return `${data}.${crypto.sign('RSA-SHA256', Buffer.from(data), k.privateKey).toString('base64url')}`;
+  };
+  const pool = await makePool('B', 3);
+  const server = makeApp({ pool, parkingId: 'B', internalKey: 'k', jwtPublicKey: k.publicKey }).listen(0);
+  await new Promise((r) => server.once('listening', r));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  const call = (path, token, { method = 'GET', body } = {}) => fetch(base + path, {
+    method, headers: { 'content-type': 'application/json', ...(token && { authorization: `Bearer ${token}` }), origin: 'http://localhost:3000' },
+    body: body && JSON.stringify(body) });
+
+  const staffB = tok({ role: 'STAFF', parkingId: 'B' });
+  const enter = await call('/api/slots/B01/enter', staffB, { method: 'POST', body: {} });
+  assert.equal(enter.status, 200);
+  assert.equal(enter.headers.get('access-control-allow-origin'), 'http://localhost:3000');
+  assert.equal((await call('/api/slots', staffB)).status, 200);
+  assert.equal((await call('/api/slots/B02/enter', tok({ role: 'STAFF', parkingId: 'A' }), { method: 'POST', body: {} })).status, 403);
+  assert.equal((await call('/api/slots/B02/enter', tok({ role: 'USER' }), { method: 'POST', body: {} })).status, 403);
+  assert.equal((await call('/api/pricing', staffB, { method: 'PUT', body: [] })).status, 403);   // không nằm trong danh sách được phép
+  assert.equal((await call('/api/slots/B02/enter', tok({ role: 'ADMIN' }), { method: 'POST', body: {} })).status, 200);
+  assert.equal((await call('/api/slots', 'rác')).status, 401);
+  const pre = await fetch(`${base}/api/slots`, { method: 'OPTIONS', headers: { origin: 'http://localhost:3000' } });
+  assert.equal(pre.status, 204);
+});

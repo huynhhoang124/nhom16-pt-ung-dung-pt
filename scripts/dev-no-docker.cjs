@@ -27,6 +27,9 @@ const { makeAuth, seedUsers } = require('../aggregator-service/src/auth');
 const { makeApp } = require('../aggregator-service/src/routes');
 
 const KEY = 'dev';
+// PT-05: cặp khoá RS256 tạo mới mỗi lần chạy -> nhân viên gọi thẳng node được như bản Docker
+const { privateKey, publicKey } = require('node:crypto').generateKeyPairSync('rsa', {
+  modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
 const BAYS = [
   ['A', 8001, 'CAR:1:10,CAR:2:10,MOTO:1:20', 'Bãi A – PTIT Hà Đông', '96A Trần Phú, Hà Đông', 20.9809, 105.7875],
   ['B', 8002, 'CAR:1:10,CAR:2:10,CAR:3:10,MOTO:1:30', 'Bãi B – Cầu Giấy', 'Cầu Giấy, Hà Nội', 21.0362, 105.7906],
@@ -52,7 +55,7 @@ const listen = (handler, port) => new Promise((ok) => {
   for (const [id, port, slots] of BAYS) {
     const p = await pool();
     await initNode(p, id, slots);
-    await listen(makeNodeApp({ pool: p, parkingId: id, internalKey: KEY }), port);
+    await listen(makeNodeApp({ pool: p, parkingId: id, internalKey: KEY, jwtPublicKey: publicKey }), port);
     const relay = makeRelay(p, async (_key, payload) => { onEvent(payload); return true; });
     setInterval(() => relay().catch(() => {}), 300);
     setInterval(() => expireDue(p, id).then(() => activateDue(p, id)).catch(() => {}), 30_000);
@@ -66,10 +69,10 @@ const listen = (handler, port) => new Promise((ok) => {
     const row = (await aggPool.query(
       `INSERT INTO parking_nodes(parking_id, name, api_url, address) VALUES ($1,$2,$3,$4) RETURNING *`,
       [id, name, `http://localhost:${port}`, address])).rows[0];
-    reg.add({ ...row, lat, lng });
+    reg.add({ ...row, lat, lng, public_url: `http://localhost:${port}` });
   }
   const cache = new Map();
-  const server = await listen(makeApp({ pool: aggPool, reg, cache, auth: makeAuth('dev-secret') }), 8000);
+  const server = await listen(makeApp({ pool: aggPool, reg, cache, auth: makeAuth('dev-secret', { privateKey, publicKey }) }), 8000);
   const io = new Server(server);
   const push = (e) => io.emit('SLOT_UPDATED', e);
   onEvent = (e) => { if (applyEvent(cache, e)) push(e); };

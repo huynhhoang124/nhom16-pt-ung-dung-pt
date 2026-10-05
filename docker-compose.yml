@@ -14,6 +14,8 @@ x-node-env: &node-env
   INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
   RABBITMQ_URL: amqp://parking:parking@rabbitmq
   RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
+  JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}          # PT-05: nhân viên gọi thẳng node khi Aggregator sập
+  CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
 
 services:
   rabbitmq:
@@ -56,10 +58,12 @@ services:
       INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
       JWT_SECRET: ${JWT_SECRET:?Thiếu JWT_SECRET (chạy cp .env.example .env)}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-123456}
+      JWT_PRIVATE_KEY_B64: ${JWT_PRIVATE_KEY_B64:-}    # có cặp khoá -> ký RS256 (node tự kiểm); không có -> HS256
+      JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}
       NODES: >-
-        [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875},
-         {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906},
-         {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội","lat":21.0287,"lng":105.8524}]
+        [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875,"publicUrl":"http://localhost:8001"},
+         {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002"},
+         {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội","lat":21.0287,"lng":105.8524,"publicUrl":"http://localhost:8003"}]
     ports: ["8000:8000"]
     depends_on: { db-agg: { condition: service_healthy } }
 

@@ -23,7 +23,7 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
     res.status(r.status).json(await r.json());
   }
 
-  const info = (n) => ({ parkingId: n.id, name: n.name, address: n.address, lat: n.lat, lng: n.lng, status: n.status, lastSeen: n.lastSeen });
+  const info = (n) => ({ parkingId: n.id, name: n.name, address: n.address, lat: n.lat, lng: n.lng, publicUrl: n.publicUrl, status: n.status, lastSeen: n.lastSeen });
 
   app.get('/health', (_req, res) => res.json({ status: 'UP' }));
 

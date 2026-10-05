@@ -29,9 +29,11 @@ function makeLimiter({ max = 5, windowMs = 15 * 60_000 } = {}) {
   };
 }
 
-function makeAuth(secret) {
+// Có cặp khoá RSA -> ký RS256 (node chỉ cần khoá công khai để tự kiểm, PT-05); không có -> HS256 bằng secret như cũ.
+function makeAuth(secret, { privateKey, publicKey } = {}) {
+  const [signKey, verifyKey, algorithm] = privateKey ? [privateKey, publicKey, 'RS256'] : [secret, secret, 'HS256'];
   const sign = (u) => jwt.sign(
-    { sub: u.id, username: u.username, role: u.role, parkingId: u.parking_id ?? null }, secret, { expiresIn: '8h' });
+    { sub: u.id, username: u.username, role: u.role, parkingId: u.parking_id ?? null }, signKey, { expiresIn: '8h', algorithm });
 
   async function login(pool, username, password) {
     const u = (await pool.query('SELECT * FROM users WHERE username = $1', [username])).rows[0];
@@ -61,7 +63,7 @@ function makeAuth(secret) {
 
   // need() = chỉ cần đăng nhập; need('STAFF','ADMIN') = phải có một trong các vai trò.
   const need = (...roles) => (req, res, next) => {
-    try { req.user = jwt.verify((req.get('authorization') ?? '').replace(/^Bearer /, ''), secret); }
+    try { req.user = jwt.verify((req.get('authorization') ?? '').replace(/^Bearer /, ''), verifyKey, { algorithms: [algorithm] }); }
     catch { return res.status(401).json({ error: 'UNAUTHORIZED' }); }
     if (roles.length && !roles.includes(req.user.role)) return res.status(403).json({ error: 'FORBIDDEN' });
     next();

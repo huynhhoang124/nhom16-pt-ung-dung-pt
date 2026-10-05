@@ -18,3 +18,5 @@ CREATE TABLE IF NOT EXISTS users (
 -- UX-01: toạ độ để hiện bản đồ, tìm bãi gần nhất
 ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
 ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;
+-- PT-05: địa chỉ node mà TRÌNH DUYỆT nhân viên gọi thẳng được khi Aggregator sập (khác api_url trong mạng nội bộ)
+ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS public_url TEXT;
