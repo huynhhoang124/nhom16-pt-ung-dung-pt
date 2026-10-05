@@ -92,6 +92,14 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     send(res, await s.endReservation(pool, parkingId, req.params.id, 'CANCELLED', req.query.userId));
   });
 
+  // UX-02: ?from=&to= (ISO); mặc định 7 ngày gần nhất
+  app.get('/api/stats', async (req, res) => {
+    const to = req.query.to ? new Date(req.query.to) : new Date();
+    const from = req.query.from ? new Date(req.query.from) : new Date(to - 7 * 86400_000);
+    if (Number.isNaN(+from) || Number.isNaN(+to) || from >= to) return res.status(400).json({ error: 'INVALID_RANGE' });
+    res.json(await s.stats(pool, from, to));
+  });
+
   app.get('/api/sessions/:id/quote', async (req, res) => {
     if (!UUID.test(req.params.id)) return res.status(404).json({ error: 'SESSION_NOT_FOUND' });
     const q = await s.quote(pool, req.params.id);

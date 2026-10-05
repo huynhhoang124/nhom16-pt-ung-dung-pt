@@ -42,6 +42,26 @@ function mountSessions(app, { reg, need, forward, reserveTimeoutMs }) {
     });
   });
 
+  // UX-02: thống kê gom từ các bãi (truy vấn phân tán). Bãi lỗi -> ghi tên trong `unavailable`, số liệu là MỘT PHẦN.
+  // STAFF chỉ xem bãi của mình.
+  app.get('/api/admin/stats', need('STAFF', 'ADMIN'), async (req, res) => {
+    const q = new URLSearchParams(Object.entries({ from: req.query.from, to: req.query.to }).filter(([, v]) => v)).toString();
+    const parts = (await reg.gather(async (n) => ({ stats: await reg.json(n, `/api/stats?${q}`) })))
+      .filter((p) => req.user.role !== 'STAFF' || p.parkingId === req.user.parkingId);
+    const ok = parts.filter((p) => p.stats).map((p) => ({ parkingId: p.parkingId, ...p.stats }));
+    const sum = (k) => ok.reduce((n, p) => n + p[k], 0);
+    const exited = sum('exited');
+    res.json({
+      total: {
+        sessions: sum('sessions'), revenue: sum('revenue'), occupied: sum('occupied'), total: sum('total'),
+        avgMinutes: exited ? Math.round(ok.reduce((n, p) => n + p.avgMinutes * p.exited, 0) / exited) : 0,   // TB có trọng số
+        byHour: Array.from({ length: 24 }, (_, h) => ok.reduce((n, p) => n + p.byHour[h], 0)),
+      },
+      parkings: ok,
+      unavailable: parts.filter((p) => !p.stats).map((p) => p.parkingId),
+    });
+  });
+
   // Bảng giá: ai cũng xem được; nhân viên bãi đó hoặc quản trị được sửa.
   app.get('/api/parkings/:id/pricing', (req, res) => forward(res, reg.get(req.params.id), '/api/pricing'));
   app.put('/api/parkings/:id/pricing', need('STAFF', 'ADMIN'), async (req, res) => {

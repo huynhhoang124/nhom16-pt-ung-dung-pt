@@ -204,3 +204,16 @@ test('UX-01 toạ độ bãi: thêm bãi kèm lat/lng, /api/parkings trả toạ
   const e = (await agg.call('/api/parkings')).body.find((p) => p.parkingId === 'E');
   assert.deepEqual([e.lat, e.lng], [21.03, 105.85]);
 });
+
+test('UX-02 thống kê gom các bãi: bãi treo báo thiếu; STAFF chỉ thấy bãi mình; USER bị chặn', async (t) => {
+  const { agg, tokens } = await system(t);
+  await agg.call('/api/parkings/A/slots/A01/enter', { method: 'POST', token: tokens.admin, body: {} });
+  await agg.call('/api/parkings/B/slots/B01/enter', { method: 'POST', token: tokens.admin, body: {} });
+  const all = await agg.call('/api/admin/stats', { token: tokens.admin });
+  assert.deepEqual([all.body.total.sessions, all.body.total.occupied, all.body.total.total], [2, 2, 6]);
+  assert.deepEqual(all.body.unavailable, ['S']);
+  const mine = await agg.call('/api/admin/stats', { token: tokens['staff-a'] });
+  assert.deepEqual(mine.body.parkings.map((p) => p.parkingId), ['A']);
+  assert.deepEqual(mine.body.unavailable, []);
+  assert.equal((await agg.call('/api/admin/stats', { token: tokens.user1 })).status, 403);
+});

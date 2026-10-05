@@ -96,3 +96,9 @@ th { font-size: 0.85em; color: var(--muted); }
 .toast.error { border-left-color: var(--bad); }
 
 .map { height: min(60vh, 520px); border-radius: 10px; border: 1px solid var(--line); z-index: 0; }
+
+.stats .big { font-size: 1.5em; }
+.bars { display: grid; grid-template-columns: repeat(24, 1fr); gap: 3px; height: 160px; align-items: end; padding: 0.5rem; background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+.barcol { height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 2px; }
+.hbar { width: 100%; min-height: 1px; background: var(--primary); border-radius: 3px 3px 0 0; }
+.barcol span { line-height: 1.2em; }

@@ -329,6 +329,25 @@ const slotSchedule = async (pool, slotCode, date) => (await pool.query(
                                                           ($2::date + 1)::timestamp AT TIME ZONE 'Asia/Ho_Chi_Minh')
    ORDER BY r.start_time`, [slotCode, date])).rows;
 
+// UX-02: thống kê của bãi trong [from, to): lượt xe (theo giờ vào), doanh thu (đã trả), thời gian gửi TB, lấp đầy hiện tại.
+// Giờ trong ngày tính theo giờ Việt Nam.
+async function stats(pool, from, to) {
+  const t = (await pool.query(
+    `SELECT count(*)::int AS sessions,
+            COALESCE(sum(fee) FILTER (WHERE paid_at IS NOT NULL), 0)::int AS revenue,
+            count(*) FILTER (WHERE exited_at IS NOT NULL)::int AS exited,
+            COALESCE(round(avg(EXTRACT(EPOCH FROM exited_at - entered_at) / 60) FILTER (WHERE exited_at IS NOT NULL)), 0)::int AS "avgMinutes"
+     FROM parking_sessions WHERE entered_at >= $1 AND entered_at < $2`, [from, to])).rows[0];
+  const byHour = Array(24).fill(0);
+  for (const r of (await pool.query(
+    `SELECT EXTRACT(HOUR FROM entered_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::int AS h, count(*)::int AS n
+     FROM parking_sessions WHERE entered_at >= $1 AND entered_at < $2 GROUP BY h`, [from, to])).rows) byHour[r.h] = r.n;
+  const occ = (await pool.query(
+    `SELECT count(*) FILTER (WHERE status='OCCUPIED')::int AS occupied, count(*)::int AS total
+     FROM parking_slots WHERE status <> 'HIDDEN'`)).rows[0];
+  return { ...t, byHour, ...occ };
+}
+
 // Tổng chỗ trống + theo từng loại xe (CAR/MOTO).
 const availability = async (pool, parkingId) => {
   const rows = (await pool.query(
@@ -354,4 +373,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { reserve, moveSlot, endReservation, expireDue, activateDue, slotSchedule, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };
+module.exports = { reserve, moveSlot, endReservation, expireDue, activateDue, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };

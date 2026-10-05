@@ -8,6 +8,7 @@ import MyReservations from './pages/MyReservations.jsx';
 import Admin from './pages/Admin.jsx';
 import History from './pages/History.jsx';
 import Account from './pages/Account.jsx';
+import Stats from './pages/Stats.jsx';
 
 const ROLE_LABEL = { USER: 'Người dùng', STAFF: 'Nhân viên', ADMIN: 'Quản trị' };
 
@@ -35,6 +36,7 @@ export default function App() {
     ['dashboard', 'Tổng quan'],
     ...(user.role === 'USER' ? [['mine', 'Đặt chỗ của tôi'], ['history', 'Lịch sử gửi xe']] : [['history', 'Tra biển số']]),
     ...(user.role === 'STAFF' ? [['parking', `Bãi ${user.parkingId}`]] : []),
+    ...(user.role !== 'USER' ? [['stats', 'Thống kê']] : []),
     ...(user.role === 'ADMIN' ? [['admin', 'Quản trị']] : []),
   ];
   const go = (page) => setView(page === 'parking' ? { page, parkingId: user.parkingId } : { page });
@@ -61,6 +63,7 @@ export default function App() {
         {view.page === 'mine' && <MyReservations />}
         {view.page === 'admin' && <Admin />}
         {view.page === 'account' && <Account user={user} />}
+        {view.page === 'stats' && <Stats />}
         {view.page === 'history' && <History key={user.role} user={user} />}
       </main>
       <Toaster />
