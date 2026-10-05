@@ -7,7 +7,10 @@ scrape_configs:
       - targets: [parking-a:8001, parking-b:8002, parking-c:8003]
   - job_name: aggregator
     static_configs:
-      - targets: [aggregator:8000]
+      - targets: [aggregator:8000]   # bản 1 (cổng 8000 mở ra ngoài)
+  - job_name: aggregator-2
+    static_configs:
+      - targets: [aggregator-2:8000] # chỉ có khi bật profile ha
   - job_name: rabbitmq
     static_configs:
       - targets: [rabbitmq:15692]

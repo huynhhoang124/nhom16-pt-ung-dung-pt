@@ -139,8 +139,8 @@
         },
         {
           "refId": "B",
-          "expr": "sum by (instance) (rate(http_request_duration_seconds_count{job=\"aggregator\"}[1m]))",
-          "legendFormat": "{{instance}}",
+          "expr": "sum by (aggregator) (rate(http_request_duration_seconds_count{job=~\"aggregator.*\"}[1m]))",
+          "legendFormat": "{{aggregator}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prom"
@@ -174,8 +174,8 @@
         },
         {
           "refId": "B",
-          "expr": "histogram_quantile(0.95, sum by (le, instance) (rate(http_request_duration_seconds_bucket{job=\"aggregator\"}[1m])))",
-          "legendFormat": "{{instance}}",
+          "expr": "histogram_quantile(0.95, sum by (le, aggregator) (rate(http_request_duration_seconds_bucket{job=~\"aggregator.*\"}[1m])))",
+          "legendFormat": "{{aggregator}}",
           "datasource": {
             "type": "prometheus",
             "uid": "prom"

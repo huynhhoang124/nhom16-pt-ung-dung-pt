@@ -84,8 +84,11 @@ function makeSagas({ pool, reg, timeoutMs = 3000 }) {
   }
 
   // Khởi động lại: bù trừ mọi saga dở dang.
-  async function recover() {
-    const rows = (await pool.query(`SELECT * FROM sagas WHERE status IN ('RUNNING','COMPENSATING') ORDER BY created_at`)).rows;
+  async function recover(staleMs = 60_000) {
+    // Chỉ saga đứng yên quá `staleMs`: nhiều bản Aggregator dùng chung bảng, saga mới cập nhật là của bản khác đang chạy.
+    const rows = (await pool.query(
+      `SELECT * FROM sagas WHERE status IN ('RUNNING','COMPENSATING') AND updated_at < now() - make_interval(secs => $1)
+       ORDER BY created_at`, [staleMs / 1000])).rows;
     for (const row of rows) await compensate({ id: row.id, userId: row.user_id, status: row.status, steps: row.steps });
     return rows.length;
   }

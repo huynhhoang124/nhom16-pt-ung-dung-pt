@@ -100,7 +100,8 @@ export const toast = (text, kind = 'info') => window.dispatchEvent(new CustomEve
 
 // Realtime: Aggregator đẩy SLOT_UPDATED / NODE_STATUS. Gộp các tin dồn dập rồi tải lại từ API (nguồn sự thật).
 // auth là hàm: mỗi lần (re)connect lấy token mới nhất (NV-08: nhận thông báo riêng của mình)
-export const socket = io({ auth: (cb) => cb({ token: session.get()?.token }) });
+// transports websocket: một kết nối gắn chặt với một bản Aggregator, không cần sticky session khi có nhiều bản (PT-01)
+export const socket = io({ transports: ['websocket'], auth: (cb) => cb({ token: session.get()?.token }) });
 
 export function useLive(events, reload, ms = 300) {
   const ref = useRef(reload);

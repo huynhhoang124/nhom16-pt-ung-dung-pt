@@ -11,6 +11,9 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
+  // PT-01: cho biết request rơi vào bản Aggregator nào (demo cân bằng tải / tắt một bản)
+  const instance = `aggregator-${process.env.INSTANCE_ID ?? '1'}`;
+  app.use((_req, res, next) => { res.set('x-instance', instance); next(); });
   mountMetrics(app, { reg });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;

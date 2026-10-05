@@ -53,14 +53,17 @@ async function main() {
   });
   startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (n) => {
     (n.to === '*' ? io : io.to(`user:${n.to}`)).emit('NOTIFICATION', n);
-  }, log, { exchange: 'user.notifications', queue: `aggregator.notifications.${env('INSTANCE_ID', '1')}`, pattern: '#' });
+  }, log, { exchange: 'user.notifications', queue: `aggregator.notifications.${instance}`, pattern: '#' });
 
   const push = (e) => io.emit('SLOT_UPDATED', e);
+  // PT-01: mỗi bản Aggregator một queue riêng -> bản nào cũng nhận đủ sự kiện, đẩy cho client đang nối với nó
+  // (không cần Redis adapter). Queue durable: bản này tắt thì tin chờ, bật lại xử lý tiếp.
+  const instance = env('INSTANCE_ID', '1');
   startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e) => {
     const fresh = applyEvent(cache, e);
     log.info('nhận sự kiện', { requestId: e.requestId, type: e.type, parkingId: e.parkingId, slot: e.slot, version: e.version, fresh });
     if (fresh) push(e);
-  }, log);
+  }, log, { queue: `aggregator.slot-updates.${instance}` });
 
   const onChange = (n, prev) => {
     log.info(`Bãi ${n.id}: ${prev} -> ${n.status}`);
@@ -71,7 +74,10 @@ async function main() {
         .catch((e) => log.error(`Đối soát bãi ${n.id} lỗi`, { error: e.message }));
     }
   };
-  const check = () => reg.check(onChange).catch((e) => log.error('health check lỗi', { error: e.message }));
+  const check = () => pool.query('SELECT * FROM parking_nodes')
+    .then(({ rows }) => reg.sync(rows).forEach((id) => log.info(`Nạp bãi mới ${id} (do bản Aggregator khác thêm)`)))
+    .then(() => reg.check(onChange))
+    .catch((e) => log.error('health check lỗi', { error: e.message }));
   // Lần health check đầu xong (biết bãi nào sống) thì bù trừ các saga dở dang từ lần chạy trước (PT-07).
   check().then(() => app.locals.sagas.recover())
     .then((k) => k && log.info(`Khôi phục ${k} saga dở dang`))

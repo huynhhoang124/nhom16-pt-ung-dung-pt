@@ -287,6 +287,8 @@ test('TC53 Aggregator chết giữa saga: khởi động lại thì bù trừ n�
   const rid = (await res.json()).id;
   await agg.pool.query(`INSERT INTO sagas(id, request_id, user_id, status, steps) VALUES ($1, 'u-x:k', 'u-x', 'RUNNING', $2)`,
     [id, JSON.stringify([{ ...item('A', 'A02'), state: 'DONE', reservationId: rid }, { ...item('B', 'B02'), state: 'PENDING' }])]);
+  assert.equal(await agg.app.locals.sagas.recover(), 0);                 // mới cập nhật: có thể bản khác đang chạy
+  await agg.pool.query(`UPDATE sagas SET updated_at = now() - interval '2 minutes' WHERE id=$1`, [id]);
   assert.equal(await agg.app.locals.sagas.recover(), 1);
   assert.equal((await agg.pool.query('SELECT status FROM sagas WHERE id=$1', [id])).rows[0].status, 'FAILED');
   assert.equal((await a.pool.query('SELECT status FROM reservations WHERE id=$1', [rid])).rows[0].status, 'CANCELLED');

@@ -111,7 +111,15 @@ test('GS-04 /metrics của Aggregator: trạng thái và số lần lỗi từng
   n.fails = 2;
   const url = `http://127.0.0.1:${agg.server.address().port}/metrics`;
   const text = await (await fetch(url)).text();
-  assert.match(text, /parking_node_up\{node="X",instance="aggregator-1"\} 1/);
-  assert.match(text, /parking_node_fails\{node="X",instance="aggregator-1"\} 2/);
+  assert.match(text, /parking_node_up\{node="X",aggregator="aggregator-1"\} 1/);
+  assert.match(text, /parking_node_fails\{node="X",aggregator="aggregator-1"\} 2/);
   assert.ok(x);
+});
+
+test('PT-01 X-Instance và nạp bãi do bản Aggregator khác thêm (dùng chung DB)', async (t) => {
+  const { agg } = await flakySystem(t, 0);
+  const r = await fetch(`http://127.0.0.1:${agg.server.address().port}/api/parkings`);
+  assert.equal(r.headers.get('x-instance'), 'aggregator-1');
+  assert.deepEqual(agg.reg.sync([{ parking_id: 'X', name: 'X', api_url: 'http://x' }, { parking_id: 'Z', name: 'Z', api_url: 'http://z' }]), ['Z']);
+  assert.equal(agg.reg.get('Z').status, 'OFFLINE');   // bãi mới: chờ health check
 });

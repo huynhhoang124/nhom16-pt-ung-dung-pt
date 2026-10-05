@@ -53,7 +53,9 @@ services:
 
   aggregator:
     build: ./aggregator-service
-    environment:
+    image: nhom16/aggregator
+    environment: &agg-env
+      INSTANCE_ID: "1"
       PORT: 8000
       DATABASE_URL: "postgres://postgres:dev@db-agg/parking"
       RABBITMQ_URL: amqp://parking:parking@rabbitmq
@@ -67,6 +69,15 @@ services:
          {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002"},
          {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội","lat":21.0287,"lng":105.8524,"publicUrl":"http://localhost:8003"}]
     ports: ["8000:8000"]
+    depends_on: { db-agg: { condition: service_healthy } }
+
+  # --- PT-01: bản Aggregator thứ hai (docker compose --profile ha up -d). Cùng tên mạng "aggregator" nên nginx
+  #     tự chia tải giữa 2 bản; không mở cổng ra ngoài. Demo: docker compose stop aggregator -> web vẫn chạy. ---
+  aggregator-2:
+    profiles: [ha]
+    image: nhom16/aggregator
+    environment: { <<: *agg-env, INSTANCE_ID: "2" }
+    networks: { default: { aliases: [aggregator] } }
     depends_on: { db-agg: { condition: service_healthy } }
 
   # NV-08: dịch vụ thông báo (nghe parking.events, gửi user.notifications); tắt thì hệ thống vẫn chạy

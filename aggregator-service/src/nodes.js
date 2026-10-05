@@ -93,7 +93,10 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
     catch { return { parkingId: n.id, status: 'OFFLINE' }; }
   }));
 
-  const api = { nodes, add, get: (id) => nodes.get(id), all: () => [...nodes.values()], call, json, check, gather, onChange: null };
+  // PT-01: nhiều bản Aggregator dùng chung DB điều phối -> mỗi vòng health check nạp bãi mới do bản khác thêm.
+  const sync = (rows) => rows.filter((r) => !nodes.has(r.parking_id)).map((r) => (add(r), r.parking_id));
+
+  const api = { nodes, add, sync, get: (id) => nodes.get(id), all: () => [...nodes.values()], call, json, check, gather, onChange: null };
   return api;
 }
 
