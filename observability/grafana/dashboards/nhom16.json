@@ -26,7 +26,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "parking_node_up",
+          "expr": "min by (node) (parking_node_up)",
           "legendFormat": "{{node}}",
           "datasource": {
             "type": "prometheus",
@@ -226,7 +226,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "parking_node_fails",
+          "expr": "max by (node) (parking_node_fails)",
           "legendFormat": "{{node}}",
           "datasource": {
             "type": "prometheus",
@@ -278,7 +278,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum(rate(http_request_duration_seconds_count{code=~\"5..\"}[1m])) / sum(rate(http_request_duration_seconds_count[1m]))",
+          "expr": "(sum(rate(http_request_duration_seconds_count{code=~\"5..\"}[1m])) or vector(0)) / sum(rate(http_request_duration_seconds_count[1m]))",
           "legendFormat": "5xx",
           "datasource": {
             "type": "prometheus",
