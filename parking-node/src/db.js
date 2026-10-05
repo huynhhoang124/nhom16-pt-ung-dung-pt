@@ -45,4 +45,19 @@ async function init(pool, prefix, slots, pricing = DEFAULT_RULES) {
   await savePricing(pool, pricing.filter((r) => !have.has(r.vehicleType)));
 }
 
-module.exports = { init, slotPlan, savePricing };
+// PT-02: "pool chỉ đọc" — đọc bản sao (replica); bản sao lỗi thì đọc bản chính và bỏ qua bản sao `backoffMs`.
+// CHỈ dùng cho truy vấn đọc không nằm trong luồng ghi: replica sao chép BẤT ĐỒNG BỘ nên có thể chậm vài trăm ms
+// (vừa đặt chỗ xong mà đọc replica có thể chưa thấy -> luồng ghi luôn đọc bản chính).
+function readThrough(replica, primary, { backoffMs = 10_000, onFallback } = {}) {
+  let skipUntil = 0;
+  return {
+    async query(sql, params) {
+      if (Date.now() >= skipUntil) {
+        try { return await replica.query(sql, params); } catch (e) { skipUntil = Date.now() + backoffMs; onFallback?.(e); }
+      }
+      return primary.query(sql, params);
+    },
+  };
+}
+
+module.exports = { init, slotPlan, savePricing, readThrough };

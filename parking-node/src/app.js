@@ -17,7 +17,8 @@ const STAFF_WRITE = [/^\/slots\/[^/]+\/(enter|exit|maintenance|unmaintenance)$/,
 // jwtPublicKey: khoá công khai RS256 của Aggregator; có thì nhân viên bãi này gọi thẳng được (PT-05).
 // corsOrigins: trang web nào được gọi thẳng node từ trình duyệt.
 function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`,
-  jwtPublicKey, corsOrigins = ['http://localhost:3000'], metricsExtra = [] }) {
+  jwtPublicKey, corsOrigins = ['http://localhost:3000'], metricsExtra = [], readPool = pool }) {
+  // readPool: bản sao chỉ đọc (PT-02) cho các truy vấn đọc thuần; mặc định = bản chính
   const app = express();
   app.use(withRequestId);
   mountMetrics(app, { pool, parkingId, extra: metricsExtra });   // GET /metrics (không cần khoá, chỉ số đo)
@@ -54,10 +55,10 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
 
   const send = (res, r) => res.status(r.code).json(r.body);
 
-  app.get('/api/availability', async (_req, res) => res.json(await s.availability(pool, parkingId)));
+  app.get('/api/availability', async (_req, res) => res.json(await s.availability(readPool, parkingId)));
   const type = (req) => (['CAR', 'MOTO'].includes(req.query.type) ? req.query.type : undefined);
-  app.get('/api/slots', async (req, res) => res.json(await s.listSlots(pool, false, type(req))));
-  app.get('/api/slots/available', async (req, res) => res.json(await s.listSlots(pool, true, type(req))));
+  app.get('/api/slots', async (req, res) => res.json(await s.listSlots(readPool, false, type(req))));
+  app.get('/api/slots/available', async (req, res) => res.json(await s.listSlots(readPool, true, type(req))));
 
   app.post('/api/reservations', async (req, res) => {
     const { requestId, userId, slotCode } = req.body ?? {};
@@ -112,7 +113,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
   app.get('/api/sessions', async (req, res) => {
     const { plate, userId, from, to } = req.query;
     if ([from, to].some((d) => d && Number.isNaN(Date.parse(d)))) return res.status(400).json({ error: 'from/to must be ISO dates' });
-    res.json(await s.listSessions(pool, { plate, userId, from, to }));
+    res.json(await s.listSessions(readPool, { plate, userId, from, to }));
   });
 
   app.delete('/api/reservations/:id', async (req, res) => {
@@ -125,7 +126,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     const to = req.query.to ? new Date(req.query.to) : new Date();
     const from = req.query.from ? new Date(req.query.from) : new Date(to - 7 * 86400_000);
     if (Number.isNaN(+from) || Number.isNaN(+to) || from >= to) return res.status(400).json({ error: 'INVALID_RANGE' });
-    res.json(await s.stats(pool, from, to));
+    res.json(await s.stats(readPool, from, to));
   });
 
   app.get('/api/sessions/:id/quote', async (req, res) => {

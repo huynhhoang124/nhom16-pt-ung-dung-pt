@@ -1,5 +1,5 @@
 const { Pool } = require('pg');
-const { init } = require('./db');
+const { init, readThrough } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
 const { expireDue, activateDue, warnExpiring } = require('./slots');
@@ -19,7 +19,23 @@ async function main() {
     catch (e) { if (i >= 30) throw e; log.info('DB chưa sẵn sàng, thử lại', { error: e.message }); await new Promise((r) => setTimeout(r, 2000)); }
   }
 
+  // PT-02: có READ_DATABASE_URL (bản sao) thì đọc thuần đi bản sao; kèm số đo độ trễ sao chép
+  const replica = process.env.READ_DATABASE_URL && new Pool({ connectionString: process.env.READ_DATABASE_URL, connectionTimeoutMillis: 2000 });
+  replica?.on('error', () => {});   // kết nối nhàn rỗi tới bản sao bị đứt: không để sập cả node
+  const readPool = replica ? readThrough(replica, pool, { onFallback: (e) => log.error('bản sao lỗi, đọc bản chính 10s', { error: e.message }) }) : pool;
+  const lagMetric = (registry, client) => replica && new client.Gauge({
+    name: 'replication_lag_seconds', help: 'Bản sao chậm hơn bản chính bao nhiêu giây (0 = đã theo kịp)', registers: [registry],
+    async collect() {
+      try {
+        this.set(Number((await replica.query(
+          `SELECT CASE WHEN pg_last_wal_receive_lsn() = pg_last_wal_replay_lsn() THEN 0
+                  ELSE COALESCE(EXTRACT(EPOCH FROM now() - pg_last_xact_replay_timestamp()), 0) END AS lag`)).rows[0].lag));
+      } catch { this.set(-1); }   // -1: không đọc được bản sao
+    },
+  });
+
   const app = makeApp({
+    readPool, metricsExtra: [lagMetric],
     pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
     reservationMinutes: Number(env('RESERVATION_MINUTES', 15)),
     ...(process.env.QR_SECRET && { qrSecret: process.env.QR_SECRET }),
