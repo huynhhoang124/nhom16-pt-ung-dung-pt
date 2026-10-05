@@ -60,7 +60,8 @@ Trình duyệt ── Aggregator ── DB Aggregator
 | `tests/e2e.test.mjs` | Chứng minh: cô lập dữ liệu, tranh chấp đồng thời, chịu lỗi node/broker/aggregator |
 
 ## Thư mục tài liệu
-- `tai-lieu/ke-hoach-thuc-hien-btl.md` – kế hoạch thực hiện cho nhóm (đọc trước).
+- `tai-lieu/tien-do.md` – **tiến độ + bàn giao mới nhất (đọc trước)**.
+- `tai-lieu/ke-hoach-thuc-hien-btl.md` – kế hoạch bản cơ bản.
 - `tai-lieu/ke-hoach-chi-tiet-ban-hoan-chinh.md` – kế hoạch chi tiết bản hoàn chỉnh: đặc tả 32 việc, phân công, lịch theo tuần, demo, báo cáo.
 - `tai-lieu/danh-sach-viec-nho.md` – 32 việc chia thành việc nhỏ 1–4 giờ, có người làm và thứ tự.
 - `tai-lieu/ly-thuyet-ap-dung-xuyen-suot.md` – lý thuyết áp vào 8 kịch bản của đề tài, kèm vấn đáp.
