@@ -1,0 +1,6 @@
+apiVersion: 1
+providers:
+  - name: nhom16
+    folder: ''
+    type: file
+    options: { path: /var/lib/grafana/dashboards }

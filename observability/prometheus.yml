@@ -1,0 +1,13 @@
+# GS-04: Prometheus lấy số đo mỗi 5 giây (docker compose --profile obs up -d; giao diện :9090)
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: parking
+    static_configs:
+      - targets: [parking-a:8001, parking-b:8002, parking-c:8003]
+  - job_name: aggregator
+    static_configs:
+      - targets: [aggregator:8000]
+  - job_name: rabbitmq
+    static_configs:
+      - targets: [rabbitmq:15692]

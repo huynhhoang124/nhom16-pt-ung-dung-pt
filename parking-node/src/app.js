@@ -6,6 +6,7 @@ const { savePricing } = require('./db');
 const { mountGate, tokenFor } = require('./gate');
 const { log, withRequestId } = require('./log');
 const { verifyRS256 } = require('./jwt');
+const { mountMetrics } = require('./metrics');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -16,9 +17,10 @@ const STAFF_WRITE = [/^\/slots\/[^/]+\/(enter|exit|maintenance|unmaintenance)$/,
 // jwtPublicKey: khoá công khai RS256 của Aggregator; có thì nhân viên bãi này gọi thẳng được (PT-05).
 // corsOrigins: trang web nào được gọi thẳng node từ trình duyệt.
 function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`,
-  jwtPublicKey, corsOrigins = ['http://localhost:3000'] }) {
+  jwtPublicKey, corsOrigins = ['http://localhost:3000'], metricsExtra = [] }) {
   const app = express();
   app.use(withRequestId);
+  mountMetrics(app, { pool, parkingId, extra: metricsExtra });   // GET /metrics (không cần khoá, chỉ số đo)
   app.use(express.json({ limit: '10kb' }));
 
   // /health không cần khoá: Aggregator dùng làm failure detector. Kiểm tra cả DB.

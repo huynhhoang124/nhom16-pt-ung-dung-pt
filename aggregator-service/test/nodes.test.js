@@ -105,3 +105,13 @@ test('TC42 xe vào/ra không idempotent: lỗi thì KHÔNG retry, trả nguyên 
   assert.equal(r.status, 500);
   assert.equal(x.state.hits, 1);
 });
+
+test('GS-04 /metrics của Aggregator: trạng thái và số lần lỗi từng bãi', async (t) => {
+  const { x, agg, n } = await flakySystem(t, 0);
+  n.fails = 2;
+  const url = `http://127.0.0.1:${agg.server.address().port}/metrics`;
+  const text = await (await fetch(url)).text();
+  assert.match(text, /parking_node_up\{node="X",instance="aggregator-1"\} 1/);
+  assert.match(text, /parking_node_fails\{node="X",instance="aggregator-1"\} 2/);
+  assert.ok(x);
+});

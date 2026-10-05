@@ -22,7 +22,9 @@ services:
     image: rabbitmq:3.13-management-alpine
     environment: { RABBITMQ_DEFAULT_USER: parking, RABBITMQ_DEFAULT_PASS: parking }
     ports: ["5672:5672", "15672:15672"]          # 15672 = giao diện quản lý (parking/parking)
-    volumes: [rabbitmq-data:/var/lib/rabbitmq]
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro   # bật rabbitmq_prometheus (:15692) cho GS-04
     healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"], interval: 5s, timeout: 5s, retries: 30 }
 
   db-a: { <<: *pg, volumes: [db-a-data:/var/lib/postgresql/data] }
@@ -87,6 +89,26 @@ services:
     environment: { <<: *node-env, PARKING_ID: D, PORT: 8004, SLOT_COUNT: 10, DATABASE_URL: "postgres://postgres:dev@db-d/parking" }
     ports: ["8004:8004"]
     depends_on: { db-d: { condition: service_healthy } }
+
+  # --- GS-04: giám sát (docker compose --profile obs up -d) ---
+  prometheus:
+    profiles: [obs]
+    image: prom/prometheus:v2.55.1
+    volumes: [./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+    ports: ["9090:9090"]
+  grafana:
+    profiles: [obs]
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"        # demo: mở là xem, không cần đăng nhập
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/nhom16.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3001:3000"]
+    depends_on: [prometheus]
 
 volumes:
   rabbitmq-data:

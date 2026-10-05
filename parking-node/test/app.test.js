@@ -130,3 +130,16 @@ test('PT-05 nhân viên gọi thẳng node bằng JWT: chỉ bãi mình, chỉ t
   const pre = await fetch(`${base}/api/slots`, { method: 'OPTIONS', headers: { origin: 'http://localhost:3000' } });
   assert.equal(pre.status, 204);
 });
+
+test('GS-04 /metrics: không cần khoá; có thời gian request, outbox chưa gửi, số chỗ theo loại', async (t) => {
+  const pool = await makePool('B', 3);
+  const server = makeApp({ pool, parkingId: 'B', internalKey: 'k' }).listen(0);
+  await new Promise((r) => server.once('listening', r));
+  t.after(() => server.close());
+  const base = `http://127.0.0.1:${server.address().port}`;
+  await fetch(`${base}/api/slots/B01/enter`, { method: 'POST', headers: { 'x-internal-key': 'k', 'content-type': 'application/json' }, body: '{}' });
+  const text = await (await fetch(`${base}/metrics`)).text();
+  assert.match(text, /outbox_unpublished\{parking="B"\} 1/);
+  assert.match(text, /parking_slots\{type="CAR",state="available",parking="B"\} 2/);
+  assert.match(text, /http_request_duration_seconds_count\{parking="B",method="POST",route="\/api\/slots\/:code\/:action",code="200"\} 1/);
+});
