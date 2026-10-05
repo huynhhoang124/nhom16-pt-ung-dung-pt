@@ -66,6 +66,15 @@ const MESSAGES = {
 export const message = (data) => MESSAGES[data?.error] ?? data?.error ?? 'Có lỗi xảy ra.';
 
 export const STATUS_LABEL = { AVAILABLE: 'Trống', RESERVED: 'Đã đặt', OCCUPIED: 'Có xe', MAINTENANCE: 'Bảo trì' };
+export const RESERVATION_LABEL = { ACTIVE: 'Đang hiệu lực', USED: 'Đã vào bãi', DONE: 'Hoàn tất', CANCELLED: 'Đã huỷ', EXPIRED: 'Hết hạn' };
+
+// Biển số lưu dạng chuẩn "30A12345" -> hiển thị "30A-123.45" (đuôi 5 số) / "30A-1234" (đuôi 4 số).
+export const formatPlate = (p) => (p ?? '—')
+  .replace(/^(\d{2}[A-Z]{1,2}\d?)(\d{3})(\d{2})$/, '$1-$2.$3')
+  .replace(/^(\d{2}[A-Z]{1,2}\d?)(\d{4})$/, '$1-$2');
+
+// Thông báo nổi (toast): gọi toast('...', 'ok'|'error'|'info') ở bất kỳ đâu, <Toaster/> trong App hiển thị.
+export const toast = (text, kind = 'info') => window.dispatchEvent(new CustomEvent('toast', { detail: { text, kind } }));
 
 // Realtime: Aggregator đẩy SLOT_UPDATED / NODE_STATUS. Gộp các tin dồn dập rồi tải lại từ API (nguồn sự thật).
 export const socket = io();

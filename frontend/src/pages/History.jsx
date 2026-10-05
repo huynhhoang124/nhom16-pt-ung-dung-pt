@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, message, newKey, useLive } from '../api.js';
+import { api, formatPlate, message, newKey, useLive } from '../api.js';
 
 const time = (t) => (t ? new Date(t).toLocaleString('vi-VN') : '—');
 const money = (v) => (v == null ? '—' : `${v.toLocaleString('vi-VN')} đ`);
@@ -66,7 +66,7 @@ export default function History({ user }) {
           <tbody>
             {data.sessions.map((x) => (
               <tr key={`${x.parkingId}:${x.id}`}>
-                <td>{x.parkingId}</td><td>{x.slotCode}</td><td>{x.licensePlate ?? '—'}</td>
+                <td>{x.parkingId}</td><td>{x.slotCode}</td><td>{formatPlate(x.licensePlate)}</td>
                 <td>{time(x.enteredAt)}</td><td>{x.exitedAt ? time(x.exitedAt) : <strong>Đang gửi</strong>}</td>
                 <td>{money(x.fee)}{x.paidAt && <span className="muted small"> · đã trả</span>}</td>
                 <td>{mine && !x.paidAt && !x.exitedAt && <button className="link" onClick={() => startPay(x)}>Thanh toán</button>}</td>

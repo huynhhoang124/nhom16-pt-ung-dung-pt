@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, message, newKey, STATUS_LABEL, useLive } from '../api.js';
+import { api, formatPlate, message, newKey, RESERVATION_LABEL, STATUS_LABEL, useLive } from '../api.js';
 import { TYPE_LABEL } from './Dashboard.jsx';
 import Pricing from './Pricing.jsx';
 
@@ -19,6 +19,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   const [when, setWhen] = useState('');               // giờ đến (datetime-local), '' = đặt ngay
   const [duration, setDuration] = useState(120);      // phút
   const [schedule, setSchedule] = useState([]);
+  const [loadError, setLoadError] = useState('');
   const [note, setNote] = useState(null);            // { kind: 'ok'|'error', text }
   const [reservations, setReservations] = useState([]);
   const [type, setType] = useState('');               // lọc loại xe, '' = tất cả
@@ -27,6 +28,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   const load = useCallback(async () => {
     const r = await api(`/api/parkings/${parkingId}`);
     if (r.ok) setP(r.data);
+    setLoadError(r.ok ? '' : message(r.data));
     if (isStaff) {
       const rs = await api(`/api/parkings/${parkingId}/reservations`);
       setReservations(rs.ok ? rs.data : []);
@@ -99,7 +101,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
     load();
   }
 
-  if (!p) return <p className="muted">Đang tải…</p>;
+  if (!p) return loadError ? <p className="error">{loadError}</p> : <p className="muted">Đang tải…</p>;
   const slot = p.slots.find((s) => s.slotCode === selected);
   const slots = p.slots.filter((s) => s.status !== 'HIDDEN' && (!type || s.type === type));
   const counts = slots.reduce((m, s) => ({ ...m, [s.status]: (m[s.status] ?? 0) + 1 }), {});
@@ -208,12 +210,13 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
         <>
           <h3>Đặt chỗ tại bãi</h3>
           <div className="scroll"><table>
-            <thead><tr><th>Slot</th><th>Biển số</th><th>Hết hạn</th><th>Trạng thái</th><th /></tr></thead>
+            <thead><tr><th>Slot</th><th>Biển số</th><th>Khung giờ</th><th>Trạng thái</th><th /></tr></thead>
             <tbody>
               {reservations.map((r) => (
                 <tr key={r.id}>
-                  <td>{r.slotCode}</td><td>{r.licensePlate}</td>
-                  <td>{new Date(r.expireTime).toLocaleString('vi-VN')}</td><td>{r.status}</td>
+                  <td>{r.slotCode}</td><td>{formatPlate(r.licensePlate)}</td>
+                  <td>{new Date(r.startTime).toLocaleString('vi-VN')} – {new Date(r.endTime).toLocaleTimeString('vi-VN')}</td>
+                  <td>{RESERVATION_LABEL[r.status] ?? r.status}</td>
                   <td>{r.status === 'ACTIVE' && <button className="link" onClick={() => cancel(r.id)}>Huỷ</button>}</td>
                 </tr>
               ))}

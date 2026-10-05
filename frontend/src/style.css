@@ -13,7 +13,8 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); }
-button, input { font: inherit; color: inherit; }
+button, input, select { font: inherit; color: inherit; }
+select { padding: 0.4rem; border: 1px solid var(--line); border-radius: 6px; background: var(--card); }
 h2 { margin: 0.4em 0; }
 .muted { color: var(--muted); }
 .small { font-size: 0.85em; }
@@ -21,7 +22,7 @@ h2 { margin: 0.4em 0; }
 .row { display: flex; align-items: center; gap: 0.6rem; justify-content: space-between; }
 
 .bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.75rem; padding: 0.6rem 1rem; background: var(--card); border-bottom: 1px solid var(--line); }
-.brand { margin-right: 0.5rem; }
+.brand { margin-right: 0.5rem; display: flex; align-items: center; gap: 0.4rem; }
 .bar nav { display: flex; gap: 0.25rem; flex: 1; flex-wrap: wrap; }
 .who { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9em; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--off); display: inline-block; }
@@ -79,3 +80,17 @@ th { font-size: 0.85em; color: var(--muted); }
 .floor { margin: 0.8rem 0 0; font-size: 0.95rem; color: var(--muted); }
 .num { width: 7rem; }
 .qr { image-rendering: pixelated; cursor: zoom-in; background: #fff; }
+
+/* Điện thoại: menu thành một hàng cuộn ngang dưới logo */
+@media (max-width: 640px) {
+  .bar { gap: 0.4rem 0.75rem; }
+  .who { margin-left: auto; }
+  .bar nav { order: 3; flex-basis: 100%; flex-wrap: nowrap; overflow-x: auto; }
+  .tab { white-space: nowrap; }
+  main { padding: 0.75rem; }
+}
+
+.toasts { position: fixed; right: 1rem; bottom: 1rem; display: flex; flex-direction: column; gap: 0.5rem; z-index: 10; max-width: calc(100vw - 2rem); }
+.toast { background: var(--card); border: 1px solid var(--line); border-left: 4px solid var(--primary); border-radius: 8px; padding: 0.6rem 0.9rem; box-shadow: 0 4px 14px rgb(0 0 0 / 0.15); }
+.toast.ok { border-left-color: var(--ok); }
+.toast.error { border-left-color: var(--bad); }

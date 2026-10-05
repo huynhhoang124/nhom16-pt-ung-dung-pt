@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { session, socket } from './api.js';
+import { session, socket, toast } from './api.js';
+import Toaster from './Toaster.jsx';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import ParkingDetail from './pages/ParkingDetail.jsx';
@@ -18,12 +19,16 @@ export default function App() {
   useEffect(() => {
     const on = () => setLive(true);
     const off = () => setLive(false);
+    // Bãi mất / có lại kết nối: báo ngay cho người đang xem (failure detector của Aggregator phát NODE_STATUS)
+    const node = (e) => toast(e.status === 'ONLINE' ? `Bãi ${e.parkingId} đã hoạt động lại.` : `Bãi ${e.parkingId} mất kết nối.`,
+      e.status === 'ONLINE' ? 'ok' : 'error');
     socket.on('connect', on);
     socket.on('disconnect', off);
-    return () => { socket.off('connect', on); socket.off('disconnect', off); };
+    socket.on('NODE_STATUS', node);
+    return () => { socket.off('connect', on); socket.off('disconnect', off); socket.off('NODE_STATUS', node); };
   }, []);
 
-  if (!user) return <Login onLogin={(s) => { session.set(s); setUser(s.user); }} />;
+  if (!user) return <><Login onLogin={(s) => { session.set(s); setUser(s.user); }} /><Toaster /></>;
 
   const tabs = [
     ['dashboard', 'Tổng quan'],
@@ -36,7 +41,7 @@ export default function App() {
   return (
     <div className="app">
       <header className="bar">
-        <strong className="brand">Smart Parking</strong>
+        <strong className="brand"><img src="/favicon.svg" alt="" width="22" height="22" /> Smart Parking</strong>
         <nav>
           {tabs.map(([page, label]) => (
             <button key={page} className={view.page === page ? 'tab active' : 'tab'} onClick={() => go(page)}>{label}</button>
@@ -57,6 +62,7 @@ export default function App() {
         {view.page === 'account' && <Account user={user} />}
         {view.page === 'history' && <History key={user.role} user={user} />}
       </main>
+      <Toaster />
     </div>
   );
 }

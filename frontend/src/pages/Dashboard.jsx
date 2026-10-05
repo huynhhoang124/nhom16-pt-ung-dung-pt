@@ -1,15 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, useLive } from '../api.js';
+import { api, message, useLive } from '../api.js';
 
 export const TYPE_LABEL = { CAR: 'Ô tô', MOTO: 'Xe máy' };
 
 export default function Dashboard({ onOpen }) {
   const [items, setItems] = useState(null);
   const [type, setType] = useState('');   // '' = mọi loại xe
+  const [error, setError] = useState('');
 
   const load = useCallback(async () => {
     const [list, avail] = await Promise.all([api('/api/parkings'), api('/api/parkings/availability')]);
-    if (!list.ok || !avail.ok) return;
+    if (!list.ok || !avail.ok) return setError(message((list.ok ? avail : list).data));
+    setError('');
     const counts = Object.fromEntries(avail.data.map((a) => [a.parkingId, a]));
     setItems(list.data.map((p) => ({ ...p, ...counts[p.parkingId] })));
   }, []);
@@ -17,7 +19,7 @@ export default function Dashboard({ onOpen }) {
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
   useLive(['SLOT_UPDATED', 'NODE_STATUS'], load);
 
-  if (!items) return <p className="muted">Đang tải…</p>;
+  if (!items) return error ? <p className="error">{error} Đang thử lại…</p> : <p className="muted">Đang tải…</p>;
   // Đang lọc theo loại xe thì số chỗ lấy theo loại đó.
   const shown = items.map((p) => (type && p.status === 'ONLINE' ? { ...p, ...(p.byType?.[type] ?? { available: 0, total: 0 }) } : p));
   const online = shown.filter((p) => p.status === 'ONLINE');

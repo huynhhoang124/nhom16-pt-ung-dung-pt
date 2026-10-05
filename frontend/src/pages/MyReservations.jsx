@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, message, useLive } from '../api.js';
+import { api, formatPlate, message, RESERVATION_LABEL, useLive } from '../api.js';
 import QrCode from '../QrCode.jsx';
-
-const STATUS_VI = { ACTIVE: 'Đang hiệu lực', USED: 'Đã vào bãi', DONE: 'Hoàn tất', CANCELLED: 'Đã huỷ', EXPIRED: 'Hết hạn' };
 
 export default function MyReservations() {
   const [data, setData] = useState(null);
@@ -34,9 +32,9 @@ export default function MyReservations() {
         <tbody>
           {data.reservations.map((r) => (
             <tr key={r.id}>
-              <td>{r.parkingId}</td><td>{r.slotCode}</td><td>{r.licensePlate}</td>
+              <td>{r.parkingId}</td><td>{r.slotCode}</td><td>{formatPlate(r.licensePlate)}</td>
               <td>{new Date(r.startTime).toLocaleString('vi-VN')} – {r.endTime ? new Date(r.endTime).toLocaleTimeString('vi-VN') : ''}</td>
-              <td>{new Date(r.expireTime).toLocaleTimeString('vi-VN')}</td><td>{STATUS_VI[r.status] ?? r.status}</td>
+              <td>{new Date(r.expireTime).toLocaleTimeString('vi-VN')}</td><td>{RESERVATION_LABEL[r.status] ?? r.status}</td>
               <td>{r.qrToken && <QrCode value={r.qrToken} />}</td>
               <td>{r.status === 'ACTIVE' && <button className="link" onClick={() => cancel(r)}>Huỷ</button>}</td>
             </tr>
