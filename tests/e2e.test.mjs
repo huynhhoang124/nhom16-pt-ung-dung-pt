@@ -181,7 +181,10 @@ test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lạ
     assert.equal((await node('A', `/api/slots/${slot}/enter`, { method: 'POST', body: {} })).status, 200);
     exitLater('A', slot);   // nghiệp vụ không bị chặn
     await sleep(1500);
-    assert.ok(Number(sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL')) >= 1);
+    // 1 nút: tin nằm chờ trong outbox. Có cụm (--profile ha): relay chuyển sang rabbitmq-2/3 nên KHÔNG được ứ lại.
+    const cluster = compose('ps -q rabbitmq-2') !== '';
+    if (!cluster) assert.ok(Number(sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL')) >= 1);
+    else await until('outbox gửi hết qua nút khác khi rabbitmq còn tắt', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 30_000);
   } finally {
     compose('start rabbitmq');
   }
@@ -194,7 +197,8 @@ test('TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùn
   const net = (...a) => sh(`node scripts/net.mjs ${a.join(' ')}`);
   const slot = await freeSlot('B');
   const key = randomUUID();
-  const body = { slotCode: slot, licensePlate: '30A-474.74' };
+  const lp = plate();
+  const body = { slotCode: slot, licensePlate: lp };
   try {
     net('B', 'latency', 3500);
     const slow = await agg('/api/parkings/B/reservations', { method: 'POST', token: tok.user1, key, body });
@@ -205,6 +209,6 @@ test('TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùn
   await sleep(4000);   // yêu cầu chậm vẫn tới bãi B và được xử lý
   const again = await agg('/api/parkings/B/reservations', { method: 'POST', token: tok.user1, key, body });
   assert.ok([200, 201].includes(again.status), String(again.status));
-  assert.equal(sql('db-b', `SELECT count(*) FROM reservations WHERE license_plate='30A47474'`), '1');
+  assert.equal(sql('db-b', `SELECT count(*) FROM reservations WHERE license_plate='${lp.replace(/[^0-9A-Z]/g, '')}'`), '1');
   cancelLater('B', again.body.id);
 });

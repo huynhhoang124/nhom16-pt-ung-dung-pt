@@ -11,8 +11,11 @@ services:
     ports: ["8474:8474"]          # API điều khiển
     depends_on: [parking-b]
   aggregator:
-    environment:
+    environment: &chaos-nodes
       NODES: >-
         [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875,"publicUrl":"http://localhost:8001"},
          {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://toxiproxy:18002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002"},
          {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội","lat":21.0287,"lng":105.8524,"publicUrl":"http://localhost:8003"}]
+  # bật kèm --profile ha: bản 2 cũng phải đi qua toxiproxy, không thì 2 bản ghi đè địa chỉ bãi B của nhau trong DB chung
+  aggregator-2:
+    environment: *chaos-nodes

@@ -18,8 +18,9 @@ const reset = async () => {
   for (const t of (await call(`/proxies/${proxy}/toxics`)) ?? []) await call(`/proxies/${proxy}/toxics/${t.name}`, 'DELETE');
   await call(`/proxies/${proxy}`, 'POST', { enabled: true });
 };
-const toxic = (type, attributes, toxicity = 1) =>
-  Promise.all(['upstream', 'downstream'].map((stream) =>
+// latency chỉ đặt chiều trả về (downstream): đặt cả 2 chiều thì "1500" thành ~3 s mỗi request, vượt timeout 2 s.
+const toxic = (type, attributes, toxicity = 1, streams = ['upstream', 'downstream']) =>
+  Promise.all(streams.map((stream) =>
     call(`/proxies/${proxy}/toxics`, 'POST', { name: `${type}_${stream}`, type, stream, toxicity, attributes })));
 
 try {
@@ -29,7 +30,7 @@ try {
     }
   } else if (cmd === 'reset') { await reset(); console.log(`${proxy}: mạng bình thường`); }
   else if (cmd === 'down') { await call(`/proxies/${proxy}`, 'POST', { enabled: false }); console.log(`${proxy}: đã cắt mạng`); }
-  else if (cmd === 'latency') { await reset(); await toxic('latency', { latency: Number(arg ?? 1500), jitter: 100 }); console.log(`${proxy}: chậm ${arg ?? 1500} ms`); }
+  else if (cmd === 'latency') { await reset(); await toxic('latency', { latency: Number(arg ?? 1500), jitter: 100 }, 1, ['downstream']); console.log(`${proxy}: chậm ${arg ?? 1500} ms`); }
   else if (cmd === 'loss') { await reset(); await toxic('timeout', { timeout: 1000 }, Number(arg ?? 30) / 100); console.log(`${proxy}: ${arg ?? 30}% kết nối bị treo rồi cắt`); }
   else { console.log('Lệnh: latency <ms> | down | loss <phần trăm> | reset'); process.exit(1); }
 } catch (e) {
