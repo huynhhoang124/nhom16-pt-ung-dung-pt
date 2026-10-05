@@ -38,7 +38,7 @@ node --test tests/e2e.test.mjs                      # 9 test trên Docker; tự 
 ## Kiến trúc
 ```
 Trình duyệt ── Aggregator ── DB Aggregator
-                  │  ▲ RabbitMQ (parking.events → aggregator.slot-updates)
+                  │  ▲ RabbitMQ (parking.events → aggregator.slot-updates.<bản>)
                   ▼  │
    Parking Node A/B/C ── DB A / DB B / DB C (mỗi bãi 1 DB riêng; parking_events = outbox)
 ```

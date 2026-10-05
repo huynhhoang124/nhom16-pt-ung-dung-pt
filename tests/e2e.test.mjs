@@ -160,11 +160,11 @@ test('TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật
     const slot = await freeSlot('A');
     assert.equal((await node('A', `/api/slots/${slot}/enter`, { method: 'POST', body: {} })).status, 200);
     exitLater('A', slot);   // bãi vẫn chạy
-    await until('tin vào queue', () => Number(compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(/aggregator\.slot-updates\s+(\d+)/)?.[1]) > 0, 20_000);
+    await until('tin vào queue', () => Number(compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(/aggregator\.slot-updates\.1\s+(\d+)/)?.[1]) > 0, 20_000);
   } finally {
     compose('start aggregator');
   }
-  await until('queue rỗng', () => compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(/aggregator\.slot-updates\s+(\d+)/)?.[1] === '0', 60_000);
+  await until('queue rỗng', () => compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(/aggregator\.slot-updates\.1\s+(\d+)/)?.[1] === '0', 60_000);
   await until('3 bãi ONLINE', async () => (await Promise.all(['A', 'B', 'C'].map(statusOf))).every((s) => s === 'ONLINE'));
 });
 
