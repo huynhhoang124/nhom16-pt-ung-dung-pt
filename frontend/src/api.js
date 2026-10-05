@@ -99,7 +99,8 @@ export const formatPlate = (p) => (p ?? '—')
 export const toast = (text, kind = 'info') => window.dispatchEvent(new CustomEvent('toast', { detail: { text, kind } }));
 
 // Realtime: Aggregator đẩy SLOT_UPDATED / NODE_STATUS. Gộp các tin dồn dập rồi tải lại từ API (nguồn sự thật).
-export const socket = io();
+// auth là hàm: mỗi lần (re)connect lấy token mới nhất (NV-08: nhận thông báo riêng của mình)
+export const socket = io({ auth: (cb) => cb({ token: session.get()?.token }) });
 
 export function useLive(events, reload, ms = 300) {
   const ref = useRef(reload);

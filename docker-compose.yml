@@ -67,6 +67,12 @@ services:
     ports: ["8000:8000"]
     depends_on: { db-agg: { condition: service_healthy } }
 
+  # NV-08: dịch vụ thông báo (nghe parking.events, gửi user.notifications); tắt thì hệ thống vẫn chạy
+  notification:
+    build: ./notification-service
+    environment: { RABBITMQ_URL: amqp://parking:parking@rabbitmq }
+    depends_on: { rabbitmq: { condition: service_healthy } }
+
   frontend:
     build: ./frontend
     ports: ["3000:80"]

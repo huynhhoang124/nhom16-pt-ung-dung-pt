@@ -20,11 +20,12 @@ const { Server } = aggReq('socket.io');
 const { makeApp: makeNodeApp } = require('../parking-node/src/app');
 const { init: initNode } = require('../parking-node/src/db');
 const { makeRelay } = require('../parking-node/src/relay');
-const { expireDue, activateDue } = require('../parking-node/src/slots');
+const { expireDue, activateDue, warnExpiring } = require('../parking-node/src/slots');
 const { makeRegistry } = require('../aggregator-service/src/nodes');
 const { applyEvent, reconcile } = require('../aggregator-service/src/events');
 const { makeAuth, seedUsers } = require('../aggregator-service/src/auth');
 const { makeApp } = require('../aggregator-service/src/routes');
+const { makeRules } = require('../notification-service/src/rules');
 
 const KEY = 'dev';
 // PT-05: cặp khoá RS256 tạo mới mỗi lần chạy -> nhân viên gọi thẳng node được như bản Docker
@@ -58,7 +59,7 @@ const listen = (handler, port) => new Promise((ok) => {
     await listen(makeNodeApp({ pool: p, parkingId: id, internalKey: KEY, jwtPublicKey: publicKey }), port);
     const relay = makeRelay(p, async (_key, payload) => { onEvent(payload); return true; });
     setInterval(() => relay().catch(() => {}), 300);
-    setInterval(() => expireDue(p, id).then(() => activateDue(p, id)).catch(() => {}), 30_000);
+    setInterval(() => expireDue(p, id).then(() => activateDue(p, id)).then(() => warnExpiring(p, id)).catch(() => {}), 30_000);
   }
 
   const aggPool = await pool();
@@ -72,10 +73,16 @@ const listen = (handler, port) => new Promise((ok) => {
     reg.add({ ...row, lat, lng, public_url: `http://localhost:${port}` });
   }
   const cache = new Map();
-  const server = await listen(makeApp({ pool: aggPool, reg, cache, auth: makeAuth('dev-secret', { privateKey, publicKey }) }), 8000);
+  const auth = makeAuth('dev-secret', { privateKey, publicKey });
+  const server = await listen(makeApp({ pool: aggPool, reg, cache, auth }), 8000);
   const io = new Server(server);
+  io.use((socket, next) => { const u = auth.verify(socket.handshake.auth?.token); if (u) socket.join(`user:${u.sub}`); next(); });
+  const rules = makeRules();   // thay cho notification-service + RabbitMQ
   const push = (e) => io.emit('SLOT_UPDATED', e);
-  onEvent = (e) => { if (applyEvent(cache, e)) push(e); };
+  onEvent = (e) => {
+    if (applyEvent(cache, e)) push(e);
+    for (const n of rules(e)) (n.to === '*' ? io : io.to(`user:${n.to}`)).emit('NOTIFICATION', n);
+  };
   const check = () => reg.check((n) => {
     io.emit('NODE_STATUS', { parkingId: n.id, status: n.status });
     if (n.status === 'ONLINE') reconcile(reg, cache, n, push).catch(() => {});

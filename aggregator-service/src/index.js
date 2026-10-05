@@ -45,6 +45,15 @@ async function main() {
   const app = makeApp({ pool, reg, cache, auth });
   const server = http.createServer(app);
   const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS
+  // NV-08: socket có token hợp lệ thì vào phòng "user:<id>" để nhận thông báo riêng; không có vẫn nhận realtime chung.
+  io.use((socket, next) => {
+    const u = auth.verify(socket.handshake.auth?.token);
+    if (u) socket.join(`user:${u.sub}`);
+    next();
+  });
+  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (n) => {
+    (n.to === '*' ? io : io.to(`user:${n.to}`)).emit('NOTIFICATION', n);
+  }, log, { exchange: 'user.notifications', queue: `aggregator.notifications.${env('INSTANCE_ID', '1')}`, pattern: '#' });
 
   const push = (e) => io.emit('SLOT_UPDATED', e);
   startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e) => {

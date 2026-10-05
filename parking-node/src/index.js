@@ -2,7 +2,7 @@ const { Pool } = require('pg');
 const { init } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
-const { expireDue, activateDue } = require('./slots');
+const { expireDue, activateDue, warnExpiring } = require('./slots');
 const { log } = require('./log');
 
 const env = (k, d) => process.env[k] ?? d;
@@ -35,6 +35,7 @@ async function main() {
   const minutes = Number(env('RESERVATION_MINUTES', 15));
   setInterval(() => expireDue(pool, parkingId)
     .then(() => activateDue(pool, parkingId, minutes))
+    .then(() => warnExpiring(pool, parkingId))
     .catch((e) => log.error('expire/activate lỗi', { error: e.message })), 30000);
 }
 

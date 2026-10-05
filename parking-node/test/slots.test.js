@@ -46,7 +46,10 @@ test('đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện', async ()
   assert.equal(r.body.slot_code, 'A01');
   assert.deepEqual(await slot(pool, 'A01'), { status: 'RESERVED', version: 1 });
   const ev = await one(pool, 'SELECT payload FROM parking_events');
-  assert.deepEqual(ev.payload, { event: 'SLOT_UPDATED', type: 'RESERVED', parkingId: 'A', slot: 'A01', status: 'RESERVED', version: 1 });
+  assert.deepEqual(ev.payload, {
+    event: 'SLOT_UPDATED', type: 'RESERVED', parkingId: 'A', slot: 'A01', status: 'RESERVED', version: 1,
+    available: 4, total: 5, userId: 'u1', reservationId: r.body.id,   // NV-08: số chỗ trống + người nhận thông báo
+  });
 });
 
 test('TC08 gửi lại cùng requestId: trả bản cũ, vẫn 1 reservation, không thêm sự kiện', async () => {
@@ -351,4 +354,15 @@ test('UX-02 thống kê: lượt xe, doanh thu đã trả, TG gửi TB, lượt 
   assert.equal(st.byHour[8], 1);
   assert.equal(st.byHour.reduce((a, b) => a + b), 2);
   assert.equal((await s.stats(pool, new Date('2020-01-01'), new Date('2020-02-01'))).sessions, 0);
+});
+
+test('NV-08 warnExpiring: báo 1 lần khi lượt đang giữ chỗ sắp hết hạn; không đổi version slot', async () => {
+  const pool = await makePool();
+  const r = await s.reserve(pool, P, req('w1'));
+  assert.equal(await s.warnExpiring(pool, P), 0);                         // còn 15 phút
+  await pool.query(`UPDATE reservations SET expire_time = now() + interval '3 minutes' WHERE id=$1`, [r.body.id]);
+  assert.equal(await s.warnExpiring(pool, P), 1);
+  assert.equal(await s.warnExpiring(pool, P), 0);                         // không báo lặp
+  const ev = (await one(pool, `SELECT payload FROM parking_events ORDER BY id DESC LIMIT 1`)).payload;
+  assert.deepEqual([ev.type, ev.userId, ev.reservationId, ev.version], ['RESERVATION_EXPIRING', 'u1', r.body.id, 1]);
 });

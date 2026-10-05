@@ -69,7 +69,10 @@ function makeAuth(secret, { privateKey, publicKey } = {}) {
     next();
   };
 
-  return { login, register, changePassword, need, limiter: makeLimiter() };
+  // Kiểm token (dùng cho Socket.IO). Trả payload hoặc null.
+  const verify = (token) => { try { return jwt.verify(token ?? '', verifyKey, { algorithms: [algorithm] }); } catch { return null; } };
+
+  return { login, register, changePassword, need, verify, limiter: makeLimiter() };
 }
 
 module.exports = { makeAuth, seedUsers };

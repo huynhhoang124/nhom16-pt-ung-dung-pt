@@ -1,0 +1,13 @@
+{
+  "name": "notification-service",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NV-08: nhận sự kiện bãi từ RabbitMQ, soạn thông báo cho người dùng",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "dependencies": {
+    "amqplib": "^2.2.0"
+  }
+}

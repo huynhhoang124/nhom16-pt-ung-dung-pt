@@ -25,11 +25,16 @@ async function tx(pool, fn) {
   }
 }
 
-function emit(c, parkingId, type, slotCode, status, version, plate) {
+// Ghi sự kiện vào outbox. Kèm số chỗ trống hiện tại của bãi (để báo "sắp đầy") và `extra`
+// (userId, reservationId... để dịch vụ thông báo biết gửi cho ai). Chỉ THÊM trường, không đổi trường cũ.
+async function emit(c, parkingId, type, slotCode, status, version, plate, extra = {}) {
+  const occ = (await c.query(
+    `SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available, count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total
+     FROM parking_slots`)).rows[0];
   return c.query(
     `INSERT INTO parking_events(event_type, slot_code, license_plate, payload) VALUES ($1,$2,$3,$4)`,
     [type, slotCode, plate ?? null,
-     { event: 'SLOT_UPDATED', type, parkingId, slot: slotCode, status, version: Number(version), requestId: requestId() }]);
+     { event: 'SLOT_UPDATED', type, parkingId, slot: slotCode, status, version: Number(version), ...occ, ...extra, requestId: requestId() }]);
 }
 
 const findByRequest = (pool, requestId) =>
@@ -71,7 +76,7 @@ async function reserve(pool, parkingId, { requestId, userId, slotCode, licensePl
         `INSERT INTO reservations(request_id, user_id, slot_id, license_plate, start_time, end_time, expire_time)
          VALUES ($1,$2,$3,$4, $5::timestamptz, $5::timestamptz + make_interval(mins => $6), $5::timestamptz + make_interval(mins => $7)) RETURNING *`,
         [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes]);
-      if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', slot.version, licensePlate);
+      if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', slot.version, licensePlate, { userId, reservationId: r.rows[0].id });
       return { code: 201, body: { ...r.rows[0], slot_code: slotCode } };
     });
     // 409 có thể do chính request trùng của mình vừa giữ slot: chờ khoá xong thì slot đã RESERVED.
@@ -142,7 +147,8 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
         session = { ...(await getSession(c, open.id)), breakdown: q.breakdown };
       }
     }
-    await emit(c, parkingId, type, slotCode, to, s.rows[0].version, plate);
+    await emit(c, parkingId, type, slotCode, to, s.rows[0].version, plate,
+      session?.userId ? { userId: session.userId, reservationId: session.reservationId } : {});
     return { code: 200, body: { slot: slotCode, status: to, version: Number(s.rows[0].version), ...(session && { session }) } };
   }).catch((e) => {
     // ux_open_session_plate: biển số này đang có xe trong bãi
@@ -212,7 +218,7 @@ function endReservation(pool, parkingId, id, status, userId) {
   return tx(pool, async (c) => {
     const r = await c.query(
       `UPDATE reservations SET status=$2 WHERE id=$1 AND status='ACTIVE'
-       AND ($3::text IS NULL OR user_id=$3) RETURNING slot_id, license_plate, start_time`, [id, status, userId ?? null]);
+       AND ($3::text IS NULL OR user_id=$3) RETURNING slot_id, license_plate, start_time, user_id`, [id, status, userId ?? null]);
     if (!r.rowCount) throw new Abort(404, { error: 'RESERVATION_NOT_ACTIVE' });
     // Chỉ trả slot khi lượt này là lượt đang giữ chỗ (không còn lượt ACTIVE nào giờ sớm hơn).
     // Huỷ lượt đặt cho ngày mai không được nhả chỗ đang giữ cho người khác hôm nay.
@@ -222,7 +228,8 @@ function endReservation(pool, parkingId, id, status, userId) {
          AND NOT EXISTS (SELECT 1 FROM reservations WHERE slot_id=$1 AND status='ACTIVE' AND start_time < $2)
        RETURNING slot_code, version`, [r.rows[0].slot_id, r.rows[0].start_time]);
     if (s.rowCount) {
-      await emit(c, parkingId, status, s.rows[0].slot_code, 'AVAILABLE', s.rows[0].version, r.rows[0].license_plate);
+      await emit(c, parkingId, status, s.rows[0].slot_code, 'AVAILABLE', s.rows[0].version, r.rows[0].license_plate,
+        { userId: r.rows[0].user_id, reservationId: id });
     }
     return { code: 200, body: { id, status } };
   });
@@ -268,7 +275,7 @@ async function activateDue(pool, parkingId, minutes = 15) {
         `UPDATE parking_slots SET status='RESERVED', version=version+1, updated_at=now()
          WHERE id=$1 AND status='AVAILABLE' RETURNING slot_code, version`, [slotId])).rows[0];
       if (!s) return null;
-      await emit(c, parkingId, type, s.slot_code, 'RESERVED', s.version, r.license_plate);
+      await emit(c, parkingId, type, s.slot_code, 'RESERVED', s.version, r.license_plate, { userId: r.user_id, reservationId: id });
       return s.slot_code;
     }).catch((e) => { if (e.code === '23P01') return null; throw e; });   // slot mới vừa bị đặt chồng giờ: thử vòng sau
     if (out) done++;
@@ -318,6 +325,21 @@ function hideSlot(pool, parkingId, slotCode) {
     await emit(c, parkingId, 'SLOT_HIDDEN', s.slot_code, 'HIDDEN', s.version);
     return { code: 200, body: { slotCode: s.slot_code, status: 'HIDDEN', version: Number(s.version) } };
   });
+}
+
+// NV-08: lượt đang giữ chỗ còn <= `minutes` phút là hết hạn mà xe chưa đến -> phát RESERVATION_EXPIRING một lần
+// (warned_at). Sự kiện giữ nguyên version slot nên cache Aggregator bỏ qua, chỉ dịch vụ thông báo dùng.
+async function warnExpiring(pool, parkingId, minutes = 5) {
+  const due = (await pool.query(
+    `UPDATE reservations r SET warned_at = now() FROM parking_slots s
+     WHERE s.id = r.slot_id AND r.status='ACTIVE' AND r.warned_at IS NULL AND s.status='RESERVED'
+       AND r.expire_time <= now() + make_interval(mins => $1)
+     RETURNING r.id, r.user_id, r.license_plate, r.expire_time, s.slot_code, s.version`, [minutes])).rows;
+  for (const r of due) {
+    await emit(pool, parkingId, 'RESERVATION_EXPIRING', r.slot_code, 'RESERVED', r.version, r.license_plate,
+      { userId: r.user_id, reservationId: r.id, expireTime: r.expire_time });
+  }
+  return due.length;
 }
 
 // Lịch đặt của một slot trong một ngày (giờ VN), không kèm thông tin cá nhân.
@@ -373,4 +395,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { reserve, moveSlot, endReservation, expireDue, activateDue, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };
+module.exports = { reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };

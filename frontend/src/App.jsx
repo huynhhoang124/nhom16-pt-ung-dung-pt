@@ -26,11 +26,15 @@ export default function App() {
     socket.on('connect', on);
     socket.on('disconnect', off);
     socket.on('NODE_STATUS', node);
+    const notify = (n) => toast(n.text, n.kind);   // NV-08
+    socket.on('NOTIFICATION', notify);
     setLive(socket.connected);   // socket có thể đã nối xong trước khi gắn listener
-    return () => { socket.off('connect', on); socket.off('disconnect', off); socket.off('NODE_STATUS', node); };
+    return () => { socket.off('connect', on); socket.off('disconnect', off); socket.off('NODE_STATUS', node); socket.off('NOTIFICATION', notify); };
   }, []);
 
-  if (!user) return <><Login onLogin={(s) => { session.set(s); setUser(s.user); }} /><Toaster /></>;
+  // đổi người dùng -> nối lại socket để gửi token mới (vào đúng phòng thông báo)
+  const relogin = () => { socket.disconnect(); socket.connect(); };
+  if (!user) return <><Login onLogin={(s) => { session.set(s); setUser(s.user); relogin(); }} /><Toaster /></>;
 
   const tabs = [
     ['dashboard', 'Tổng quan'],
@@ -54,7 +58,7 @@ export default function App() {
           <span className={live ? 'dot on' : 'dot'} title={live ? 'Đang nhận realtime' : 'Mất kết nối realtime'} />
           {user.username} · {ROLE_LABEL[user.role]}{user.parkingId ? ` bãi ${user.parkingId}` : ''}
           <button className="link" onClick={() => setView({ page: 'account' })}>Tài khoản</button>
-          <button className="link" onClick={() => { session.set(null); setUser(null); setView({ page: 'dashboard' }); }}>Đăng xuất</button>
+          <button className="link" onClick={() => { session.set(null); setUser(null); relogin(); setView({ page: 'dashboard' }); }}>Đăng xuất</button>
         </span>
       </header>
       <main>

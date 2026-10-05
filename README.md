@@ -29,6 +29,7 @@ cd frontend && npm run dev         # http://localhost:3000
 ```bash
 cd parking-node && npm install && npm test          # PGlite, không cần Docker
 cd ../aggregator-service && npm install && npm test # cần npm install ở parking-node trước
+cd ../notification-service && npm install && npm test   # quy tắc thông báo (NV-08)
 cd ../frontend && npm install && cd ..
 node --test tests/e2e.test.mjs                      # 9 test trên Docker; tự dọn dữ liệu sau khi chạy
 ```

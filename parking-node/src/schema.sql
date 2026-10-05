@@ -33,6 +33,8 @@ CREATE TABLE IF NOT EXISTS reservations (
 );
 
 -- Vừa là lịch sử sự kiện, vừa là OUTBOX: ghi cùng giao dịch với dữ liệu, relay gửi lên broker sau
+ALTER TABLE reservations ADD COLUMN IF NOT EXISTS warned_at TIMESTAMPTZ;   -- NV-08: đã báo sắp hết giờ giữ chỗ
+
 CREATE TABLE IF NOT EXISTS parking_events (
   id            BIGSERIAL PRIMARY KEY,
   event_type    VARCHAR(20) NOT NULL,

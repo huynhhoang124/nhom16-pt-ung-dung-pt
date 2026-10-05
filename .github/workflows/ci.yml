@@ -16,6 +16,8 @@ jobs:
         working-directory: parking-node
       - run: npm ci && npm test
         working-directory: aggregator-service
+      - run: npm ci && npm test
+        working-directory: notification-service
 
   frontend:
     runs-on: ubuntu-latest
