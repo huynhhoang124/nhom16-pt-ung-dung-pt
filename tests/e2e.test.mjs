@@ -221,3 +221,41 @@ test('TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùn
   assert.equal(sql('db-b', `SELECT count(*) FROM reservations WHERE license_plate='${lp.replace(/[^0-9A-Z]/g, '')}'`), '1');
   cancelLater('B', again.body.id);
 });
+
+
+
+test('TC46: Staff thao tác khi Aggregator sập', T, async () => {
+  const slot = await freeSlot('A');
+
+  const call = (action) => http(
+    `http://localhost:8001/api/slots/${slot}/${action}`,
+    {
+      method: 'POST',
+      headers: { authorization: `Bearer ${tok.staffA}` },
+      body: {}
+    }
+  );
+
+  try {
+    compose('stop aggregator aggregator-2');
+
+    const enter = await call('enter');
+    assert.equal(enter.status, 200);
+
+    const exit = await call('exit');
+    assert.equal(exit.status, 200);
+
+    console.log('TC46 - Enter:', enter.status, 'Exit:', exit.status);
+  } finally {
+    compose('start aggregator aggregator-2');
+  }
+
+  await until('Aggregator đồng bộ slot', async () => {
+    const r = await agg('/api/parkings/A');
+    const slots = Array.isArray(r.body) ? r.body : r.body?.slots;
+    return r.status === 200 &&
+      slots?.some(s => (s.slotCode ?? s.slot) === slot && s.status === 'AVAILABLE');
+  });
+
+  console.log('TC46 - PASS:', slot, 'AVAILABLE');
+});
