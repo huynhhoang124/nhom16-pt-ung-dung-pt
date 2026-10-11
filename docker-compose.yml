@@ -112,6 +112,8 @@ services:
     image: nhom16/aggregator
     environment: { <<: *agg-env, INSTANCE_ID: "2" }
     networks: { default: { aliases: [aggregator] } }
+    ports:
+    - "8010:8000"
     depends_on: { db-agg: { condition: service_healthy } }
 
   # NV-08: dịch vụ thông báo (nghe parking.events, gửi user.notifications); tắt thì hệ thống vẫn chạy

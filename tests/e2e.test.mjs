@@ -221,3 +221,123 @@ test('TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùn
   assert.equal(sql('db-b', `SELECT count(*) FROM reservations WHERE license_plate='${lp.replace(/[^0-9A-Z]/g, '')}'`), '1');
   cancelLater('B', again.body.id);
 });
+
+
+test('TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200',
+  { ...T, skip: !process.env.HA },
+  async () => {
+    try {
+      // Dừng Aggregator 1
+      compose('stop aggregator');
+
+      // Chờ Nginx chuyển request sang Aggregator 2
+      await until('Nginx phục vụ qua Aggregator 2',
+        async () => {
+          const r = await http('http://localhost:3000/api/parkings');
+          return r.status === 200;
+        }, 20_000);
+
+      // Gửi 20 request và kiểm tra từng response
+      const statuses = [];
+
+      for (let i = 0; i < 20; i++) {
+        const r = await http('http://localhost:3000/api/parkings');
+        statuses.push(r.status);
+
+        assert.equal(r.status, 200,
+          `Request ${i + 1}/20 trả ${r.status}, mong đợi 200`);
+      }
+
+      console.log('TC43 - HTTP statuses:', statuses);
+      assert.equal(statuses.length, 20);
+
+    } finally {
+      // Luôn bật lại Aggregator 1
+      compose('start aggregator');
+
+      await until('Aggregator 1 phục hồi',
+        async () => (await http(AGG + '/api/parkings')).status === 200,
+        60_000);
+    }
+  }
+);
+
+
+test('TC44 HA: xe vào qua Aggregator 1, socket Aggregator 2 nhận SLOT_UPDATED',
+  { ...T, skip: !process.env.HA },
+  async () => {
+    const AGG2 = 'http://localhost:8010';
+
+    // Lấy slot trống và version hiện tại
+    const available = await node('A', '/api/slots/available');
+    assert.equal(available.status, 200);
+
+    const { slotCode: slot, version: v0 } = available.body[0];
+
+    // Socket kết nối trực tiếp Aggregator 2
+    const socket = io(AGG2, {
+      transports: ['websocket'],
+      reconnection: false,
+      timeout: 10000
+    });
+
+    const events = [];
+    let entered = false;
+
+    try {
+      socket.on('SLOT_UPDATED', (event) => {
+        if (
+          event.slot === slot &&
+          event.version > v0
+        ) {
+          events.push(event);
+        }
+      });
+
+      // Đảm bảo socket đã kết nối trước khi cho xe vào
+      await until('Socket Aggregator 2 kết nối',
+        () => socket.connected, 10_000);
+
+      // Cho xe vào thông qua Aggregator 1
+      const enter = await agg(
+        `/api/parkings/A/slots/${slot}/enter`,
+        {
+          method: 'POST',
+          token: tok.staffA,
+          body: {}
+        }
+      );
+
+      assert.equal(enter.status, 200);
+      assert.equal(enter.body.status, 'OCCUPIED');
+      entered = true;
+
+      // Đợi Aggregator 2 nhận sự kiện
+      await until('Aggregator 2 nhận SLOT_UPDATED',
+        () => events.some(e => e.status === 'OCCUPIED'),
+        15_000);
+
+      console.log('TC44 - Aggregator 2 nhận:', events);
+
+      assert.ok(
+        events.some(e => e.status === 'OCCUPIED'),
+        'Aggregator 2 không nhận được SLOT_UPDATED'
+      );
+
+    } finally {
+      // Đóng socket để test không bị treo
+      socket.close();
+
+      // Trả slot về AVAILABLE nếu đã cho xe vào
+      if (entered) {
+        const exit = await node(
+          'A',
+          `/api/slots/${slot}/exit`,
+          { method: 'POST', body: { cash: true } }
+        );
+
+        assert.equal(exit.status, 200);
+      }
+    }
+  }
+);
