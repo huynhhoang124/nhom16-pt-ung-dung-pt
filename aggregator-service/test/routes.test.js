@@ -47,6 +47,7 @@ test('đặt chỗ qua Aggregator: cần đăng nhập + Idempotency-Key; retry 
 test('TC04 bãi OFFLINE: ghi bị từ chối ngay (503); chi tiết bãi trả bản cache cũ có stale=true', async (t) => {
   const { agg, tokens } = await system(t);
   applyEvent(agg.cache, { parkingId: 'B', slot: 'B01', status: 'OCCUPIED', version: 2 });
+  agg.reg.get('B').floors = { B01: 1 };   // bố cục nhớ từ lần đối soát trước
   agg.reg.get('B').status = 'OFFLINE';
 
   const r = await agg.call('/api/parkings/B/reservations', { method: 'POST', token: tokens.user1, key: 'k', body: reserveBody('B02') });
@@ -54,7 +55,7 @@ test('TC04 bãi OFFLINE: ghi bị từ chối ngay (503); chi tiết bãi trả 
 
   const detail = await agg.call('/api/parkings/B');
   assert.equal(detail.body.stale, true);
-  assert.deepEqual(detail.body.slots, [{ slotCode: 'B01', status: 'OCCUPIED', version: 2 }]);
+  assert.deepEqual(detail.body.slots, [{ slotCode: 'B01', status: 'OCCUPIED', version: 2, floor: 1 }]);
 
   const online = await agg.call('/api/parkings/A');
   assert.equal(online.body.stale, false);

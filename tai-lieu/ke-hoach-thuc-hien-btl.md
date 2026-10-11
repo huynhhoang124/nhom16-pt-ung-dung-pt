@@ -88,7 +88,7 @@ Code đã viết xong. Việc của mỗi người là **hiểu kỹ phần mìn
 |---|---|---|---|---|
 | **Vũ Văn Hùng** | Parking Node + DB | `parking-node/src/slots.js`, `schema.sql`, `app.js` | Thiết kế DB, xử lý tương tranh | Vì sao 20 người cùng đặt chỉ 1 người được? Vì sao không cần 2PC? |
 | **Hoàng Văn Huynh** | Aggregator + điều phối | `aggregator-service/src/nodes.js`, `routes.js`, `auth.js` | Kiến trúc, định tuyến, tra cứu song song, bảo mật | Health check báo nhầm thì sao? Timeout khi đặt chỗ thì sao? |
-| **Nguyễn Văn Luân** | Frontend | `frontend/src/pages/*.jsx`, `api.js` | Giao diện, realtime phía người dùng | Màn hình cập nhật realtime thế nào? Nút "Thử lại" an toàn vì sao? |
+| **Nguyễn Văn Luân** | Frontend | `frontend/src/pages/*.jsx`, `api.js`, `ui.jsx` | Giao diện, realtime phía người dùng, nhật ký sự kiện | Màn hình cập nhật realtime thế nào? Nút "Thử lại" an toàn vì sao? Vì sao bãi mất kết nối vẫn xem được sơ đồ nhưng không đặt được? |
 | **Trịnh Kim Loan** | Outbox + RabbitMQ + đối soát | `parking-node/src/relay.js`, `aggregator-service/src/events.js` | Luồng sự kiện, chống mất/trùng tin | Broker tắt thì tin đi đâu? Tin đến sai thứ tự thì sao? |
 | **Đỗ Huyền Trang** | Docker, demo, test e2e | `docker-compose.yml`, `tests/e2e.test.mjs`, `scripts/barrier.mjs` | Triển khai, kiểm thử | Chứng minh dữ liệu phân tán thật thế nào? Demo tắt bãi B ra sao? |
 | **Phạm Sỹ Hiệp** | Báo cáo + slide + sửa HLD | `tai-lieu/*` | Ghép báo cáo, mở đầu/kết luận, sửa HLD theo checklist mục 7 | CAP của hệ thống? Hạn chế và hướng mở rộng? |
@@ -113,16 +113,16 @@ Phần code còn lại (Claude làm, tuần 1): README hướng dẫn chạy, c�
 
 ## 6. Kịch bản demo khi bảo vệ (khoảng 10 phút)
 
-Chuẩn bị: `docker compose up -d`, mở 2 cửa sổ trình duyệt (một `user1`, một `staff-a`), một terminal, và sẵn trang RabbitMQ.
+Chuẩn bị: `docker compose up -d`, mở 2 tab trình duyệt (một `user1` ở http://localhost:3000/?demo, một `staff-a`; mỗi tab giữ phiên đăng nhập riêng), một terminal, và sẵn trang RabbitMQ. Tab `staff-a` mở sẵn "Nhật ký sự kiện" để chỉ đường đi của từng sự kiện.
 
 | # | Làm | Nói |
 |---|---|---|
 | 1 | Mở trang Tổng quan: 3 bãi, số chỗ trống | "3 bãi, 3 DB riêng, người dùng chỉ thấy một hệ thống: tính trong suốt." |
-| 2 | `staff-a` bấm slot A01 → "Xe vào"; cửa sổ `user1` đổi ngay | "Node ghi DB và sự kiện cùng một giao dịch (outbox), relay đẩy lên RabbitMQ, Aggregator đẩy WebSocket." |
+| 2 | `staff-a` bấm slot A01 → "Xe vào"; cửa sổ `user1` đổi ngay (ô A01 nháy sáng), Nhật ký có dòng "Xe vào A01" kèm version | "Node ghi DB và sự kiện cùng một giao dịch (outbox), relay đẩy lên RabbitMQ, Aggregator đẩy WebSocket." |
 | 3 | Terminal: `node scripts/barrier.mjs A A02 enter` | "Barrier gọi thẳng node của bãi, xe vào/ra không phụ thuộc trung tâm." |
-| 4 | `user1` đặt B05. Mở tab thứ hai cũng đặt B05 | "Chỉ một người thành công: UPDATE có điều kiện trong một DB, không cần 2PC." |
+| 4 | `user1` vào bãi B, chọn B05, nhập biển số, bấm "Thử tranh chấp (5 yêu cầu cùng lúc)": báo 1 thành công, 4 bị từ chối; Nhật ký chỉ có 1 dòng "Đặt chỗ B05" | "Năm người bấm cùng lúc, chỉ một thắng: UPDATE có điều kiện trong một DB, không cần 2PC. Bốn yêu cầu thua không ghi gì nên không sinh sự kiện." |
 | 5 | Terminal: `docker compose stop parking-b`, chờ khoảng 15 giây | "Health check 3 lần lỗi thì OFFLINE. A, C vẫn chạy; đặt chỗ ở B bị từ chối (chọn nhất quán); xem B vẫn thấy dữ liệu cũ có cảnh báo (chọn sẵn sàng): CAP khi có phân vùng mạng." |
-| 6 | `docker compose start parking-b` | "B ONLINE lại, Aggregator đối soát, dữ liệu khớp." |
+| 6 | `docker compose start parking-b` | "B ONLINE lại (Nhật ký: "Bãi hoạt động lại"), Aggregator đối soát với DB bãi; thay đổi nào bị lỡ hiện thành dòng "Đối soát"." |
 | 7 | `docker compose stop aggregator`, chạy barrier ở bãi A, xem queue trên RabbitMQ có tin, rồi `start aggregator` | "Trung tâm tắt thì bãi vẫn chạy; sự kiện chờ trong queue, bật lại thì xử lý hết." |
 | 8 *(nếu còn giờ)* | `docker compose --profile extra up -d`; `admin` thêm bãi D (`http://parking-d:8004`) | "Thêm bãi mới không sửa code: tính mở rộng." |
 

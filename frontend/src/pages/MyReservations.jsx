@@ -1,42 +1,49 @@
-import { useCallback, useEffect, useState } from 'react';
-import { api, message, useLive } from '../api.js';
+import { useState } from 'react';
+import { api, message, RES_LABEL, useBusy, useData, useNow } from '../api.js';
+import { Expiry, href, Pending, Plate, Stale, Updated } from '../ui.jsx';
+
+const load = () => api('/api/me/reservations');
 
 export default function MyReservations() {
-  const [data, setData] = useState(null);
-  const [note, setNote] = useState('');
+  const { data, error, at, reload } = useData(load, { events: ['SLOT_UPDATED', 'NODE_STATUS'] });
+  const [note, setNote] = useState(null);
+  const [busy, run] = useBusy();
+  const now = useNow();
 
-  const load = useCallback(async () => {
-    const r = await api('/api/me/reservations');
-    if (r.ok) setData(r.data);
-  }, []);
-  useEffect(() => { load(); }, [load]);
-  useLive(['SLOT_UPDATED', 'NODE_STATUS'], load);
+  const cancel = (r) => confirm(`Huỷ đặt chỗ ${r.slotCode} ở bãi ${r.parkingId}?`) && run(async () => {
+    const res = await api(`/api/parkings/${encodeURIComponent(r.parkingId)}/reservations/${r.id}`, { method: 'DELETE' });
+    setNote(res.ok ? { kind: 'ok', text: `Đã huỷ đặt chỗ ${r.slotCode} ở bãi ${r.parkingId}.` } : { kind: 'error', text: message(res.data) });
+    reload();
+  });
 
-  async function cancel(r) {
-    const res = await api(`/api/parkings/${r.parkingId}/reservations/${r.id}`, { method: 'DELETE' });
-    setNote(res.ok ? 'Đã huỷ.' : message(res.data));
-    load();
-  }
+  if (!data) return <Pending error={error} retry={reload} />;
+  // Đang giữ chỗ lên đầu, sau đó mới nhất trước.
+  const rows = [...data.reservations].sort((a, b) =>
+    (b.status === 'ACTIVE') - (a.status === 'ACTIVE') || new Date(b.startTime) - new Date(a.startTime));
 
-  if (!data) return <p className="muted">Đang tải…</p>;
   return (
     <>
-      <h2>Đặt chỗ của tôi</h2>
+      <Stale error={error} />
+      <div className="title-row"><h1>Đặt chỗ của tôi</h1><Updated at={at} /></div>
       {data.unavailable.length > 0 && (
-        <p className="banner">Không lấy được dữ liệu từ bãi {data.unavailable.join(', ')} (đang mất kết nối). Danh sách dưới đây có thể thiếu.</p>
+        <p className="banner">Bãi {data.unavailable.join(', ')} đang mất kết nối nên chưa lấy được đặt chỗ ở đó. Danh sách dưới đây có thể còn thiếu.</p>
       )}
-      {note && <p className="muted">{note}</p>}
+      {note && <p className={note.kind === 'ok' ? 'success' : 'error'} aria-live="polite">{note.text}</p>}
       <div className="scroll"><table>
-        <thead><tr><th>Bãi</th><th>Slot</th><th>Biển số</th><th>Hết hạn</th><th>Trạng thái</th><th /></tr></thead>
+        <thead><tr><th>Bãi</th><th>Slot</th><th>Biển số</th><th>Giữ chỗ đến</th><th>Trạng thái</th><th><span className="sr">Thao tác</span></th></tr></thead>
         <tbody>
-          {data.reservations.map((r) => (
+          {rows.map((r) => (
             <tr key={r.id}>
-              <td>{r.parkingId}</td><td>{r.slotCode}</td><td>{r.licensePlate}</td>
-              <td>{new Date(r.expireTime).toLocaleString('vi-VN')}</td><td>{r.status}</td>
-              <td>{r.status === 'ACTIVE' && <button className="link" onClick={() => cancel(r)}>Huỷ</button>}</td>
+              <td><a href={href.parking(r.parkingId)}>Bãi {r.parkingId}</a></td>
+              <td><b>{r.slotCode}</b></td><td><Plate>{r.licensePlate}</Plate></td>
+              <td><Expiry t={r.expireTime} active={r.status === 'ACTIVE'} now={now} /></td>
+              <td><span className={`state ${r.status}`}>{RES_LABEL[r.status] ?? r.status}</span></td>
+              <td>{r.status === 'ACTIVE' && <button className="link" disabled={busy} onClick={() => cancel(r)}>Huỷ đặt chỗ</button>}</td>
             </tr>
           ))}
-          {!data.reservations.length && <tr><td colSpan="6" className="muted">Bạn chưa đặt chỗ nào.</td></tr>}
+          {!rows.length && (
+            <tr><td colSpan="6" className="muted">Bạn chưa đặt chỗ nào. Vào <a href={href.dashboard}>Tổng quan</a>, chọn một bãi rồi chọn chỗ còn đèn xanh.</td></tr>
+          )}
         </tbody>
       </table></div>
     </>

@@ -15,13 +15,17 @@ docker compose up -d --build
 - RabbitMQ: http://localhost:15672 (parking / parking) · Aggregator: :8000 · Parking A/B/C: :8001/:8002/:8003
 - Thêm bãi D để demo mở rộng: `docker compose --profile extra up -d`, rồi đăng ký trên trang Quản trị với `http://parking-d:8004`.
 - Giả lập barrier gọi thẳng bãi: `node scripts/barrier.mjs A A05 enter`
+- Mỗi tab trình duyệt giữ một phiên đăng nhập riêng: mở `user1` và `staff-a` ở hai tab cùng lúc được.
+- Demo tranh chấp: đăng nhập `user1` ở http://localhost:3000/?demo#/bai/B, chọn slot trống, nhập biển số, bấm "Thử tranh chấp" (5 yêu cầu song song, chỉ 1 thành công).
+- Nhật ký sự kiện realtime (tab "Nhật ký sự kiện", tài khoản nhân viên hoặc `admin`): xem từng sự kiện slot, version, bãi mất kết nối, đối soát.
 - Dừng: `docker compose down` (giữ dữ liệu) · `docker compose down -v` (xoá sạch)
+- Đặt chỗ báo "Máy chủ gặp lỗi" và log parking node có `column "end_time"`: volume DB còn từ bản schema cũ. Chạy `docker compose down -v` rồi `up` lại (mất dữ liệu demo cũ).
 
 ## Kiểm thử
 ```bash
 cd parking-node && npm install && npm test          # 14 test, PGlite, không cần Docker
 cd ../aggregator-service && npm install && npm test # 11 test (cần npm install ở parking-node trước)
-cd ../frontend && npm install && cd ..
+cd ../frontend && npm install && npm run build && cd ..   # build giao diện để bắt lỗi cú pháp/import
 node --test tests/e2e.test.mjs                      # 9 test trên Docker; tự dọn dữ liệu sau khi chạy
 ```
 
@@ -41,6 +45,9 @@ Trình duyệt ── Aggregator ── DB Aggregator
 | `aggregator-service/src/nodes.js` | Failure detector (health check, 3 lần lỗi), scatter–gather có timeout, kết quả một phần |
 | `aggregator-service/src/routes.js` | Định tuyến theo shard, CAP (ghi từ chối khi OFFLINE / đọc trả dữ liệu cũ), timeout không rõ kết quả (hai tướng quân), phân quyền |
 | `aggregator-service/src/events.js` | Chống tin trùng/sai thứ tự bằng version, anti-entropy (đối soát), consumer ack thủ công |
+| `frontend/src/pages/ParkingDetail.jsx` | Idempotency-Key giữ nguyên khi "Thử lại" sau timeout (hai tướng quân); bãi OFFLINE vẫn xem được sơ đồ cũ kèm cảnh báo (CAP: đọc chọn sẵn sàng, ghi bị chặn); nút thử tranh chấp (`?demo`) |
+| `frontend/src/api.js` | Realtime: WebSocket chỉ báo "có thay đổi", dữ liệu luôn tải lại từ API (nguồn gốc ở DB bãi); tải bù khi socket nối lại; bỏ phản hồi về muộn |
+| `frontend/src/pages/EventLog.jsx` | Quan sát đường đi outbox → RabbitMQ → Aggregator → WebSocket, sự kiện bãi mất kết nối và đối soát |
 | `tests/e2e.test.mjs` | Chứng minh: cô lập dữ liệu, tranh chấp đồng thời, chịu lỗi node/broker/aggregator |
 
 ## Thư mục tài liệu
