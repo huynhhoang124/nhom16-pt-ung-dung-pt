@@ -18,7 +18,10 @@ function applyEvent(cache, e) {
 // Phép gộp này giao hoán, kết hợp, idempotent => chạy bao nhiêu lần, theo thứ tự nào cũng ra cùng kết quả.
 async function reconcile(reg, cache, n, onApplied) {
   let applied = 0;
-  for (const s of await reg.json(n, '/api/slots')) {
+  const slots = await reg.json(n, '/api/slots');
+  // Tầng là định nghĩa tĩnh của slot (không đổi theo version): nhớ riêng để bãi OFFLINE vẫn vẽ đúng sơ đồ.
+  n.floors = Object.fromEntries(slots.map((s) => [s.slotCode, s.floor]));
+  for (const s of slots) {
     const e = { event: 'SLOT_UPDATED', type: 'RECONCILE', parkingId: n.id, slot: s.slotCode, status: s.status, version: s.version };
     if (applyEvent(cache, e)) { applied++; onApplied?.(e); }
   }

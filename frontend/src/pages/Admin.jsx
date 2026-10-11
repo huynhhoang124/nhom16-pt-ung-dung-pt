@@ -1,56 +1,73 @@
-import { useCallback, useEffect, useState } from 'react';
-import { api, message, useLive } from '../api.js';
+import { useState } from 'react';
+import { api, message, useBusy, useData } from '../api.js';
+import { href, NodeBadge, Pending, Stale } from '../ui.jsx';
 
 const EMPTY = { parkingId: '', name: '', apiUrl: '', address: '' };
+const load = () => api('/api/admin/nodes');
 
 export default function Admin() {
-  const [nodes, setNodes] = useState([]);
+  const { data: nodes, error, reload } = useData(load, { events: ['NODE_STATUS'], every: 5000 });
   const [form, setForm] = useState(EMPTY);
-  const [note, setNote] = useState('');
+  const [note, setNote] = useState(null);
+  const [busy, run] = useBusy();
 
-  const load = useCallback(async () => {
-    const r = await api('/api/admin/nodes');
-    if (r.ok) setNodes(r.data);
-  }, []);
-  useEffect(() => { load(); const t = setInterval(load, 5000); return () => clearInterval(t); }, [load]);
-  useLive(['NODE_STATUS'], load, 0);
-
-  async function add(e) {
+  const add = (e) => {
     e.preventDefault();
-    const r = await api('/api/admin/nodes', { method: 'POST', body: form });
-    setNote(r.ok ? `Đã thêm bãi ${r.data.parkingId}. Health check sẽ đưa bãi lên ONLINE nếu node chạy.` : message(r.data));
-    if (r.ok) setForm(EMPTY);
-    load();
-  }
+    run(async () => {
+      const r = await api('/api/admin/nodes', { method: 'POST', body: { ...form, address: form.address || undefined } });
+      setNote(r.ok
+        ? { kind: 'ok', text: `Đã thêm bãi ${r.data.parkingId}. Nếu node đang chạy, bãi sẽ chuyển sang Hoạt động sau lần kiểm tra kế tiếp.` }
+        : { kind: 'error', text: message(r.data) });
+      if (r.ok) setForm(EMPTY);
+      reload();
+    });
+  };
 
-  const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
+  const set = (k, fix = (v) => v) => (e) => setForm({ ...form, [k]: fix(e.target.value) });
+
   return (
     <>
-      <h2>Giám sát các Parking Node</h2>
-      <p className="muted">Health check mỗi 5 giây; đánh dấu OFFLINE sau 3 lần lỗi liên tiếp.</p>
-      <div className="scroll"><table>
-        <thead><tr><th>Bãi</th><th>Tên</th><th>Địa chỉ API</th><th>Trạng thái</th><th>Lỗi liên tiếp</th><th>Lần cuối thấy</th></tr></thead>
-        <tbody>
-          {nodes.map((n) => (
-            <tr key={n.parkingId}>
-              <td>{n.parkingId}</td><td>{n.name}</td><td className="mono">{n.url}</td>
-              <td><span className={`badge ${n.status}`}>{n.status}</span></td>
-              <td>{n.fails}</td>
-              <td>{n.lastSeen ? new Date(n.lastSeen).toLocaleTimeString('vi-VN') : '–'}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table></div>
+      <h1>Giám sát các bãi</h1>
+      <p className="muted">Aggregator kiểm tra từng bãi mỗi 5 giây và đánh dấu mất kết nối sau 3 lần lỗi liên tiếp.</p>
+      {nodes ? (
+        <>
+          <Stale error={error} />
+          <div className="scroll"><table>
+            <thead><tr><th>Bãi</th><th>Tên</th><th>Địa chỉ API</th><th>Trạng thái</th><th>Lỗi liên tiếp</th><th>Phản hồi gần nhất</th></tr></thead>
+            <tbody>
+              {nodes.map((n) => (
+                <tr key={n.parkingId}>
+                  <td><a href={href.parking(n.parkingId)}><b>{n.parkingId}</b></a></td><td>{n.name}</td><td>{n.url}</td>
+                  <td><NodeBadge status={n.status} /></td>
+                  <td className={n.fails ? 'error' : ''}>{n.fails}</td>
+                  <td>{n.lastSeen ? new Date(n.lastSeen).toLocaleTimeString('vi-VN') : '–'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table></div>
+        </>
+      ) : <Pending error={error} retry={reload} />}
 
-      <h3>Thêm bãi mới</h3>
-      <form className="card form" onSubmit={add}>
-        <input placeholder="Mã bãi (vd D)" value={form.parkingId} onChange={set('parkingId')} required />
-        <input placeholder="Tên bãi" value={form.name} onChange={set('name')} required />
-        <input placeholder="API URL (vd http://parking-d:8004)" value={form.apiUrl} onChange={set('apiUrl')} required />
-        <input placeholder="Địa chỉ" value={form.address} onChange={set('address')} />
-        <button className="primary">Thêm</button>
+      <h2>Thêm bãi mới</h2>
+      <p className="muted">Bãi mới được đăng ký ngay mà không cần sửa code hay khởi động lại Aggregator.</p>
+      <form className="add-node" onSubmit={add}>
+        <label className="field">Mã bãi
+          <input placeholder="D" value={form.parkingId} onChange={set('parkingId', (v) => v.toUpperCase())}
+            required maxLength={8} pattern="[A-Z0-9]{1,8}" title="1–8 chữ cái in hoa hoặc chữ số" />
+        </label>
+        <label className="field">Tên bãi
+          <input placeholder="Bãi D – Thanh Xuân" value={form.name} onChange={set('name')} required />
+        </label>
+        <label className="field">Địa chỉ API của node
+          <input type="url" placeholder="http://parking-d:8004" value={form.apiUrl} onChange={set('apiUrl')}
+            required pattern="https?://.+" title="Bắt đầu bằng http:// hoặc https://" />
+        </label>
+        <label className="field">Địa chỉ bãi (không bắt buộc)
+          <input placeholder="Nguyễn Trãi, Thanh Xuân" value={form.address} onChange={set('address')} />
+        </label>
+        <button className="primary" disabled={busy}>{busy ? 'Đang thêm…' : 'Thêm bãi'}</button>
       </form>
-      {note && <p className="muted">{note}</p>}
+      {note && <p className={note.kind === 'ok' ? 'success' : 'error'} aria-live="polite">{note.text}</p>}
     </>
   );
 }

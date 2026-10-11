@@ -46,7 +46,8 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
       try { return res.json({ ...info(n), stale: false, slots: await reg.json(n, '/api/slots') }); }
       catch { /* rơi xuống bản cache */ }
     }
-    res.json({ ...info(n), status: 'OFFLINE', stale: true, slots: slotsFromCache(cache, n.id) });
+    const slots = slotsFromCache(cache, n.id).map((s) => (n.floors?.[s.slotCode] == null ? s : { ...s, floor: n.floors[s.slotCode] }));
+    res.json({ ...info(n), status: 'OFFLINE', stale: true, slots });
   });
 
   // Nghiệp vụ 2: đặt chỗ. Idempotency-Key bắt buộc; ghép với userId để key của người này không đụng người khác.

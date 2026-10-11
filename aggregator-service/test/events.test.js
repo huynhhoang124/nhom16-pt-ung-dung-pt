@@ -40,5 +40,6 @@ test('TC13 đối soát: cache cũ được cập nhật theo DB bãi; chạy l�
   assert.equal(await reconcile(agg.reg, agg.cache, n, (e) => pushed.push(e.slot)), 3);
   assert.deepEqual(agg.cache.get('A:A01'), { status: 'OCCUPIED', version: 5 });
   assert.deepEqual(pushed, ['A01', 'A02', 'A03']);
+  assert.deepEqual(n.floors, { A01: 1, A02: 1, A03: 1 });   // nhớ bố cục tầng để vẽ sơ đồ khi bãi OFFLINE
   assert.equal(await reconcile(agg.reg, agg.cache, n), 0);
 });

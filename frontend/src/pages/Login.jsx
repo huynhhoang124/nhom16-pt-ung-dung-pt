@@ -1,40 +1,53 @@
 import { useState } from 'react';
-import { api, message } from '../api.js';
+import { api, message, useBusy } from '../api.js';
 
-const DEMO = [['user1', 'Người dùng'], ['staff-a', 'Nhân viên bãi A'], ['admin', 'Quản trị']];
+const DEMO = [
+  ['user1', 'Người dùng'], ['user2', 'Người dùng'],
+  ['staff-a', 'Nhân viên bãi A'], ['staff-b', 'Nhân viên bãi B'], ['staff-c', 'Nhân viên bãi C'],
+  ['admin', 'Quản trị'],
+];
 
 export default function Login({ onLogin }) {
   const [form, setForm] = useState({ username: 'user1', password: '123456' });
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [busy, run] = useBusy();
 
-  async function submit(e) {
+  const submit = (e) => {
     e.preventDefault();
-    setBusy(true);
-    const r = await api('/api/auth/login', { method: 'POST', body: form });
-    setBusy(false);
-    r.ok ? onLogin(r.data) : setError(message(r.data));
-  }
+    run(async () => {
+      const r = await api('/api/auth/login', { method: 'POST', body: form });
+      r.ok ? onLogin(r.data) : setError(message(r.data));
+    });
+  };
 
   return (
     <div className="login">
-      <form className="card" onSubmit={submit}>
+      <div className="login-intro">
+        <span className="sign big" aria-hidden="true">P</span>
         <h1>Smart Parking</h1>
-        <p className="muted">Hệ thống bãi đỗ xe liên kết nhiều bãi – Nhóm 16</p>
-        <label>Tên đăng nhập
-          <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} autoFocus />
+        <p>Tìm chỗ trống và đặt chỗ ở mọi bãi trong hệ thống bằng một tài khoản. Nhóm 16, môn Ứng dụng phân tán.</p>
+      </div>
+      <form className="login-form" onSubmit={submit}>
+        <h2>Đăng nhập</h2>
+        <label className="field">Tên đăng nhập
+          <input value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} autoComplete="username" autoFocus required />
         </label>
-        <label>Mật khẩu
-          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} />
+        <label className="field">Mật khẩu
+          <input type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} autoComplete="current-password" required />
         </label>
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
         <button className="primary" disabled={busy}>{busy ? 'Đang đăng nhập…' : 'Đăng nhập'}</button>
-        <p className="muted small">
-          Tài khoản demo (mật khẩu 123456):{' '}
-          {DEMO.map(([u, label]) => (
-            <button type="button" key={u} className="link" onClick={() => setForm({ username: u, password: '123456' })}>{u} ({label})</button>
-          ))}
-        </p>
+        <div className="demo">
+          <p className="muted small">Tài khoản demo, mật khẩu 123456. Bấm để điền sẵn:</p>
+          <ul>
+            {DEMO.map(([u, label]) => (
+              <li key={u}>
+                <button type="button" className="link" onClick={() => { setForm({ username: u, password: '123456' }); setError(''); }}>{u}</button>
+                <span className="muted small">{label}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
       </form>
     </div>
   );
