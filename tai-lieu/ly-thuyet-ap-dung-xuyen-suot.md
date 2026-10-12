@@ -242,6 +242,14 @@ Hiện **không** nhân bản (shared-nothing). Nếu bị hỏi, biết sẽ đ
 
 **RabbitMQ *(chung)*:** Producer → Exchange (direct/fanout/topic) → Queue → Consumer; ack thủ công; queue `durable` + message `persistent`; publisher confirms; prefetch (QoS); dead-letter exchange.
 
+**Circuit Breaker & Safe Retry (Aggregator):**
+- **Circuit Breaker:** Lỗi từ request thực tế (mất kết nối, timeout hoặc HTTP 5xx) được tính vào số lỗi liên tiếp. Khi đạt `failThreshold` (mặc định là 3), Aggregator chuyển node sang `OFFLINE` để tránh tiếp tục gửi yêu cầu đến node đang lỗi. Các yêu cầu tiếp theo không gọi đến node đã `OFFLINE`, giúp tránh phải chờ timeout không cần thiết. Khi API không thể phục vụ do node lỗi, hệ thống cần trả HTTP `503 Service Unavailable` phù hợp.
+
+- **Safe Retry:** Chỉ thử lại tối đa một lần, có khoảng chờ ngẫu nhiên từ 100–300 ms (*random delay/jitter*) trước khi retry nhằm hạn chế nhiều yêu cầu đồng thời dồn vào node đang lỗi. Tổng thời gian thử lại không vượt quá ngân sách timeout của request.
+
+- **Điều kiện retry:** Chỉ retry các thao tác an toàn hoặc có cơ chế chống thực hiện trùng, gồm `GET` và các thao tác đặt chỗ/thanh toán có `Idempotency-Key`.
+
+- **Không retry thao tác xe vào/ra:** Đây là các thao tác có thể làm thay đổi trạng thái thực tế. Retry tự động có thể khiến nghiệp vụ bị thực hiện nhiều lần nếu không có cơ chế chống trùng phù hợp.
 ---
 
 ## 5. Từ quyết định thiết kế → lý thuyết (để giải thích "vì sao")
