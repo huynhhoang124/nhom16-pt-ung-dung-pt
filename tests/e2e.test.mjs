@@ -343,8 +343,9 @@ test('TC44 HA: xe vào qua Aggregator 1, socket Aggregator 2 nhận SLOT_UPDATED
 );
 
 
-test('TC46: Staff thao tác khi Aggregator sập', T, async () => {
-  const slot = await freeSlot('A');
+// PT-05 cần cặp khoá RS256 (node scripts/gen-keys.mjs); không có khoá thì node không tự kiểm được token -> 401.
+test('TC46: Staff thao tác khi Aggregator sập', { ...T, skip: !process.env.JWT_PUBLIC_KEY_B64 }, async () => {
+  let slot;
 
   const call = (action) => http(
     `http://localhost:8001/api/slots/${slot}/${action}`,
@@ -357,6 +358,9 @@ test('TC46: Staff thao tác khi Aggregator sập', T, async () => {
 
   try {
     compose('stop aggregator aggregator-2');
+    // Lấy slot SAU khi dừng: kết nối keep-alive tới node A để rỗi trong lúc dừng container đã bị server đóng,
+    // POST không tự thử lại nên dùng lại kết nối đó sẽ ra status 0. GET mở lại kết nối mới ngay trước enter/exit.
+    slot = await freeSlot('A');
 
     const enter = await call('enter');
     assert.equal(enter.status, 200);
