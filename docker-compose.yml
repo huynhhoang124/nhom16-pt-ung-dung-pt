@@ -41,12 +41,16 @@ services:
     <<: *rabbit
     profiles: [ha]
     hostname: rabbitmq-2
-    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro]
+    entrypoint: ["/bin/sh", "/join-wait.sh"]      # lần đầu chờ nút gốc rồi mới vào cụm (xem rabbitmq/join-wait.sh)
+    command: ["rabbitmq-server"]
+    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro]
   rabbitmq-3:
     <<: *rabbit
     profiles: [ha]
     hostname: rabbitmq-3
-    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro]
+    entrypoint: ["/bin/sh", "/join-wait.sh"]      # lần đầu chờ nút gốc rồi mới vào cụm (xem rabbitmq/join-wait.sh)
+    command: ["rabbitmq-server"]
+    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro]
 
   db-a:                                           # PT-02: bản chính của bãi A, có user 'replicator' cho bản sao
     <<: *pg

@@ -51,6 +51,10 @@ Sửa thêm khi gộp: TC46 bỏ qua khi chưa có khoá RS256, lấy slot sau k
 10. Runbook failover: `docker compose up -d parking-a` bật lại db-a cũ (do `depends_on`) -> phải dùng `--no-deps`. Node A trỏ DB qua
    biến `A_DATABASE_URL` trong `.env` thay vì sửa compose. Đã tập trọn runbook: OFFLINE sau ~19 s, ONLINE lại ~12 s sau bước 3.
 11. Test e2e chập chờn: biển số cố định (lần chạy hỏng trước để xe trong bãi), sự kiện test trước đến muộn, kết nối keep-alive cũ trên CI.
+12. **Cụm RabbitMQ tách khi dựng mới** (`down -v` rồi `--profile ha up`): nút 2/3 khởi động lúc nút gốc chưa lên thì tự lập
+   cụm riêng (`classic_config` là danh sách cố định nên `discovery_retry_limit` không giữ lại được). Tắt `rabbitmq` lúc đó
+   thì quorum queue chỉ còn 1/3 bản -> outbox ứ. Sửa: `rabbitmq/join-wait.sh` cho nút mới chờ nút gốc mở cổng 5672;
+   nút đã có dữ liệu chạy ngay (tránh lỗi 4). 5/5 lần dựng mới đủ 3 nút; e2e `HA=1` đạt ngay lượt đầu.
 
 ## 4. Việc tiếp theo (ưu tiên)
 1. Việc của người không code (đánh dấu **[Tên]** trong `danh-sach-viec-nho.md`): ghi số liệu test tải/mạng xấu/hỗn loạn chạy lâu hơn (Trang, `MINUTES=10 node tests/chaos.mjs`),
