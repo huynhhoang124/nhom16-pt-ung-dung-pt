@@ -178,5 +178,3 @@ Các ảnh là screenshot nguyên trạng của giao diện trong lần chạy n
 - [ ] Chạy lại TC47 với `CHAOS=1`; bỏ biến và reset mạng sau test.
 - [ ] Kiểm tra proxy B không còn toxic, A/B/C ONLINE.
 - [ ] Kiểm tra Git chỉ thêm báo cáo này và ảnh `pt-06-4*.jpg`; không có `.env`, token hoặc file code.
-
-Commit đề xuất: **`PT-06.4: ghi kết quả 4 kịch bản mạng xấu`**.
