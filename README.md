@@ -35,7 +35,9 @@ cd parking-node && npm install && npm test          # PGlite, không cần Docke
 cd ../aggregator-service && npm install && npm test # cần npm install ở parking-node trước
 cd ../notification-service && npm install && npm test   # quy tắc thông báo (NV-08)
 cd ../frontend && npm install && cd ..
-node --test tests/e2e.test.mjs                      # 9 test trên Docker; tự dọn dữ liệu sau khi chạy
+node --test tests/e2e.test.mjs                      # test trên Docker; tự dọn dữ liệu sau khi chạy
+#   TC46 cần khoá RS256: node scripts/gen-keys.mjs rồi docker compose up -d
+#   TC43, TC44 cần --profile ha: HA=1 node --test tests/e2e.test.mjs
 docker run --rm -i --network nhom16-parking_default -e BASE=http://aggregator:8000 grafana/k6 run - < tests/load/k6.js   # GS-05 test tải
 node tests/load/check-invariants.mjs                # GS-05/06 kiểm bất biến (không đặt trùng, outbox về 0...)
 node tests/chaos.mjs                                # GS-06 vừa tải vừa tắt/bật ngẫu nhiên (cần --profile ha)

@@ -250,6 +250,7 @@ Hiện **không** nhân bản (shared-nothing). Nếu bị hỏi, biết sẽ đ
 - **Điều kiện retry:** Chỉ retry các thao tác an toàn hoặc có cơ chế chống thực hiện trùng, gồm `GET` và các thao tác đặt chỗ/thanh toán có `Idempotency-Key`.
 
 - **Không retry thao tác xe vào/ra:** Đây là các thao tác có thể làm thay đổi trạng thái thực tế. Retry tự động có thể khiến nghiệp vụ bị thực hiện nhiều lần nếu không có cơ chế chống trùng phù hợp.
+
 ---
 
 ## 5. Từ quyết định thiết kế → lý thuyết (để giải thích "vì sao")

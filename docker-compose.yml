@@ -106,7 +106,8 @@ services:
     depends_on: { db-agg: { condition: service_healthy } }
 
   # --- PT-01: bản Aggregator thứ hai (docker compose --profile ha up -d). Cùng tên mạng "aggregator" nên nginx
-  #     tự chia tải giữa 2 bản; không mở cổng ra ngoài. Demo: docker compose stop aggregator -> web vẫn chạy. ---
+  #     tự chia tải giữa 2 bản. Cổng 8010 chỉ để test TC44 nối socket thẳng vào bản 2.
+  #     Demo: docker compose stop aggregator -> web vẫn chạy. ---
   aggregator-2:
     profiles: [ha]
     image: nhom16/aggregator

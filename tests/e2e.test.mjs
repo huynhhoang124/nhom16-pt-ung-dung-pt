@@ -348,7 +348,7 @@ test('TC46: Staff thao tác khi Aggregator sập', { ...T, skip: !process.env.JW
   let slot;
 
   const call = (action) => http(
-    `http://localhost:8001/api/slots/${slot}/${action}`,
+    `${NODE.A}/api/slots/${slot}/${action}`,
     {
       method: 'POST',
       headers: { authorization: `Bearer ${tok.staffA}` },
@@ -368,17 +368,21 @@ test('TC46: Staff thao tác khi Aggregator sập', { ...T, skip: !process.env.JW
     const exit = await call('exit');
     assert.equal(exit.status, 200);
 
-    console.log('TC46 - Enter:', enter.status, 'Exit:', exit.status);
+    // Cho xe vào lần nữa và để xe trong bãi: bật lại Aggregator phải thấy OCCUPIED. Nếu để slot về AVAILABLE
+    // thì trạng thái giống hệt lúc trước khi tắt, test qua cả khi Aggregator không cập nhật gì.
+    const again = await call('enter');
+    assert.equal(again.status, 200);
+    exitLater('A', slot);
+
+    console.log('TC46 - Enter:', enter.status, 'Exit:', exit.status, 'Enter lại:', again.status);
   } finally {
     compose('start aggregator aggregator-2');
   }
 
-  await until('Aggregator đồng bộ slot', async () => {
+  await until('Aggregator thấy slot OCCUPIED giống node A', async () => {
     const r = await agg('/api/parkings/A');
-    const slots = Array.isArray(r.body) ? r.body : r.body?.slots;
-    return r.status === 200 &&
-      slots?.some(s => (s.slotCode ?? s.slot) === slot && s.status === 'AVAILABLE');
+    return r.status === 200 && r.body?.slots?.some((s) => s.slotCode === slot && s.status === 'OCCUPIED');
   });
 
-  console.log('TC46 - PASS:', slot, 'AVAILABLE');
+  console.log('TC46 - PASS:', slot, 'OCCUPIED');
 });
