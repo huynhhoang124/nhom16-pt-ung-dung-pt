@@ -1,7 +1,7 @@
 // Kiểm thử toàn hệ thống trên Docker (Postgres thật, RabbitMQ thật, mạng thật).
 //   docker compose up -d --build
 //   node --test tests/e2e.test.mjs
-// Test có tắt/bật container (parking-b, aggregator, rabbitmq) và tự bật lại khi xong.
+// Test có tắt/bật container (parking-b, aggregator, rabbitmq, notification) và tự bật lại khi xong.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
@@ -138,6 +138,81 @@ test('TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> Rabb
   assert.equal((await agg(`/api/parkings/A/slots/${slot}/enter`, { method: 'POST', token: tok.staffA, body: {} })).status, 200);
   exitLater('A', slot);
   assert.equal((await agg(`/api/parkings/B/slots/B01/enter`, { method: 'POST', token: tok.staffA, body: {} })).status, 403);
+});
+
+test('TC37 notification dừng: vẫn đặt chỗ được, bật lại nhận đúng thông báo tồn', T, async () => {
+  // Payload NOTIFICATION chưa có reservationId: dùng slot riêng, không tái sử dụng,
+  // để thông báo cũ của cùng user/bãi không thể làm test pass nhầm.
+  const slot = `T37-${randomUUID().replaceAll('-', '').slice(0, 6).toUpperCase()}`;
+  const key = randomUUID();
+  let slotCreated = false;
+  let rid;
+  let socket;
+  const queueState = () => compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages_ready consumers')
+    .match(/^notification\.events\s+(\d+)\s+(\d+)\s*$/m);
+  try {
+    // Queue phải được khai báo/bind trước khi dừng consumer, kể cả trên môi trường mới.
+    compose('start notification');
+    await until('notification có consumer', () => Number(queueState()?.[2]) > 0, 20_000);
+    compose('stop notification');
+    await until('notification không còn consumer', () => queueState()?.[2] === '0', 10_000);
+
+    const token = await login('user1');
+    assert.ok(token, 'user1 đăng nhập thành công');
+    const added = await node('A', '/api/slots', { method: 'POST', body: { slotCode: slot, floor: 1, type: 'CAR' } });
+    slotCreated = added.status === 201;
+    assert.equal(added.status, 201, 'tạo slot riêng cho TC37');
+    const r = await agg('/api/parkings/A/reservations', {
+      method: 'POST', token, key, body: { slotCode: slot, licensePlate: plate() },
+    });
+    rid = r.body?.id;
+    // Tạo mới trả 201; 200 trong tài liệu là mô tả thành công / replay cùng key.
+    assert.equal(r.status, 201, 'đặt chỗ vẫn thành công khi notification dừng');
+    assert.ok(rid);
+    assert.equal(r.body.slot_code, slot);
+    assert.equal(r.body.status, 'ACTIVE');
+    const userId = r.body.user_id;
+    assert.ok(userId);
+    assert.equal(r.body.request_id, `${userId}:${key}`, 'đúng request vừa tạo');
+    assert.equal(userId, JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).sub, 'đúng user1');
+    await until('sự kiện RESERVED của đúng reservation đã rời outbox', () => sql('db-a',
+      `SELECT count(*) FROM parking_events WHERE event_type='RESERVED' AND payload->>'reservationId'='${rid}' AND published_at IS NOT NULL`) === '1', 20_000);
+    await until('tin tồn trong notification.events khi không có consumer', () => {
+      const q = queueState();
+      return Number(q?.[1]) > 0 && q?.[2] === '0';
+    }, 10_000);
+
+    let received;
+    socket = io(AGG, { transports: ['websocket'], auth: { token }, autoConnect: false });
+    socket.on('NOTIFICATION', (n) => {
+      if (n.to === userId && n.parkingId === 'A' && n.kind === 'ok'
+          && n.text === `Đã giữ chỗ ${slot} (bãi A) cho bạn.`) received = n;
+    });
+    socket.connect();
+    await until('socket user1 kết nối', () => socket.connected, 10_000);
+    assert.equal(received, undefined, 'chưa gửi thông báo khi notification còn dừng');
+    compose('start notification');
+    await until('NOTIFICATION của đặt chỗ TC37 từ queue tồn', () => received, 30_000);
+    assert.equal(received.to, userId);
+  } finally {
+    // Dọn độc lập: lỗi bật service / huỷ đặt chỗ không được ngăn đóng socket / gỡ slot.
+    try {
+      compose('start notification');
+    } finally {
+      socket?.close();
+      try {
+        if (rid) {
+          const cancelled = await node('A', `/api/reservations/${rid}`, { method: 'DELETE' });
+          assert.equal(cancelled.status, 200, 'huỷ đặt chỗ TC37');
+        }
+      } finally {
+        if (slotCreated) {
+          const hidden = await node('A', `/api/slots/${slot}`, { method: 'DELETE' });
+          assert.equal(hidden.status, 200, 'gỡ slot TC37 qua API (giữ lịch sử)');
+        }
+      }
+    }
+  }
 });
 
 test('TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B trả dữ liệu cũ; bật lại thì ONLINE', T, async () => {
