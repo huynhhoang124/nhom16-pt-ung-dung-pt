@@ -5,7 +5,7 @@
 ## Môi trường và trạng thái trước thử
 
 - Ngày 14/10/2026, đặt chỗ mẫu lúc **14:55:01 UTC+7** (07:55:01 UTC).
-- Thực hiện ban đầu trên `codex/hung-gs-03-7` từ `dev` đã fetch và cập nhật fast-forward; chuyển thay đổi sang `hung` để push theo yêu cầu người dùng. Git sạch trước khi bắt đầu; không có AGENTS.md trong repository.
+- Nhánh lưu kết quả: `hung-gs-03-7`, tách riêng thay đổi GS-03.7 từ `dev` đã fetch và cập nhật fast-forward theo yêu cầu người dùng. Git sạch trước khi bắt đầu; không có AGENTS.md trong repository.
 - Commit nền: **`1519d4c8b924c9376265db8880a1bfc5f439b900`**. Lần thử dùng commit này **cộng thay đổi chưa commit** ở `frontend/nginx.conf` và `parking-node/src/relay.js`; không tuyên bố commit nền nguyên trạng đã có đủ 5 log.
 - PT-06.4 đã được người dùng kiểm tra; `origin/codex/hung-pt-06-4` có commit `166a912`, cập nhật PR #10. Không nhập tài liệu PT-06.4 vào nhánh này.
 - Windows/PowerShell, Node.js v24.11.0, Docker Engine 29.1.5, Compose 5.0.1. Một Aggregator, ba node, database và broker dự án đang chạy; RabbitMQ healthy.
