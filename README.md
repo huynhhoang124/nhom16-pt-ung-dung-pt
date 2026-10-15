@@ -67,13 +67,15 @@ Trình duyệt ── Aggregator ── DB Aggregator
 - `tai-lieu/ly-thuyet-ap-dung-xuyen-suot.md` – lý thuyết áp vào 8 kịch bản của đề tài, kèm vấn đáp.
 - `tai-lieu/ap-dung-vao-btl.md` – thiết kế chi tiết (schema, API, test case, dàn báo cáo).
 - `tai-lieu/Nhom16_Mo_hinh_HLD.pdf` – mô hình HLD đã nộp (bản mới nhất).
-- `tai-lieu/Ke_hoach_trien_khai.pdf` – kế hoạch triển khai 33 trang đã nộp.
+- `tai-lieu/Ke_hoach_trien_khai.pdf` – kế hoạch triển khai 33 trang đã nộp (đã cập nhật phân công 6 người).
+- `tai-lieu/mo-hinh-hld.md` – mô hình HLD dạng Markdown đầy đủ, chuẩn hóa thuật ngữ phân tán.
+- `tai-lieu/kiem-thu-cong-qr.md` – checklist và ghi nhận kiểm thử màn hình cổng + quét QR trên điện thoại thật (UX-04.5).
 - `so-do/` – sơ đồ kiến trúc draw.io.
 
-## Cần sửa trong tài liệu đã nộp
-- [ ] Phân công trong kế hoạch đang viết cho 4 người, cần sửa thành 6.
-- [ ] HLD Câu 2 ghi "bốn lớp" nhưng bảng có 6 dòng.
-- [ ] Trang 2 ghi Aggregator "không giữ dữ liệu slot", trang 3 lại có "trạng thái tổng hợp / đối soát". Cần ghi rõ: cache chỉ đọc, nguồn gốc ở DB bãi.
-- [ ] Giao diện nhân viên đi qua Aggregator nên Aggregator sập thì không xác nhận xe vào/ra được (barrier vẫn gọi thẳng node). Ghi là hạn chế.
-- [ ] "Phân mảnh dọc SLOT_DEF/SLOT_STATE" nằm cùng một DB, nên gọi là "tách bảng trong site".
-- [ ] Câu CAP: chỉ phải chọn khi có phân vùng mạng (ghi chọn nhất quán, đọc chọn sẵn sàng).
+## Cần sửa trong tài liệu đã nộp (Đã hoàn thành - TL-01)
+- [x] Phân công trong kế hoạch đang viết cho 4 người, cần sửa thành 6 (đã sửa trang 32 `Ke_hoach_trien_khai.pdf` và `ke-hoach-chi-tiet-ban-hoan-chinh.md`).
+- [x] HLD Câu 2 ghi "bốn lớp" nhưng bảng có 6 dòng (đã hiệu chỉnh khớp 6 thành phần phân tán).
+- [x] Trang 2 ghi Aggregator "không giữ dữ liệu slot", trang 3 lại có "trạng thái tổng hợp / đối soát". Cần ghi rõ: cache chỉ đọc (read-only), nguồn gốc ở DB bãi.
+- [x] Giao diện nhân viên đi qua Aggregator: đã giải quyết dứt điểm bằng tính năng PT-05 (nhân viên xác thực offline và gọi thẳng Parking Node khi Aggregator sập).
+- [x] "Phân mảnh dọc SLOT_DEF/SLOT_STATE" nằm cùng một DB, nên gọi là "tách bảng trong site".
+- [x] Câu CAP: chỉ phải chọn khi có phân vùng mạng (ghi chọn nhất quán C, đọc chọn sẵn sàng A).
