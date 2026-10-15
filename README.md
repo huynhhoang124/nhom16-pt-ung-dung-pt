@@ -16,6 +16,7 @@ docker compose up -d --build
 - RabbitMQ: http://localhost:15672 (parking / parking) · Aggregator: :8000 · Parking A/B/C: :8001/:8002/:8003
 - Thêm bãi D để demo mở rộng: `docker compose --profile extra up -d`, rồi đăng ký trên trang Quản trị với `http://parking-d:8004`.
 - Giả lập barrier gọi thẳng bãi: `node scripts/barrier.mjs A A05 enter 30A-123.45` (đọc khoá từ `.env`)
+- Sinh dữ liệu mẫu trang Thống kê: `node scripts/du-lieu-mau.mjs [số_lượt]` (mặc định 150 lượt xe vào/ra ngẫu nhiên trên cả 3 bãi)
 - Chịu lỗi nâng cao: bỏ dấu `#` ở 2 dòng `A_READ_DATABASE_URL` và `RABBITMQ_URL` trong `.env` (xem `.env.example`), rồi `docker compose --profile ha up -d` thêm bản sao DB bãi A, aggregator-2 và 2 nút RabbitMQ (cụm 3 nút, quorum queue). Thử `docker compose stop aggregator` hoặc `docker compose stop rabbitmq`: hệ thống vẫn chạy
 - Lần đầu sau khi kéo bản này: `docker compose down -v` (schema đặt chỗ đổi, queue đổi sang quorum)
 - Mạng xấu: `docker compose -f docker-compose.yml -f docker-compose.chaos.yml --profile chaos up -d`, rồi `node scripts/net.mjs B latency 3500` / `down` / `loss 30` / `reset`
