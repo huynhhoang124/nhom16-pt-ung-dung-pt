@@ -55,7 +55,7 @@ Xoá dòng `A_DATABASE_URL` trong `.env`, rồi `docker compose --profile ha dow
 
 ## 5. Kết quả tập của nhóm (Thực nghiệm PT-02.10)
 
-> **Người thực hiện:** Trịnh Kim Loan, Vũ Văn Hùng  
+> **Người thực hiện:** Nguyễn Văn Luận  
 > **Công cụ hỗ trợ bấm giờ tự động:** `node scripts/measure-failover.mjs`  
 > **Thời điểm thực nghiệm:** Ngày 15/10/2026
 
