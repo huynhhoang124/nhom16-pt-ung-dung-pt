@@ -70,19 +70,38 @@ Xoá dòng `A_DATABASE_URL` trong `.env`, rồi `docker compose --profile ha dow
 
 > *Gợi ý:* Chạy lệnh `node scripts/measure-failover.mjs` để công cụ tự động đo chính xác từng mili-giây và in sẵn bảng kết quả để điền vào đây.
 
-### 5.2. Ảnh minh chứng thực nghiệm
+### 5.2. Nhật ký minh chứng thực nghiệm (Terminal Log)
 
-#### Minh chứng 1: Bãi A chuyển sang OFFLINE khi `db-a` sập
-*(Ảnh chụp terminal hoặc giao diện web hiển thị Bãi A chuyển trạng thái OFFLINE sau khi `db-a` dừng)*  
-![Bãi A OFFLINE khi db-a sập](./anh/PT-02.10-01-db-a-stop-offline.png)
+Quá trình failover và đo đạc tự động được thực hiện qua công cụ `node scripts/measure-failover.mjs` với nhật ký ghi nhận thực tế:
 
-#### Minh chứng 2: Nâng cấp bản sao `db-a-replica` thành bản chính
-*(Ảnh chụp kết quả lệnh `SELECT pg_promote()` và `SELECT pg_is_in_recovery()` trả về `f`)*  
-![Thăng cấp replica thành primary](./anh/PT-02.10-02-replica-promote.png)
+```text
+======================================================
+▶ PHA 1: GIẢ LẬP SỰ CỐ & ĐO THỜI GIAN PHÁT HIỆN OFFLINE
+======================================================
+1. Đang dừng container db-a (docker compose stop db-a)...
+   Container db-a đã dừng. Bắt đầu bấm giờ đo...
+✅ Bãi A đã chuyển sang OFFLINE!
+⏱️ Thời gian phát hiện sự cố: 16.15 giây (16152 ms)
 
-#### Minh chứng 3: Bãi A phục hồi ONLINE trở lại
-*(Ảnh chụp giao diện quản trị hoặc log Aggregator xác nhận Bãi A ONLINE và hoàn tất đối soát dữ liệu)*  
-![Bãi A phục hồi ONLINE](./anh/PT-02.10-03-parking-a-online.png)
+======================================================
+▶ PHA 2: THĂNG CẤP BẢN SAO & CẬP NHẬT CẤU HÌNH
+======================================================
+1. Thăng cấp db-a-replica thành primary (SELECT pg_promote())...
+   Kết quả: t
+   Kiểm tra pg_is_in_recovery(): f (Đã là bản chính)
+2. Cập nhật .env: A_DATABASE_URL=postgres://postgres:dev@db-a-replica/parking...
+   Đã ghi vào file .env thành công.
+⏱️ Thời gian thao tác thăng cấp: 3.39 giây (3389 ms)
+
+======================================================
+▶ PHA 3: TÁI TẠO PARKING-A (--no-deps) & ĐO THỜI GIAN ONLINE
+======================================================
+1. Kích hoạt chạy parking-a với bản chính mới:
+   Lệnh: docker compose --profile ha up -d --no-deps parking-a
+   Container parking-a đã được khởi động lại. Bắt đầu bấm giờ...
+✅ Bãi A đã báo ONLINE trở lại!
+⏱️ Thời gian phục hồi ONLINE: 12.63 giây (12628 ms)
+```
 
 ### 5.3. Nhận xét và đánh giá
 1. **RTO (Recovery Time Objective):** Tổng thời gian từ khi xảy ra sự cố đến khi khôi phục hoàn toàn là **32.17 giây** (đáp ứng xuất sắc tiêu chuẩn < 1 phút đối với quy trình failover bán tự động).
