@@ -15,6 +15,10 @@ import { execSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+try {
+  process.loadEnvFile(new URL('../.env', import.meta.url));
+} catch {}
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
 
@@ -44,35 +48,45 @@ async function main() {
   console.log('================================================================\n');
 
   console.log('Bước 1: Khởi động môi trường quan sát (Prometheus & Grafana)...');
-  execCmd('docker compose --profile obs up -d');
+  execCmd('docker compose up -d prometheus grafana');
   console.log('✅ Grafana đang chạy tại: http://localhost:3001');
   console.log('   Dashboard: "Nhóm 16 – Bãi đỗ xe phân tán" (xem panel "Sự kiện outbox chưa gửi")\n');
 
-  console.log('Bước 2: Dừng dịch vụ RabbitMQ (docker compose stop rabbitmq)...');
-  execCmd('docker compose stop rabbitmq');
-  console.log('✅ RabbitMQ đã dừng.\n');
+  console.log('Bước 2: Dừng dịch vụ RabbitMQ (docker compose stop rabbitmq rabbitmq-2 rabbitmq-3)...');
+  execCmd('docker compose stop rabbitmq rabbitmq-2 rabbitmq-3');
+  console.log('✅ Cụm RabbitMQ đã dừng hoàn toàn.\n');
 
   console.log('Bước 3: Giả lập barrier cho xe vào bãi độc lập (không phụ thuộc broker)...');
+  const getSlot = async (port) => {
+    try {
+      const r = await fetch(`http://localhost:${port}/api/slots/available`, {
+        headers: { 'x-internal-key': process.env.INTERNAL_KEY || 'dev' },
+      });
+      const data = await r.json();
+      return Array.isArray(data) && data.length > 0 ? data[0].slotCode : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const slotA1 = await getSlot(8001);
+  const slotA2 = (await getSlot(8001)) || 'A12';
+  const slotB1 = await getSlot(8002);
+
   const plates = [
     `30A-${Math.floor(100 + Math.random() * 900)}.${Math.floor(10 + Math.random() * 90)}`,
     `29B-${Math.floor(100 + Math.random() * 900)}.${Math.floor(10 + Math.random() * 90)}`,
     `51C-${Math.floor(100 + Math.random() * 900)}.${Math.floor(10 + Math.random() * 90)}`,
   ];
 
-  try {
-    console.log(`- Cho xe vào bãi A (A01 - biển ${plates[0]})...`);
-    execCmd(`node scripts/barrier.mjs A A01 enter ${plates[0]}`);
-  } catch {}
-
-  try {
-    console.log(`- Cho xe vào bãi A (A02 - biển ${plates[1]})...`);
-    execCmd(`node scripts/barrier.mjs A A02 enter ${plates[1]}`);
-  } catch {}
-
-  try {
-    console.log(`- Cho xe vào bãi B (B01 - biển ${plates[2]})...`);
-    execCmd(`node scripts/barrier.mjs B B01 enter ${plates[2]}`);
-  } catch {}
+  if (slotA1) {
+    console.log(`- Cho xe vào bãi A (slot ${slotA1} - biển ${plates[0]})...`);
+    execCmd(`node scripts/barrier.mjs A ${slotA1} enter ${plates[0]}`);
+  }
+  if (slotB1) {
+    console.log(`- Cho xe vào bãi B (slot ${slotB1} - biển ${plates[1]})...`);
+    execCmd(`node scripts/barrier.mjs B ${slotB1} enter ${plates[1]}`);
+  }
 
   console.log('\n----------------------------------------------------------------');
   console.log('📸 THỜI ĐIỂM 1: KHI RABBITMQ TẮT (OUTBOX TĂNG)');
@@ -88,8 +102,8 @@ async function main() {
   console.log('Đang chờ 5 giây để Prometheus cào số liệu...');
   await sleep(5000);
 
-  console.log('\nBước 4: Bật lại RabbitMQ (docker compose start rabbitmq)...');
-  execCmd('docker compose start rabbitmq');
+  console.log('\nBước 4: Bật lại RabbitMQ (docker compose start rabbitmq rabbitmq-2 rabbitmq-3)...');
+  execCmd('docker compose start rabbitmq rabbitmq-2 rabbitmq-3');
   console.log('✅ RabbitMQ đã được bật lại. Đang chờ relay worker xả hàng đợi...\n');
 
   let leftA = countA;
