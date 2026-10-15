@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url';
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { io } = createRequire(new URL('../frontend/package.json', import.meta.url))('socket.io-client');
-const AGG = 'http://localhost:8000';
+const AGG = process.env.AGGREGATOR_URL || 'http://localhost:8000';
 const NODE = { A: 'http://localhost:8001', B: 'http://localhost:8002', C: 'http://localhost:8003' };
 const KEY = process.env.INTERNAL_KEY ?? 'dev';
 const T = { timeout: 120_000 };
@@ -221,3 +221,99 @@ test('TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùn
   assert.equal(sql('db-b', `SELECT count(*) FROM reservations WHERE license_plate='${lp.replace(/[^0-9A-Z]/g, '')}'`), '1');
   cancelLater('B', again.body.id);
 });
+
+test('TC48 cụm RabbitMQ: tắt nút rabbitmq, chuyển nút < 10s, outbox về 0 và Aggregator nhận sự kiện',
+  { ...T, skip: !process.env.HA },
+  async () => {
+    const socket = io(AGG, {
+      transports: ['websocket'],
+      reconnection: false,
+      timeout: 10_000,
+    });
+    const events = [];
+    let slot;
+
+    try {
+      socket.on('SLOT_UPDATED', (e) => events.push(e));
+      await until('Socket Aggregator kết nối', () => socket.connected, 10_000);
+
+      // Dùng compose('stop rabbitmq')
+      compose('stop rabbitmq');
+
+      slot = await freeSlot('A');
+      const enter = await node('A', `/api/slots/${slot}/enter`, { method: 'POST', body: {} });
+      assert.equal(enter.status, 200);
+      exitLater('A', slot);
+
+      // Kiểm tra trong vòng < 10 giây outbox của db-a về 0 (đã gửi qua nút 2 hoặc nút 3)
+      await until(
+        'outbox db-a về 0 trong < 10 giây',
+        () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0',
+        10_000
+      );
+
+      // và Aggregator nhận được sự kiện
+      await until(
+        'Aggregator nhận được sự kiện SLOT_UPDATED',
+        () => events.some((e) => e.parkingId === 'A' && e.slot === slot && e.status === 'OCCUPIED'),
+        10_000
+      );
+    } finally {
+      socket.close();
+      compose('start rabbitmq');
+      await until('rabbitmq phục hồi vào cụm', () => {
+        try {
+          return compose('exec -T rabbitmq rabbitmqctl cluster_status').includes('rabbit@rabbitmq-2');
+        } catch {
+          return false;
+        }
+      }, 30_000).catch(() => {});
+    }
+  }
+);
+
+test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), outbox giữ tin; bật lại thì xả về 0',
+  { ...T, skip: !process.env.HA },
+  async () => {
+    let slot;
+    try {
+      // Dừng cả rabbitmq và rabbitmq-2 (mất quorum trên cụm 3 nút)
+      compose('stop rabbitmq rabbitmq-2');
+
+      // Cho xe vào bãi A
+      slot = await freeSlot('A');
+      const enter = await node('A', `/api/slots/${slot}/enter`, { method: 'POST', body: {} });
+      assert.equal(enter.status, 200);
+      exitLater('A', slot);
+
+      // Đợi relay thử gửi nhưng không thể do mất quorum
+      await sleep(2500);
+
+      // Kiểm tra outbox giữ tin (> 0)
+      const unsent = Number(sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL'));
+      assert.ok(unsent > 0, `Outbox phải giữ tin khi mất quorum (thực tế: ${unsent})`);
+
+      // Sau đó bật lại 2 nút
+      compose('start rabbitmq rabbitmq-2');
+
+      // Xác nhận outbox xả về 0
+      await until(
+        'outbox db-a xả về 0 sau khi bật lại 2 nút',
+        () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0',
+        60_000
+      );
+    } finally {
+      // Khối finally phải luôn bật lại các nút đã dừng
+      compose('start rabbitmq rabbitmq-2');
+      await until('cụm rabbitmq phục hồi', () => {
+        try {
+          const s = compose('exec -T rabbitmq rabbitmqctl cluster_status');
+          return s.includes('rabbit@rabbitmq-2') && s.includes('rabbit@rabbitmq-3');
+        } catch {
+          return false;
+        }
+      }, 45_000).catch(() => {});
+    }
+  }
+);
+
