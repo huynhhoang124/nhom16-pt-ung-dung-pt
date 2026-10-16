@@ -1,0 +1,5 @@
+frontend-1  | {"ts":"2026-10-14T07:55:01+00:00","service":"nginx","requestId":"a50b12be9dcba14dfa30559aa804f64a","responseRequestId":"a50b12be9dcba14dfa30559aa804f64a","method":"POST","path":"/api/parkings/A/reservations","status":201}
+parking-a-1  | {"ts":"2026-10-14T07:55:01.385Z","level":"info","service":"parking-A","requestId":"a50b12be9dcba14dfa30559aa804f64a","msg":"http","method":"POST","path":"/api/reservations","status":201,"ms":23}
+parking-a-1  | {"ts":"2026-10-14T07:55:01.854Z","level":"info","service":"parking-A","requestId":"a50b12be9dcba14dfa30559aa804f64a","msg":"outbox đã gửi","eventId":"17","type":"RESERVED","routingKey":"parking.A.slot.A04"}
+aggregator-1    | {"ts":"2026-10-14T07:55:01.387Z","level":"info","service":"aggregator-1","requestId":"a50b12be9dcba14dfa30559aa804f64a","msg":"http","method":"POST","path":"/api/parkings/A/reservations","status":201,"ms":27}
+aggregator-1    | {"ts":"2026-10-14T07:55:01.848Z","level":"info","service":"aggregator-1","requestId":"a50b12be9dcba14dfa30559aa804f64a","msg":"nhận sự kiện","type":"RESERVED","parkingId":"A","slot":"A04","version":1,"fresh":true}
