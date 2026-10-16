@@ -1,12 +1,14 @@
 // Message relay của Transactional Outbox: đọc parking_events chưa gửi, publish lên broker theo thứ tự id,
 // chỉ đánh dấu published_at SAU khi broker xác nhận (publisher confirm).
 // Chết giữa "publish" và "đánh dấu" => lần sau gửi lại (at-least-once); Aggregator bỏ tin trùng nhờ version.
-const amqp = require('amqplib');
+const { makeConnector } = require('./amqp-connect');
+const { log } = require('./log');
 
 const EXCHANGE = 'parking.events';
 
 // publish(routingKey, payload) -> true nếu broker đã xác nhận. Tự kết nối lại khi broker sập.
 function amqpPublisher(url) {
+  const connectAny = makeConnector(url);   // PT-03: url có thể là danh sách nút của cụm
   let conn = null;
   let ch = null;
   const reset = () => {
@@ -16,7 +18,7 @@ function amqpPublisher(url) {
   };
   async function channel() {
     if (ch) return ch;
-    conn = await amqp.connect(url);
+    conn = await connectAny();
     conn.on('error', () => {});
     conn.on('close', () => { conn = ch = null; });
     const c = await conn.createConfirmChannel();
@@ -30,7 +32,7 @@ function amqpPublisher(url) {
     try {
       const c = await channel();
       c.publish(EXCHANGE, routingKey, Buffer.from(JSON.stringify(payload)),
-        { persistent: true, contentType: 'application/json' });
+        { persistent: true, contentType: 'application/json', ...(payload.requestId && { correlationId: payload.requestId }) });
       await c.waitForConfirms();
       return true;
     } catch {
@@ -40,7 +42,7 @@ function amqpPublisher(url) {
   };
 }
 
-function makeRelay(pool, publish) {
+function makeRelay(pool, publish, logger = log) {
   let running = false;
   return async function relayOnce() {
     if (running) return 0;               // không chạy chồng (setInterval có thể gọi khi lần trước chưa xong)
@@ -53,6 +55,7 @@ function makeRelay(pool, publish) {
         const key = `parking.${e.payload.parkingId}.slot.${e.payload.slot}`;
         if (!(await publish(key, e.payload))) break;   // dừng để giữ thứ tự; lần sau gửi tiếp từ đây
         await pool.query('UPDATE parking_events SET published_at = now() WHERE id = $1', [e.id]);
+        logger.info('outbox đã gửi', { requestId: e.payload.requestId, eventId: e.id, type: e.payload.type, routingKey: key });
         sent++;
       }
     } finally {

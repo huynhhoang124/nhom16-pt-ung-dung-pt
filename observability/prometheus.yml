@@ -1,0 +1,18 @@
+# GS-04: Prometheus lấy số đo mỗi 5 giây (docker compose --profile obs up -d; giao diện :9090)
+# Aggregator và RabbitMQ tìm qua DNS: có bao nhiêu bản đang chạy thì lấy bấy nhiêu (bật/tắt profile ha không phải sửa,
+# không hiện mục tiêu "down" giả). Tên "aggregator" trỏ tới CẢ 2 bản khi bật ha (nginx chia tải theo tên này), nên
+# không dùng static_configs [aggregator:8000]: mỗi lần lấy sẽ trúng một bản ngẫu nhiên, số đếm nhảy lung tung.
+global:
+  scrape_interval: 5s
+scrape_configs:
+  - job_name: parking
+    static_configs:
+      - targets: [parking-a:8001, parking-b:8002, parking-c:8003]
+  - job_name: aggregator
+    dns_sd_configs:
+      - { names: [aggregator], type: A, port: 8000, refresh_interval: 15s }
+  - job_name: rabbitmq
+    dns_sd_configs:
+      - { names: [rabbitmq, rabbitmq-2, rabbitmq-3], type: A, port: 15692, refresh_interval: 15s }
+    relabel_configs:
+      - { source_labels: [__meta_dns_name], target_label: instance }   # hiện tên nút thay vì IP

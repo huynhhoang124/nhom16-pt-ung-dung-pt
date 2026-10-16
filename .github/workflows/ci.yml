@@ -1,0 +1,50 @@
+# GS-01: mỗi push/PR vào dev, main chạy test unit + build frontend. PR đỏ không được merge.
+name: ci
+on:
+  push: { branches: [dev, main] }
+  pull_request: { branches: [dev, main] }
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: "**/package-lock.json" }
+      # aggregator-service/test dùng lại code parking-node nên cài parking-node trước
+      - run: npm ci && npm test
+        working-directory: parking-node
+      - run: npm ci && npm test
+        working-directory: aggregator-service
+      - run: npm ci && npm test
+        working-directory: notification-service
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: frontend/package-lock.json }
+      - run: npm ci && npm run build
+        working-directory: frontend
+
+  # GS-02: dựng cả hệ thống bằng docker compose rồi chạy test e2e trên Postgres/RabbitMQ thật (khoảng 5 phút).
+  # Chỉ chạy cho PR vào main hoặc PR có nhãn "e2e" để không làm chậm mọi PR.
+  e2e:
+    if: github.event_name == 'push' || github.base_ref == 'main' || contains(github.event.pull_request.labels.*.name, 'e2e')
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: "**/package-lock.json" }
+      - run: cp .env.example .env
+      - run: node scripts/gen-keys.mjs   # PT-05: khoá RS256 để chạy TC46 (nhân viên gọi thẳng node khi Aggregator sập)
+      - run: npm ci
+        working-directory: frontend   # e2e dùng socket.io-client của frontend
+      - run: docker compose up -d --build --wait
+      - run: node --test tests/e2e.test.mjs
+      - if: failure()
+        run: docker compose logs --no-color --tail 200
+      - if: always()
+        run: docker compose down -v

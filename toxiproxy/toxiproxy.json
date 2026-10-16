@@ -1,0 +1,3 @@
+[
+  { "name": "parking-b", "listen": "0.0.0.0:18002", "upstream": "parking-b:8002", "enabled": true }
+]

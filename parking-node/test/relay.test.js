@@ -3,6 +3,28 @@ const assert = require('node:assert/strict');
 const { makePool, one } = require('./helpers');
 const s = require('../src/slots');
 const { makeRelay } = require('../src/relay');
+const { withRequestId } = require('../src/log');
+
+test('GS-03 relay ghi đúng request ID từ outbox chỉ sau broker confirm và đánh dấu đã gửi', async () => {
+  const pool = await makePool();
+  await new Promise((resolve, reject) => withRequestId(
+    { get: () => 'gs03-relay-trace' }, { set() {}, on() {} },
+    () => s.reserve(pool, 'A', { requestId: 'idempotency-key-khac', userId: 'u', slotCode: 'A01', licensePlate: 'p' }).then(resolve, reject),
+  ));
+  const logs = [];
+  let confirmed = false;
+  const relay = makeRelay(pool, async () => confirmed, { info: (msg, fields) => logs.push({ msg, ...fields }) });
+  assert.equal(await relay(), 0);
+  assert.deepEqual(logs, []);
+  confirmed = true;
+  assert.equal(await relay(), 1);
+  const event = await one(pool, 'SELECT id, published_at FROM parking_events');
+  assert.ok(event.published_at);
+  assert.deepEqual(logs, [{ msg: 'outbox đã gửi', requestId: 'gs03-relay-trace', eventId: event.id,
+    type: 'RESERVED', routingKey: 'parking.A.slot.A01' }]);
+  assert.equal(await relay(), 0);
+  assert.equal(logs.length, 1);
+});
 
 const unpublished = async (pool) =>
   (await one(pool, 'SELECT count(*)::int AS c FROM parking_events WHERE published_at IS NULL')).c;

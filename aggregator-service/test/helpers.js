@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const { PGlite } = require('@electric-sql/pglite');
+const { btree_gist } = require('@electric-sql/pglite/contrib/btree_gist');
 const { makeApp: makeNodeApp } = require('../../parking-node/src/app');
 const { init: initNode } = require('../../parking-node/src/db');
 const { makeRegistry } = require('../src/nodes');
@@ -13,7 +14,7 @@ const { makeApp } = require('../src/routes');
 const KEY = 'test-key';
 
 async function pglitePool() {
-  const db = new PGlite();
+  const db = new PGlite({ extensions: { btree_gist } });
   const query = async (sql, params) => {
     const r = params ? await db.query(sql, params) : (await db.exec(sql)).at(-1) ?? { rows: [] };
     return { rows: r.rows, rowCount: r.rows.length || r.affectedRows || 0 };
@@ -43,6 +44,20 @@ async function startStub(delayMs) {
   return { server, url, setDelay: (d) => { delay = d; } };
 }
 
+// Node "chập chờn": `failures` request đầu trả 500, sau đó trả 200. Đếm số request nhận được (trừ /health).
+async function startFlaky(failures) {
+  const state = { failures, hits: 0 };
+  const { server, url } = await listen((req, res) => {
+    res.setHeader('content-type', 'application/json');
+    if (req.url === '/health') return res.end('{"status":"UP"}');
+    state.hits++;
+    if (state.failures-- > 0) { res.statusCode = 500; return res.end('{"error":"INTERNAL_ERROR"}'); }
+    res.statusCode = req.method === 'POST' ? 201 : 200;
+    res.end('{"ok":true}');
+  });
+  return { server, url, state };
+}
+
 async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400 } = {}) {
   const pool = await pglitePool();
   await pool.query(fs.readFileSync(path.join(__dirname, '../src/schema.sql'), 'utf8'));
@@ -69,7 +84,7 @@ async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400 
     return { status: r.status, body: await r.json() };
   };
   const login = async (username) => (await call('/api/auth/login', { method: 'POST', body: { username, password: 'pw' } })).body.token;
-  return { pool, reg, cache, server, call, login };
+  return { pool, reg, cache, server, call, login, app };
 }
 
-module.exports = { startNode, startStub, startAggregator, KEY };
+module.exports = { startNode, startStub, startFlaky, startAggregator, KEY };

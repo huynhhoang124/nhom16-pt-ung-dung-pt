@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, message, useLive } from '../api.js';
 
-const EMPTY = { parkingId: '', name: '', apiUrl: '', address: '' };
+const EMPTY = { parkingId: '', name: '', apiUrl: '', address: '', lat: '', lng: '' };
 
 export default function Admin() {
   const [nodes, setNodes] = useState([]);
@@ -48,6 +48,8 @@ export default function Admin() {
         <input placeholder="Tên bãi" value={form.name} onChange={set('name')} required />
         <input placeholder="API URL (vd http://parking-d:8004)" value={form.apiUrl} onChange={set('apiUrl')} required />
         <input placeholder="Địa chỉ" value={form.address} onChange={set('address')} />
+        <input placeholder="Vĩ độ (vd 21.0285)" value={form.lat} onChange={set('lat')} inputMode="decimal" />
+        <input placeholder="Kinh độ (vd 105.8542)" value={form.lng} onChange={set('lng')} inputMode="decimal" />
         <button className="primary">Thêm</button>
       </form>
       {note && <p className="muted">{note}</p>}

@@ -1,5 +1,5 @@
 // Nhận sự kiện slot từ RabbitMQ và giữ cache trạng thái slot trong RAM (chỉ-đọc, nguồn gốc ở DB bãi).
-const amqp = require('amqplib');
+const { makeConnector } = require('./amqp-connect');
 
 const EXCHANGE = 'parking.events';
 const QUEUE = 'aggregator.slot-updates';
@@ -31,27 +31,30 @@ const slotsFromCache = (cache, parkingId) =>
     .sort((a, b) => a.slotCode.localeCompare(b.slotCode));
 
 // Consumer: queue durable, ack thủ công sau khi xử lý, tự kết nối lại sau 5 s nếu broker sập.
-function startConsumer(url, onEvent, log = console) {
+// Mặc định nghe sự kiện slot; NV-08 dùng lại cho exchange user.notifications.
+function startConsumer(url, onEvent, log = console, { exchange = EXCHANGE, queue = QUEUE, pattern = 'parking.#' } = {}) {
+  const connectAny = makeConnector(url);   // PT-03: url có thể là danh sách nút của cụm
   async function run() {
     let conn;
     try {
-      conn = await amqp.connect(url);
+      conn = await connectAny();
       conn.on('error', () => {});
       conn.on('close', () => { log.error('RabbitMQ mất kết nối, thử lại sau 5s'); setTimeout(run, 5000); });
       const ch = await conn.createChannel();
-      await ch.assertExchange(EXCHANGE, 'topic', { durable: true });
-      await ch.assertQueue(QUEUE, { durable: true });
-      await ch.bindQueue(QUEUE, EXCHANGE, 'parking.#');
+      await ch.assertExchange(exchange, 'topic', { durable: true });
+      // PT-03: quorum queue = nhân bản trên các nút bằng Raft, ghi khi đa số xác nhận (1 nút vẫn chạy được)
+      await ch.assertQueue(queue, { durable: true, arguments: { 'x-queue-type': 'quorum' } });
+      await ch.bindQueue(queue, exchange, pattern);
       await ch.prefetch(50);
-      await ch.consume(QUEUE, (m) => {
+      await ch.consume(queue, (m) => {
         if (!m) return;
         try { onEvent(JSON.parse(m.content.toString())); }
-        catch (e) { log.error('Bỏ tin lỗi:', e.message); }
+        catch (e) { log.error('Bỏ tin lỗi', { error: e.message }); }
         ch.ack(m);
       });
-      log.log('Đã kết nối RabbitMQ, đang nhận sự kiện');
+      log.log('Đã kết nối RabbitMQ, đang nhận tin', { queue });
     } catch (e) {
-      log.error(`RabbitMQ chưa sẵn sàng (${e.message}), thử lại sau 5s`);
+      log.error('RabbitMQ chưa sẵn sàng, thử lại sau 5s', { error: e.message });
       if (conn) conn.close().catch(() => {});   // sự kiện 'close' sẽ hẹn lần thử lại
       else setTimeout(run, 5000);
     }

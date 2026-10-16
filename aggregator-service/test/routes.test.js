@@ -15,7 +15,7 @@ async function system(t) {
   return { a, b, agg, tokens };
 }
 
-const reserveBody = (slotCode) => ({ slotCode, licensePlate: '30A-123' });
+const reserveBody = (slotCode) => ({ slotCode, licensePlate: '30A-123.45' });
 
 test('đăng nhập: sai mật khẩu 401, đúng thì có token', async (t) => {
   const { agg, tokens } = await system(t);
@@ -91,6 +91,27 @@ test('nhân viên chỉ thao tác bãi của mình; lịch sử và huỷ của 
   assert.deepEqual(staffList.body.map((r) => r.status), ['CANCELLED']);
 });
 
+test('TC19 lịch sử gửi xe: tra biển số gom từ mọi bãi, bãi treo báo thiếu; USER chỉ thấy của mình', async (t) => {
+  const { agg, tokens } = await system(t);
+  const enter = (id, slot, licensePlate) =>
+    agg.call(`/api/parkings/${id}/slots/${slot}/enter`, { method: 'POST', token: tokens.admin, body: { licensePlate } });
+  assert.equal((await enter('A', 'A02', '30A-999.99')).status, 200);
+  await agg.call('/api/parkings/B/reservations', { method: 'POST', token: tokens.user1, key: 'k', body: reserveBody('B01') });
+  assert.equal((await enter('B', 'B01')).body.session.licensePlate, '30A12345');
+
+  const found = await agg.call('/api/sessions/search?plate=30a99999', { token: tokens['staff-a'] });
+  assert.deepEqual(found.body.sessions.map((x) => [x.parkingId, x.slotCode]), [['A', 'A02']]);
+  assert.deepEqual(found.body.unavailable, ['S']);
+  assert.equal((await agg.call('/api/sessions/search?plate=30', { token: tokens.admin })).status, 400);
+  assert.equal((await agg.call('/api/sessions/search?plate=30A999', { token: tokens.user1 })).status, 403);
+
+  const mine = await agg.call('/api/me/sessions', { token: tokens.user1 });
+  assert.deepEqual(mine.body.sessions.map((x) => [x.parkingId, x.slotCode]), [['B', 'B01']]);
+  assert.deepEqual((await agg.call('/api/me/sessions', { token: tokens.user2 })).body.sessions, []);
+  assert.equal((await agg.call('/api/parkings/B/sessions', { token: tokens['staff-a'] })).status, 403);
+  assert.equal((await agg.call('/api/parkings/A/sessions', { token: tokens['staff-a'] })).body.length, 1);
+});
+
 test('quản trị: xem trạng thái node, thêm bãi mới (không sửa code)', async (t) => {
   const { agg, tokens } = await system(t);
   assert.equal((await agg.call('/api/admin/nodes', { token: tokens.user1 })).status, 403);
@@ -102,4 +123,173 @@ test('quản trị: xem trạng thái node, thêm bãi mới (không sửa code)
   const ok = await add({ parkingId: 'D', name: 'Bãi D', apiUrl: 'http://parking-d:8004' });
   assert.deepEqual([ok.status, ok.body.status], [201, 'OFFLINE']);  // chờ health check đầu tiên
   assert.deepEqual((await agg.call('/api/parkings')).body.map((p) => p.parkingId), ['A', 'B', 'S', 'D']);
+});
+
+test('TC33–TC35 đăng ký, đổi mật khẩu, khoá tạm khi sai mật khẩu nhiều lần', async (t) => {
+  const { agg } = await system(t);
+  const reg = (username, password) => agg.call('/api/auth/register', { method: 'POST', body: { username, password } });
+  const login = (username, password) => agg.call('/api/auth/login', { method: 'POST', body: { username, password } });
+
+  // TC33: đăng ký xong có token vai trò USER, đăng nhập lại được
+  const r = await reg('nguyen.van_a', 'matkhau123');
+  assert.equal(r.status, 201);
+  assert.equal(r.body.user.role, 'USER');
+  assert.equal((await login('nguyen.van_a', 'matkhau123')).status, 200);
+  // TC34: trùng tên 409; tên/mật khẩu không hợp lệ 400
+  assert.equal((await reg('nguyen.van_a', 'khac12345')).status, 409);
+  assert.equal((await reg('Ab', 'matkhau123')).status, 400);
+  assert.equal((await reg('hople123', 'ngan')).status, 400);
+
+  const token = r.body.token;
+  const change = (oldPassword, newPassword) => agg.call('/api/me/password', { method: 'PUT', token, body: { oldPassword, newPassword } });
+  assert.equal((await change('sai', 'moi123456')).status, 400);
+  assert.equal((await change('matkhau123', 'moi123456')).status, 200);
+  assert.equal((await login('nguyen.van_a', 'matkhau123')).status, 401);
+  assert.equal((await login('nguyen.van_a', 'moi123456')).status, 200);
+
+  // TC35: sai 5 lần thì lần thứ 6 bị 429, kể cả mật khẩu đúng; tài khoản khác không ảnh hưởng
+  for (let i = 0; i < 5; i++) assert.equal((await login('user2', 'sai')).status, 401);
+  assert.equal((await login('user2', 'pw')).status, 429);
+  assert.equal((await login('user1', 'pw')).status, 200);
+});
+
+test('NV-04 người dùng trả tiền qua Aggregator: cần Idempotency-Key, bấm lại cùng key không trả lần 2', async (t) => {
+  const { a, agg, tokens } = await system(t);
+  await agg.call('/api/parkings/A/reservations', { method: 'POST', token: tokens.user1, key: 'r', body: reserveBody('A01') });
+  const sid = (await agg.call('/api/parkings/A/slots/A01/enter', { method: 'POST', token: tokens.admin, body: {} })).body.session.id;
+  await a.pool.query(`UPDATE pricing_rules SET overnight_fee=0`);
+  await a.pool.query(`UPDATE parking_sessions SET entered_at = now() - interval '150 minutes' WHERE id=$1`, [sid]);
+
+  const pay = (token, key) => agg.call(`/api/me/sessions/A/${sid}/pay`, { method: 'POST', token, key });
+  assert.equal((await pay(tokens.user1)).status, 400);                    // thiếu key
+  assert.equal((await pay(tokens.user2, 'p1')).status, 404);              // phiên của người khác
+  const first = await pay(tokens.user1, 'p1');
+  assert.deepEqual([first.status, first.body.fee], [200, 35000]);
+  assert.equal((await pay(tokens.user1, 'p1')).body.paidAt, first.body.paidAt);
+  // nhân viên: chưa trả thì 402, thu tiền mặt thì cho ra (ở đây đã trả online nên ra luôn)
+  assert.equal((await agg.call('/api/parkings/A/slots/A01/exit', { method: 'POST', token: tokens.admin, body: {} })).status, 200);
+});
+
+test('NV-09 quản lý slot qua Aggregator: nhân viên chỉ bãi mình, người dùng không được', async (t) => {
+  const { agg, tokens } = await system(t);
+  const add = (token, id) => agg.call(`/api/parkings/${id}/slots`, { method: 'POST', token, body: { slotCode: `${id}09`, floor: 2, type: 'MOTO' } });
+  assert.equal((await add(tokens.user1, 'A')).status, 403);
+  assert.equal((await add(tokens['staff-a'], 'B')).status, 403);
+  assert.equal((await add(tokens['staff-a'], 'A')).status, 201);
+  assert.equal((await agg.call('/api/parkings/A/slots/A09', { method: 'PATCH', token: tokens.admin, body: { floor: 3 } })).body.floor, 3);
+  assert.equal((await agg.call('/api/parkings/A/slots/A09', { method: 'DELETE', token: tokens['staff-a'] })).body.status, 'HIDDEN');
+});
+
+test('GS-03 mã truy vết: X-Request-Id từ client đi qua Aggregator -> node -> sự kiện outbox; trả lại trong response', async (t) => {
+  const { a, agg, tokens } = await system(t);
+  const url = agg.server.address();
+  const r = await fetch(`http://127.0.0.1:${url.port}/api/parkings/A/reservations`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${tokens.user1}`, 'idempotency-key': 'trace', 'x-request-id': 'trace-123' },
+    body: JSON.stringify({ slotCode: 'A01', licensePlate: '30A-123.45' }),
+  });
+  assert.equal(r.status, 201);
+  assert.equal(r.headers.get('x-request-id'), 'trace-123');
+  const ev = (await a.pool.query(`SELECT payload FROM parking_events ORDER BY id DESC LIMIT 1`)).rows[0];
+  assert.equal(ev.payload.requestId, 'trace-123');
+  // không gửi thì tự sinh
+  assert.match((await fetch(`http://127.0.0.1:${url.port}/api/parkings`)).headers.get('x-request-id'), /^[0-9a-f-]{36}$/);
+});
+
+test('UX-01 toạ độ bãi: thêm bãi kèm lat/lng, /api/parkings trả toạ độ; toạ độ sai -> 400', async (t) => {
+  const { agg, tokens } = await system(t);
+  const add = (body) => agg.call('/api/admin/nodes', { method: 'POST', token: tokens.admin, body: { name: 'Bãi E', apiUrl: 'http://e', ...body } });
+  assert.equal((await add({ parkingId: 'E', lat: 95, lng: 105 })).status, 400);
+  assert.equal((await add({ parkingId: 'E', lat: '21.03', lng: 105.85 })).status, 201);
+  const e = (await agg.call('/api/parkings')).body.find((p) => p.parkingId === 'E');
+  assert.deepEqual([e.lat, e.lng], [21.03, 105.85]);
+});
+
+test('UX-02 thống kê gom các bãi: bãi treo báo thiếu; STAFF chỉ thấy bãi mình; USER bị chặn', async (t) => {
+  const { agg, tokens } = await system(t);
+  await agg.call('/api/parkings/A/slots/A01/enter', { method: 'POST', token: tokens.admin, body: {} });
+  await agg.call('/api/parkings/B/slots/B01/enter', { method: 'POST', token: tokens.admin, body: {} });
+  const all = await agg.call('/api/admin/stats', { token: tokens.admin });
+  assert.deepEqual([all.body.total.sessions, all.body.total.occupied, all.body.total.total], [2, 2, 6]);
+  assert.deepEqual(all.body.unavailable, ['S']);
+  const mine = await agg.call('/api/admin/stats', { token: tokens['staff-a'] });
+  assert.deepEqual(mine.body.parkings.map((p) => p.parkingId), ['A']);
+  assert.deepEqual(mine.body.unavailable, []);
+  assert.equal((await agg.call('/api/admin/stats', { token: tokens.user1 })).status, 403);
+});
+
+test('PT-05 Aggregator ký RS256 -> node tự kiểm được bằng khoá công khai (không cần Aggregator)', async () => {
+  const crypto = require('node:crypto');
+  const { makeAuth } = require('../src/auth');
+  const { verifyRS256 } = require('../../parking-node/src/jwt');
+  const k = crypto.generateKeyPairSync('rsa', { modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
+  const auth = makeAuth('secret', k);
+  const pool = { query: async () => ({ rows: [{ id: 'u', username: 'staff-a', role: 'STAFF', parking_id: 'A',
+    password_hash: await require('bcryptjs').hash('pw', 4) }] }) };
+  const { token } = await auth.login(pool, 'staff-a', 'pw');
+  assert.deepEqual([verifyRS256(token, k.publicKey).role, verifyRS256(token, k.publicKey).parkingId], ['STAFF', 'A']);
+  // middleware need() của Aggregator vẫn chấp nhận token RS256 và từ chối HS256 giả mạo
+  const req = (t) => ({ get: () => `Bearer ${t}` });
+  let ok = false;
+  auth.need('STAFF')(req(token), {}, () => { ok = true; });
+  assert.ok(ok);
+  // tấn công đổi thuật toán: ký HS256 với "secret" là chính khoá công khai
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+  const data = `${b64({ alg: 'HS256', typ: 'JWT' })}.${b64({ role: 'ADMIN' })}`;
+  const forged = `${data}.${crypto.createHmac('sha256', k.publicKey).update(data).digest('base64url')}`;
+  let status;
+  auth.need()(req(forged), { status: (c) => { status = c; return { json: () => {} }; } }, () => {});
+  assert.equal(status, 401);
+});
+
+test('UX-04 cổng quét QR qua Aggregator: nhân viên bãi mình vào/ra được; bãi khác 403', async (t) => {
+  const { agg, tokens } = await system(t);
+  const res = await agg.call('/api/parkings/A/reservations', { method: 'POST', token: tokens.user1, key: 'g', body: reserveBody('A01') });
+  const scan = (token, id, action) => agg.call(`/api/parkings/${id}/gate/scan`, { method: 'POST', token, body: { token: res.body.qrToken, action } });
+  assert.equal((await scan(tokens.user1, 'A', 'enter')).status, 403);
+  assert.equal((await scan(tokens['staff-a'], 'B', 'enter')).status, 403);
+  assert.equal((await scan(tokens['staff-a'], 'A', 'enter')).body.status, 'OCCUPIED');
+  assert.equal((await scan(tokens['staff-a'], 'A', 'exit')).body.status, 'AVAILABLE');
+});
+
+// ---- PT-07: Saga ----
+const group = (agg, token, key, items) => agg.call('/api/group-reservations', { method: 'POST', token, key, body: { items } });
+const item = (parkingId, slotCode) => ({ parkingId, slotCode, licensePlate: '30A-123.45' });
+
+test('PT-07 saga thành công: đặt ở 2 bãi; gửi lại cùng key trả saga cũ, không đặt lần hai', async (t) => {
+  const { a, b, agg, tokens } = await system(t);
+  const r = await group(agg, tokens.user1, 'g1', [item('A', 'A01'), item('B', 'B01')]);
+  assert.deepEqual([r.status, r.body.status, r.body.steps.map((s) => s.state)], [201, 'COMPLETED', ['DONE', 'DONE']]);
+  const again = await group(agg, tokens.user1, 'g1', [item('A', 'A01'), item('B', 'B01')]);
+  assert.deepEqual([again.status, again.body.id], [200, r.body.id]);
+  for (const p of [a, b]) assert.equal((await p.pool.query(`SELECT count(*)::int AS n FROM reservations`)).rows[0].n, 1);
+  assert.equal((await agg.call(`/api/group-reservations/${r.body.id}`, { token: tokens.user1 })).body.status, 'COMPLETED');
+  assert.equal((await agg.call(`/api/group-reservations/${r.body.id}`, { token: tokens.user2 })).status, 404);
+});
+
+test('TC52 saga: bãi B OFFLINE -> chỗ đã giữ ở A được trả lại (bù trừ), saga FAILED', async (t) => {
+  const { a, agg, tokens } = await system(t);
+  agg.reg.get('B').status = 'OFFLINE';
+  const r = await group(agg, tokens.user1, 'g2', [item('A', 'A01'), item('B', 'B01')]);
+  assert.deepEqual([r.body.status, r.body.steps.map((s) => s.state)], ['FAILED', ['COMPENSATED', 'FAILED']]);
+  const st = (await a.pool.query(`SELECT r.status, s.status AS slot FROM reservations r JOIN parking_slots s ON s.id=r.slot_id`)).rows[0];
+  assert.deepEqual(st, { status: 'CANCELLED', slot: 'AVAILABLE' });
+  assert.equal((await group(agg, tokens.user1, 'g3', [item('A', 'A01')])).status, 400);   // phải từ 2 xe
+});
+
+test('TC53 Aggregator chết giữa saga: khởi động lại thì bù trừ nốt (huỷ chỗ đã giữ)', async (t) => {
+  const { a, agg } = await system(t);
+  const id = '11111111-1111-4111-8111-111111111111';
+  // bước 0 đã đặt xong ở A, chưa kịp làm bước 1 thì "chết"
+  const res = await agg.reg.call(agg.reg.get('A'), '/api/reservations', { method: 'POST',
+    body: { requestId: `${id}:0`, userId: 'u-x', slotCode: 'A02', licensePlate: '30A-123.45' } });
+  const rid = (await res.json()).id;
+  await agg.pool.query(`INSERT INTO sagas(id, request_id, user_id, status, steps) VALUES ($1, 'u-x:k', 'u-x', 'RUNNING', $2)`,
+    [id, JSON.stringify([{ ...item('A', 'A02'), state: 'DONE', reservationId: rid }, { ...item('B', 'B02'), state: 'PENDING' }])]);
+  assert.equal(await agg.app.locals.sagas.recover(), 0);                 // mới cập nhật: có thể bản khác đang chạy
+  await agg.pool.query(`UPDATE sagas SET updated_at = now() - interval '2 minutes' WHERE id=$1`, [id]);
+  assert.equal(await agg.app.locals.sagas.recover(), 1);
+  assert.equal((await agg.pool.query('SELECT status FROM sagas WHERE id=$1', [id])).rows[0].status, 'FAILED');
+  assert.equal((await a.pool.query('SELECT status FROM reservations WHERE id=$1', [rid])).rows[0].status, 'CANCELLED');
 });

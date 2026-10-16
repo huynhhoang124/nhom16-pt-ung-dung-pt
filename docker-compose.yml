@@ -1,7 +1,8 @@
 # Hệ thống bãi đỗ xe phân tán – Nhóm 16
+#   cp .env.example .env                         # lần đầu: khoá bí mật (GS-07)
 #   docker compose up -d --build                 # chạy 3 bãi A, B, C
 #   docker compose --profile extra up -d         # thêm bãi D (demo mở rộng)
-# Mỗi bãi: 1 container node + 1 Postgres riêng. Node bãi này không có địa chỉ DB của bãi khác.
+# Mỗi bãi: 1 container node + 1 Postgres riêng. SLOTS = loại:tầng:số lượng (CAR ô tô, MOTO xe máy). Node bãi này không có địa chỉ DB của bãi khác.
 name: nhom16-parking
 
 x-pg: &pg
@@ -9,20 +10,60 @@ x-pg: &pg
   environment: { POSTGRES_PASSWORD: dev, POSTGRES_DB: parking }
   healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres -d parking"], interval: 3s, timeout: 3s, retries: 30 }
 
+# PT-03: danh sách nút RabbitMQ; client tự chuyển nút khi nút đang nối chết. Mặc định 1 nút; bật profile ha thì đặt
+# danh sách 3 nút trong .env. KHÔNG để sẵn tên rabbitmq-2/3 khi chúng không chạy: tra DNS tên không tồn tại mất ~3,6 s
+# và chặn luôn các lần tra tên khác trong tiến trình (vd parking-a) -> Aggregator thấy cả 3 bãi timeout cùng lúc.
+x-amqp: &amqp ${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}
+
+x-rabbit: &rabbit
+  image: rabbitmq:3.13-management-alpine
+  environment: { RABBITMQ_DEFAULT_USER: parking, RABBITMQ_DEFAULT_PASS: parking, RABBITMQ_ERLANG_COOKIE: nhom16-cookie }
+  healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"], interval: 5s, timeout: 5s, retries: 30 }
+
 x-node-env: &node-env
-  INTERNAL_KEY: ${INTERNAL_KEY:-dev}
-  RABBITMQ_URL: amqp://parking:parking@rabbitmq
+  INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
+  RABBITMQ_URL: *amqp
   RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
+  JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}          # PT-05: nhân viên gọi thẳng node khi Aggregator sập
+  CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
 
 services:
   rabbitmq:
-    image: rabbitmq:3.13-management-alpine
-    environment: { RABBITMQ_DEFAULT_USER: parking, RABBITMQ_DEFAULT_PASS: parking }
+    <<: *rabbit
+    hostname: rabbitmq                            # tên nút rabbit@rabbitmq (cố định để tạo cụm)
     ports: ["5672:5672", "15672:15672"]          # 15672 = giao diện quản lý (parking/parking)
-    volumes: [rabbitmq-data:/var/lib/rabbitmq]
-    healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"], interval: 5s, timeout: 5s, retries: 30 }
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+      - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro   # bật rabbitmq_prometheus (:15692) cho GS-04
+      - ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro
+  # --- PT-03: thêm 2 nút thành cụm 3 nút (docker compose --profile ha up -d). Demo: docker compose stop rabbitmq ---
+  rabbitmq-2:
+    <<: *rabbit
+    profiles: [ha]
+    hostname: rabbitmq-2
+    entrypoint: ["/bin/sh", "/join-wait.sh"]      # lần đầu chờ nút gốc rồi mới vào cụm (xem rabbitmq/join-wait.sh)
+    command: ["rabbitmq-server"]
+    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro]
+  rabbitmq-3:
+    <<: *rabbit
+    profiles: [ha]
+    hostname: rabbitmq-3
+    entrypoint: ["/bin/sh", "/join-wait.sh"]      # lần đầu chờ nút gốc rồi mới vào cụm (xem rabbitmq/join-wait.sh)
+    command: ["rabbitmq-server"]
+    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro]
 
-  db-a: { <<: *pg, volumes: [db-a-data:/var/lib/postgresql/data] }
+  db-a:                                           # PT-02: bản chính của bãi A, có user 'replicator' cho bản sao
+    <<: *pg
+    volumes: [db-a-data:/var/lib/postgresql/data, ./postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro]
+  # --- PT-02: bản sao (standby) của DB bãi A, sao chép bất đồng bộ (docker compose --profile ha up -d) ---
+  db-a-replica:
+    profiles: [ha]
+    image: postgres:16-alpine
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    environment: { PGDATA: /var/lib/postgresql/data, REPLICA_OF: db-a, REPLICATION_PASSWORD: replica }
+    volumes: [db-a-replica-data:/var/lib/postgresql/data, ./postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro]
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 3s, timeout: 3s, retries: 60 }
+    depends_on: { db-a: { condition: service_healthy } }
   db-b: { <<: *pg, volumes: [db-b-data:/var/lib/postgresql/data] }
   db-c: { <<: *pg, volumes: [db-c-data:/var/lib/postgresql/data] }
   db-agg: { <<: *pg, volumes: [db-agg-data:/var/lib/postgresql/data] }
@@ -30,37 +71,61 @@ services:
   parking-a:
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, PARKING_ID: A, PORT: 8001, SLOT_COUNT: 20, DATABASE_URL: "postgres://postgres:dev@db-a/parking" }
+    # READ_DATABASE_URL: chỉ đặt (trong .env) khi bật profile ha. Trỏ tới bản sao không tồn tại thì lần đọc phải chờ
+    # kết nối hỏng mới rơi về bản chính -> chậm. Để trống = đọc bản chính.
+    environment: { <<: *node-env, READ_DATABASE_URL: "${A_READ_DATABASE_URL:-}", PARKING_ID: A, PORT: 8001, SLOTS: "CAR:1:10,CAR:2:10,MOTO:1:20", DATABASE_URL: "${A_DATABASE_URL:-postgres://postgres:dev@db-a/parking}" }   # A_DATABASE_URL: failover (runbook-failover.md)
     ports: ["8001:8001"]
     depends_on: { db-a: { condition: service_healthy } }
   parking-b:
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, PARKING_ID: B, PORT: 8002, SLOT_COUNT: 30, DATABASE_URL: "postgres://postgres:dev@db-b/parking" }
+    environment: { <<: *node-env, PARKING_ID: B, PORT: 8002, SLOTS: "CAR:1:10,CAR:2:10,CAR:3:10,MOTO:1:30", DATABASE_URL: "postgres://postgres:dev@db-b/parking" }
     ports: ["8002:8002"]
     depends_on: { db-b: { condition: service_healthy } }
   parking-c:
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, PARKING_ID: C, PORT: 8003, SLOT_COUNT: 15, DATABASE_URL: "postgres://postgres:dev@db-c/parking" }
+    environment: { <<: *node-env, PARKING_ID: C, PORT: 8003, SLOTS: "CAR:1:10,CAR:2:5,MOTO:1:15", DATABASE_URL: "postgres://postgres:dev@db-c/parking" }
     ports: ["8003:8003"]
     depends_on: { db-c: { condition: service_healthy } }
 
   aggregator:
     build: ./aggregator-service
-    environment:
+    image: nhom16/aggregator
+    environment: &agg-env
+      INSTANCE_ID: "1"
       PORT: 8000
       DATABASE_URL: "postgres://postgres:dev@db-agg/parking"
-      RABBITMQ_URL: amqp://parking:parking@rabbitmq
-      INTERNAL_KEY: ${INTERNAL_KEY:-dev}
-      JWT_SECRET: ${JWT_SECRET:-dev-secret}
+      RABBITMQ_URL: *amqp
+      INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
+      JWT_SECRET: ${JWT_SECRET:?Thiếu JWT_SECRET (chạy cp .env.example .env)}
       DEMO_PASSWORD: ${DEMO_PASSWORD:-123456}
+      JWT_PRIVATE_KEY_B64: ${JWT_PRIVATE_KEY_B64:-}    # có cặp khoá -> ký RS256 (node tự kiểm); không có -> HS256
+      JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}
       NODES: >-
-        [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông"},
-         {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội"},
-         {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội"}]
+        [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875,"publicUrl":"http://localhost:8001"},
+         {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002"},
+         {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội","lat":21.0287,"lng":105.8524,"publicUrl":"http://localhost:8003"}]
     ports: ["8000:8000"]
     depends_on: { db-agg: { condition: service_healthy } }
+
+  # --- PT-01: bản Aggregator thứ hai (docker compose --profile ha up -d). Cùng tên mạng "aggregator" nên nginx
+  #     tự chia tải giữa 2 bản. Cổng 8010 chỉ để test TC44 nối socket thẳng vào bản 2.
+  #     Demo: docker compose stop aggregator -> web vẫn chạy. ---
+  aggregator-2:
+    profiles: [ha]
+    image: nhom16/aggregator
+    environment: { <<: *agg-env, INSTANCE_ID: "2" }
+    networks: { default: { aliases: [aggregator] } }
+    ports:
+    - "8010:8000"
+    depends_on: { db-agg: { condition: service_healthy } }
+
+  # NV-08: dịch vụ thông báo (nghe parking.events, gửi user.notifications); tắt thì hệ thống vẫn chạy
+  notification:
+    build: ./notification-service
+    environment: { RABBITMQ_URL: *amqp }
+    depends_on: { rabbitmq: { condition: service_healthy } }
 
   frontend:
     build: ./frontend
@@ -77,8 +142,31 @@ services:
     ports: ["8004:8004"]
     depends_on: { db-d: { condition: service_healthy } }
 
+  # --- GS-04: giám sát (docker compose --profile obs up -d) ---
+  prometheus:
+    profiles: [obs]
+    image: prom/prometheus:v2.55.1
+    volumes: [./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+    ports: ["9090:9090"]
+  grafana:
+    profiles: [obs]
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"        # demo: mở là xem, không cần đăng nhập
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/nhom16.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports: ["3001:3000"]
+    depends_on: [prometheus]
+
 volumes:
+  db-a-replica-data:
   rabbitmq-data:
+  rabbitmq-2-data:
+  rabbitmq-3-data:
   db-a-data:
   db-b-data:
   db-c-data:
