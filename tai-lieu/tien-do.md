@@ -13,7 +13,7 @@
 | Việc | Kiểm chứng |
 |---|---|
 | NV-01..09, PT-04, PT-05, PT-07, GS-01, GS-03, GS-07, UX-01..04 | test unit + thử trình duyệt (camera QR chưa thử: máy test không có camera) |
-| GS-02 e2e | 15 test. Không `ha`: 12 đạt (TC46 cần khoá RS256, CI tự sinh bằng `gen-keys.mjs`); `HA=1` với `--profile ha`: 14 đạt, thêm TC43, TC44; TC47 cần `CHAOS=1` |
+| GS-02 e2e | 18 test. Không `ha`: 13 đạt (TC46 cần khoá RS256, CI tự sinh bằng `gen-keys.mjs`); `HA=1` với `--profile ha`: 17 đạt, thêm TC43, TC44, TC48, TC49; TC47 cần `CHAOS=1` |
 | PT-01 nhiều Aggregator | tắt `aggregator` -> web qua nginx vẫn 200 |
 | PT-02 bản sao DB A | `pg_stat_replication` = streaming/async, `replication_lag_seconds` = 0 |
 | PT-03 cụm RabbitMQ | 3 nút, quorum queue đủ 3 bản; tắt `rabbitmq` -> sự kiện vẫn đi qua nút 2/3, outbox không ứ |
@@ -24,13 +24,15 @@
 
 Test unit: parking-node 46, aggregator-service 29, notification-service 2 — đạt hết; frontend build được.
 
-## 2b. Phần thành viên đã gộp (12/10)
+## 2b. Phần thành viên đã gộp (12–16/10)
 
 | Người | Việc | Ghi chú |
 |---|---|---|
 | Loan | PT-01.7 (TC43, TC44), PT-01.8 (ảnh `tai-lieu/anh/`), PT-05.6 (TC46) | TC45 đã có trong test unit `parking-node/test/app.test.js` |
 | Trang | K.9 mẫu PR, PT-04.6 lý thuyết circuit breaker / retry | |
 | Hiệp | UX-02.8 ảnh khi bãi B tắt, chẩn đoán GS-05 (log request chậm trong `k6.js`) | GS-05.3–5 cần chạy lại sau khi sửa đồng hồ Docker |
+| Hùng | NV-08.8 (TC37), GS-03.7 truy vết request ID (log nginx + relay), PT-06.4 kết quả mạng xấu | TC37 đã chạy thật trên Docker và đạt |
+| Luân | PT-03.5 (TC48, TC49), PT-02.6 `scripts/do-tre-ban-sao.mjs`, UX-02.7 `scripts/du-lieu-mau.mjs`, PT-02.10 `scripts/measure-failover.mjs`, GS-04.8, GS-06.3 `scripts/run-chaos-3times.mjs`, UX-04.5, TL-01 | TC48/TC49 đạt. Chưa có bằng chứng chạy thật: bảng `ket-qua-chaos-test.md` là số ước lượng (script chưa ghi số), `ket-qua-grafana-outbox.md` thiếu 2 ảnh |
 
 Sửa thêm khi gộp: TC46 bỏ qua khi chưa có khoá RS256, lấy slot sau khi dừng Aggregator (kết nối keep-alive cũ),
 để xe trong bãi rồi kiểm Aggregator thấy OCCUPIED (trước đó slot về AVAILABLE nên test luôn qua).

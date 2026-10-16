@@ -11,7 +11,7 @@
 ## 1. Mục tiêu thử nghiệm
 
 1. **Kiểm thử trải nghiệm thực tế trên thiết bị di động (Smartphone/Tablet):** Kiểm chứng giao diện Cổng bãi (`/staff` / Gate screen) và giao diện đặt chỗ của khách hàng hiển thị chuẩn responsive, tương tác cảm ứng nhạy trên màn hình điện thoại thật.
-2. **Khép kín luồng nghiệp vụ không chạm (Touchless / QR Workflow):** Khách hàng (`user1`) đặt chỗ nhận mã QR JWT trên điện thoại, nhân viên bãi (`staff-a`) dùng camera điện thoại quét QR để xử lý **Xe vào** (Check-in) và **Xe ra** (Check-out).
+2. **Khép kín luồng nghiệp vụ không chạm (Touchless / QR Workflow):** Khách hàng (`user1`) đặt chỗ nhận mã QR (ký HMAC-SHA256 bởi bãi) trên điện thoại, nhân viên bãi (`staff-a`) dùng camera điện thoại quét QR để xử lý **Xe vào** (Check-in) và **Xe ra** (Check-out).
 3. **Kiểm chứng khả năng tự chủ cục bộ tại bãi:** Cổng bãi gọi qua Aggregator hoặc gọi trực tiếp Parking Node khi mạng trung tâm gián đoạn (tính năng PT-05: nhân viên xác thực offline bằng chữ ký số RS256).
 4. **Phân tích hạn chế bảo mật Camera trên mạng LAN và kiểm thử cơ chế dự phòng:** Đánh giá rào cản Secure Context của trình duyệt di động khi truy cập qua HTTP nội bộ và thực nghiệm phương án nhập mã thủ công dự phòng.
 
@@ -71,7 +71,7 @@ sudo ufw allow 8001/tcp
 
 - [x] **A.3. Hiển thị mã QR vé điện tử:**
   - Hệ thống gọi API `POST /api/reservations` với `Idempotency-Key` duy nhất.
-  - Database bãi A xác nhận giữ slot (ví dụ slot `A08`), gán trạng thái `RESERVED` và phát sinh chuỗi `qrToken` (JWT ký bởi Parking Node).
+  - Database bãi A xác nhận giữ slot (ví dụ slot `A08`), gán trạng thái `RESERVED` và phát sinh chuỗi `qrToken` (dữ liệu base64url + chữ ký HMAC-SHA256 do bãi tự ký, xem `parking-node/src/qr.js`; không phải JWT).
   - Màn hình "Lượt đặt của tôi" (`MyReservations.jsx`) hiển thị thẻ vé đỗ xe kèm mã QR được render sắc nét qua Canvas/SVG.
   - Bấm vào mã QR: Ảnh phóng to toàn màn hình điện thoại giúp camera của máy nhân viên quét dễ dàng.
 
