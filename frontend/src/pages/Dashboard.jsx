@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { api, message, rememberNodes, useLive } from '../api.js';
+import { clock, Icon, Meter, NodeBadge, TYPE_ICON } from '../ui.jsx';
 
 export const TYPE_LABEL = { CAR: 'Ô tô', MOTO: 'Xe máy' };
 
@@ -41,7 +42,9 @@ export default function Dashboard({ onOpen }) {
   useEffect(() => { load(); const t = setInterval(load, 10000); return () => clearInterval(t); }, [load]);
   useLive(['SLOT_UPDATED', 'NODE_STATUS'], load);
 
-  if (!items) return error ? <p className="error">{error} Đang thử lại…</p> : <p className="muted">Đang tải…</p>;
+  if (!items) return error
+    ? <div className="empty" style={{ borderColor: 'var(--bad)' }}><Icon name="alert" /><strong>Không tải được danh sách bãi</strong>{error} Đang thử lại…</div>
+    : <><h2>Tổng quan các bãi</h2><div className="cards">{[0, 1, 2].map((i) => <span key={i} className="skeleton" style={{ height: 190 }} />)}</div></>;
   // Đang lọc theo loại xe thì số chỗ lấy theo loại đó.
   let shown = items.map((p) => ({
     ...p,
@@ -56,42 +59,63 @@ export default function Dashboard({ onOpen }) {
 
   return (
     <>
-      <h2>Tổng quan các bãi</h2>
-      <p className="legend">
-        {[['', 'Tất cả'], ...Object.entries(TYPE_LABEL)].map(([k, v]) => (
-          <button key={k} className={type === k ? 'tab active' : 'tab'} onClick={() => setType(k)}>{v}</button>
-        ))}
-      </p>
-      <p className="legend">
-        <button className={view === 'list' ? 'tab active' : 'tab'} onClick={() => setView('list')}>Danh sách</button>
-        <button className={view === 'map' ? 'tab active' : 'tab'} onClick={() => setView('map')}>Bản đồ</button>
-        <button className="link" onClick={locate}>📍 Tìm bãi gần tôi</button>
+      <div className="page-head">
+        <div>
+          <h2>Tổng quan các bãi</h2>
+          <p className="muted" style={{ margin: 0 }}>
+            {online.length}/{items.length} bãi đang hoạt động · <b className="mono">{free}</b> chỗ trống{type && ` cho ${TYPE_LABEL[type].toLowerCase()}`}
+          </p>
+        </div>
+      </div>
+      <div className="legend" style={{ alignItems: 'center', marginBottom: 'var(--space-5)' }}>
+        <div className="seg" role="group" aria-label="Loại xe">
+          {[['', 'Tất cả'], ...Object.entries(TYPE_LABEL)].map(([k, v]) => (
+            <button key={k} className={type === k ? 'tab active' : 'tab'} onClick={() => setType(k)}>{v}</button>
+          ))}
+        </div>
+        <div className="seg" role="group" aria-label="Cách xem">
+          <button className={view === 'list' ? 'tab active' : 'tab'} onClick={() => setView('list')}>Danh sách</button>
+          <button className={view === 'map' ? 'tab active' : 'tab'} onClick={() => setView('map')}>Bản đồ</button>
+        </div>
+        <button className="link" onClick={locate}><Icon name="pin" /> Tìm bãi gần tôi</button>
         {geoNote && <span className="muted small">{geoNote}</span>}
-      </p>
-      <p className="muted">{online.length}/{items.length} bãi đang hoạt động · {free} chỗ trống{type && ` cho ${TYPE_LABEL[type].toLowerCase()}`}</p>
+      </div>
       {view === 'map' && (
-        <Suspense fallback={<p className="muted">Đang tải bản đồ…</p>}>
+        <Suspense fallback={<span className="skeleton map" />}>
           <ParkingMap items={shown} me={me} onOpen={onOpen} />
         </Suspense>
       )}
       {view === 'list' && <div className="cards">
-        {shown.map((p) => (
-          <button key={p.parkingId} className={`card parking ${p.status === 'ONLINE' ? '' : 'offline'}`} onClick={() => onOpen(p.parkingId)}>
-            <div className="row">
-              <strong>{p.name}</strong>
-              <span className={`badge ${p.status}`}>{p.status}</span>
-            </div>
-            <div className="muted small">{p.address}{p.distance != null && ` · ${p.distance.toFixed(1)} km`}</div>
-            {p.status === 'ONLINE' ? (
-              <>
-                <div className="big">{p.available}<span className="muted"> / {p.total} chỗ trống</span></div>
-                <div className="meter"><span style={{ width: `${(100 * p.available) / Math.max(p.total, 1)}%` }} /></div>
-              </>
-            ) : (
-              <div className="big muted">Mất kết nối</div>
-            )}
-          </button>
-        ))}
+        {shown.map((p) => {
+          const on = p.status !== 'OFFLINE';
+          const cap = type ? [[type, p]] : Object.entries(TYPE_LABEL).map(([k]) => [k, p.byType?.[k]]).filter(([, c]) => c);
+          return (
+            <button key={p.parkingId} className={`card parking ${on ? '' : 'offline'}`} onClick={() => onOpen(p.parkingId)}>
+              <div className="lot-head">
+                <span className="lot-name">{p.name}</span>
+                <NodeBadge status={p.status} />
+              </div>
+              <div className="muted small">{p.address}{p.distance != null && ` · ${p.distance.toFixed(1)} km`}</div>
+              {on ? (
+                <div className="lot-cap">
+                  {cap.map(([k, c]) => (
+                    <div key={k}>
+                      <div className="kicker"><Icon name={TYPE_ICON[k]} /> {TYPE_LABEL[k]}</div>
+                      <div className="big">{c.available}<span className="muted"> / {c.total}</span></div>
+                      <Meter available={c.available} total={c.total} />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="lot-cap"><div className="muted small" style={{ gridColumn: '1 / -1' }}>Mất kết nối: tạm không nhận đặt chỗ.</div></div>
+              )}
+              <div className="lot-foot">
+                <Icon name={on ? 'radio' : 'clock'} />
+                {on ? `Cập nhật lúc ${clock(p.lastSeen)}` : p.lastSeen ? `Thấy lần cuối lúc ${clock(p.lastSeen)}` : 'Chưa liên lạc được với bãi'}
+              </div>
+            </button>
+          );
+        })}
       </div>}
     </>
   );
