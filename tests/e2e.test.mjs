@@ -14,13 +14,18 @@ import './command-inbox-http.test.mjs';
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { io } = createRequire(new URL('../frontend/package.json', import.meta.url))('socket.io-client');
-const AGG = 'http://localhost:8000';
-const NODE = { A: 'http://localhost:8001', B: 'http://localhost:8002', C: 'http://localhost:8003', D: 'http://localhost:8004' };
+const AGG = process.env.AGGREGATOR_URL ?? 'http://localhost:8000';
+const SCALE = process.env.SCALE === '1';
+const PARKING_IDS = SCALE ? ['A', 'B', 'C', 'D', 'E', 'F'] : ['A', 'B', 'C'];
+const NODE = Object.fromEntries(['A', 'B', 'C', 'D', 'E', 'F'].map((id, index) => [id, `http://localhost:${8001 + index}`]));
+const COMPOSE = SCALE
+  ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord'
+  : 'docker compose';
 const KEY = process.env.INTERNAL_KEY ?? 'dev';
 const T = { timeout: 120_000 };
 
 const sh = (cmd) => execSync(cmd, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-const compose = (args) => sh(`docker compose ${args}`);
+const compose = (args) => sh(`${COMPOSE} ${args}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sql = (db, q) => compose(`exec -T ${db} psql -U postgres -d parking -tAc "${q}"`);
 
@@ -63,7 +68,7 @@ test.after(async () => { for (const f of undo) await f(); });
 
 let tok;
 test.before(async () => {
-  await until('3 bãi ONLINE', async () => (await Promise.all(['A', 'B', 'C'].map(statusOf))).every((s) => s === 'ONLINE'), 120_000);
+  await until(`${PARKING_IDS.length} bãi ONLINE`, async () => (await Promise.all(PARKING_IDS.map(statusOf))).every((s) => s === 'ONLINE'), 120_000);
   tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a'), admin: await login('admin') };
 });
 
@@ -73,9 +78,21 @@ test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bã
   assert.doesNotMatch(env, /db-b|db-c/);
 });
 
-test('TC01 tra cứu tổng hợp 3 bãi', T, async () => {
+test('TC01 tra cứu tổng hợp các bãi theo cấu hình', T, async () => {
   const r = await agg('/api/parkings/availability');
-  assert.deepEqual(r.body.map((p) => [p.parkingId, p.status, p.total]), [['A', 'ONLINE', 40], ['B', 'ONLINE', 60], ['C', 'ONLINE', 30]]);
+  const totals = { A: 40, B: 60, C: 30, D: 20, E: 20, F: 20 };
+  const availability = r.body.map((p) => [p.parkingId, p.status, p.total]).sort(([a], [b]) => a.localeCompare(b));
+  assert.deepEqual(availability, PARKING_IDS.map((id) => [id, 'ONLINE', totals[id]]).sort(([a], [b]) => a.localeCompare(b)));
+});
+
+test('PD-12 etcd gắn nhãn vùng Bắc/Nam và registry trả đủ sáu bãi', { ...T, skip: !SCALE }, async () => {
+  const admin = await login('admin');
+  const r = await agg('/api/admin/nodes', { token: admin });
+  const zones = r.body.map((n) => [n.parkingId, n.zone]).sort(([a], [b]) => a.localeCompare(b));
+  assert.deepEqual(zones, [
+    ['A', 'bac'], ['B', 'bac'], ['C', 'bac'],
+    ['D', 'nam'], ['E', 'nam'], ['F', 'nam'],
+  ]);
 });
 
 test('TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh', T, async () => {
@@ -233,7 +250,9 @@ test('TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B 
   try {
     await until('B OFFLINE', async () => (await statusOf('B')) === 'OFFLINE');
     const avail = await agg('/api/parkings/availability');
-    assert.deepEqual(avail.body.map((p) => [p.parkingId, p.status]), [['A', 'ONLINE'], ['B', 'OFFLINE'], ['C', 'ONLINE']]);
+    const statuses = avail.body.map((p) => [p.parkingId, p.status]).sort(([a], [b]) => a.localeCompare(b));
+    const expected = PARKING_IDS.map((id) => [id, id === 'B' ? 'OFFLINE' : 'ONLINE']).sort(([a], [b]) => a.localeCompare(b));
+    assert.deepEqual(statuses, expected);
     const r = await agg('/api/parkings/B/reservations', { method: 'POST', token: tok.user1, key: randomUUID(), body: { slotCode: 'B02', licensePlate: '30A-555.55' } });
     assert.deepEqual([r.status, r.body.error], [503, 'PARKING_OFFLINE']);
     const detail = await agg('/api/parkings/B');
@@ -268,7 +287,7 @@ test('TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật
     compose('start aggregator');
   }
   await until('queue rỗng', () => compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(/aggregator\.slot-updates\.1\s+(\d+)/)?.[1] === '0', 60_000);
-  await until('3 bãi ONLINE', async () => (await Promise.all(['A', 'B', 'C'].map(statusOf))).every((s) => s === 'ONLINE'));
+  await until(`${PARKING_IDS.length} bãi ONLINE`, async () => (await Promise.all(PARKING_IDS.map(statusOf))).every((s) => s === 'ONLINE'));
 });
 
 test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết', T, async () => {
@@ -592,7 +611,7 @@ test('TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd
       console.log(`TC63 - Bãi D xuất hiện và ONLINE sau ${elapsed}ms`);
       assert.ok(elapsed <= 2000, `Bãi mới phải hiện trong danh sách bãi kịp thời <= 2s (thực tế: ${elapsed}ms)`);
     } finally {
-      compose('--profile extra stop parking-d db-d');
+      if (!SCALE) compose('--profile extra stop parking-d db-d');
     }
   }
 );
@@ -638,7 +657,7 @@ test('TC64 phân hoạch mạng node <-> etcd: mất lease nhưng HTTP còn số
       console.log('TC64 - PASS: Bãi D tự động phục hồi ONLINE');
     } finally {
       delete process.env.ENABLE_TEST_FAULTS;
-      compose('--profile extra stop parking-d db-d');
+      if (!SCALE) compose('--profile extra stop parking-d db-d');
     }
   }
 );
@@ -678,5 +697,3 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
     }
   }
 );
-
-

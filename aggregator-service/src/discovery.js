@@ -63,7 +63,7 @@ function startDiscovery({
     activeLeaseKeys.get(parkingId).add(key);
 
     const url = data.url || `http://${hostname}:8001`;
-    const zone = data.zone ?? null;
+    const zone = data.zone ?? 'bac';
 
     let n = reg.get(parkingId);
     if (!n) {
