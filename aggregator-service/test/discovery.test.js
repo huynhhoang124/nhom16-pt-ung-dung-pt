@@ -137,6 +137,7 @@ test('PD-09 discovery: khởi tạo watch với startRevision(revision + 1) từ
   const nodeE = reg.get('E');
   assert.ok(nodeE, 'Node E phải được nạp từ snapshot');
   assert.equal(nodeE.hasLease, true);
+  assert.equal(nodeE.zone, 'nam');
 
   await disc.stop();
 });
@@ -201,4 +202,3 @@ test('PD-09 discovery: bãi nạp từ DB với hasLease: false giữ nguyên me
 
   disc.client.close();
 });
-
