@@ -120,53 +120,69 @@ function makeFailoverManager({
     log.info?.(`[failover-manager] === BẮT ĐẦU FAILOVER CHO BÃI ${state.parkingId} ===`);
 
     try {
-      // Bước 1: Kết nối sang replica, đọc SELECT pg_last_wal_replay_lsn() để kiểm tra replica còn sống
-      log.info?.(`[failover-manager] Bước 1: Kiểm tra replica còn sống (SELECT pg_last_wal_replay_lsn)...`);
       let replicaClient = null;
       try {
+        // Bước 1: Kết nối sang replica, đọc SELECT pg_last_wal_replay_lsn() để kiểm tra replica còn sống
+        log.info?.(`[failover-manager] Bước 1: Kiểm tra replica còn sống (SELECT pg_last_wal_replay_lsn)...`);
         replicaClient = await pgClientFactory(state.replicaUrl, 2000);
         await replicaClient.connect();
         const lsnRes = await replicaClient.query('SELECT pg_last_wal_replay_lsn() AS lsn');
         const lsn = lsnRes.rows?.[0]?.lsn;
         log.info?.(`[failover-manager] Replica bãi ${state.parkingId} còn sống, last replay LSN: ${lsn}`);
 
-        // Bước 2: Gọi SELECT pg_promote() trên replica để thăng cấp thành primary mới
-        log.info?.(`[failover-manager] Bước 2: Thăng cấp replica thành primary (SELECT pg_promote)...`);
+        // Bước 2 (Giao dịch CAS nguyên tử trên etcd TRƯỚC KHI promote):
+        // Gộp cả 2 điều kiện:
+        // 1) Khoá bầu leader /nhom16/election/failover vẫn đang thuộc về bản failover-manager hiện tại
+        // 2) Khoá /nhom16/parking/<bãi>/db/epoch hiện tại bằng N
+        // Nếu giao dịch CAS thất bại -> dừng ngay lập tức, tuyệt đối KHÔNG gọi pg_promote()
+        log.info?.(`[failover-manager] Bước 2: Giao dịch CAS trên etcd TRƯỚC KHI promote cho bãi ${state.parkingId}...`);
+        if (elector && !elector.isLeader()) {
+          log.warn?.(`[failover-manager] Bản thân không còn là Leader -> huỷ failover bãi ${state.parkingId}`);
+          return { ok: false, reason: 'NOT_LEADER' };
+        }
+
+        const epochKey = `/nhom16/parking/${state.parkingId}/db/epoch`;
+        const primaryKey = `/nhom16/parking/${state.parkingId}/db/primary`;
+        const electionKey = elector?.getElectionKey?.() || '/nhom16/election/failover';
+        const leaderPayload = elector?.getPayload?.();
+
+        const currentEpochStr = await etcdClient.get(epochKey).string();
+        const N = currentEpochStr ? Number(currentEpochStr) : 1;
+        const nextEpoch = N + 1;
+
+        let casCondition = currentEpochStr
+          ? etcdClient.if(epochKey, 'Value', '==', String(N))
+          : etcdClient.if(epochKey, 'Version', '==', 0);
+
+        if (leaderPayload) {
+          casCondition = casCondition.and(electionKey, 'Value', '==', leaderPayload);
+        }
+
+        const casRes = await casCondition
+          .then(
+            etcdClient.put(epochKey).value(String(nextEpoch)),
+            etcdClient.put(primaryKey).value(state.replicaUrl)
+          )
+          .else(etcdClient.get(epochKey))
+          .commit();
+
+        if (!casRes.succeeded) {
+          log.warn?.(`[failover-manager] Giao dịch CAS trên etcd thất bại cho bãi ${state.parkingId} (mất quyền leader hoặc epoch đã đổi) -> Dừng ngay, KHÔNG promote replica.`);
+          return { ok: false, reason: 'CAS_FAILED' };
+        }
+        log.info?.(`[failover-manager] Bước 2: CAS etcd thành công: epoch=${nextEpoch}, primary=${state.replicaUrl}`);
+
+        // Bước 3: Thăng cấp replica thành primary (SELECT pg_promote) SAU KHI CAS thành công
+        log.info?.(`[failover-manager] Bước 3: Thăng cấp replica thành primary (SELECT pg_promote)...`);
         await replicaClient.query('SELECT pg_promote()');
         log.info?.(`[failover-manager] Đã gọi pg_promote() thành công trên replica bãi ${state.parkingId}`);
       } finally {
         if (replicaClient) await replicaClient.end();
       }
 
-      // Bước 3 (Giao dịch CAS nguyên tử trên etcd):
-      // Đọc /nhom16/parking/<bãi>/db/epoch (giả sử đang là N, nếu chưa có thì khởi tạo là 1).
-      // Nếu epoch == N Thì đặt epoch = N + 1 VÀ đặt primary = replicaUrl.
-      // Nếu giao dịch CAS thất bại -> dừng ngay.
       const epochKey = `/nhom16/parking/${state.parkingId}/db/epoch`;
-      const primaryKey = `/nhom16/parking/${state.parkingId}/db/primary`;
-
-      log.info?.(`[failover-manager] Bước 3: Giao dịch CAS trên etcd cho bãi ${state.parkingId}...`);
       const currentEpochStr = await etcdClient.get(epochKey).string();
-      const N = currentEpochStr ? Number(currentEpochStr) : 1;
-      const nextEpoch = N + 1;
-
-      const casCondition = currentEpochStr
-        ? etcdClient.if(epochKey, 'Value', '==', String(N))
-        : etcdClient.if(epochKey, 'Version', '==', 0);
-
-      const casRes = await casCondition
-        .then(
-          etcdClient.put(epochKey).value(String(nextEpoch)),
-          etcdClient.put(primaryKey).value(state.replicaUrl)
-        )
-        .else(etcdClient.get(epochKey))
-        .commit();
-
-      if (!casRes.succeeded) {
-        log.warn?.(`[failover-manager] Giao dịch CAS trên etcd thất bại cho bãi ${state.parkingId} (bản khác đã xử lý) -> dừng.`);
-        return { ok: false, reason: 'CAS_FAILED' };
-      }
-      log.info?.(`[failover-manager] CAS etcd thành công: epoch=${nextEpoch}, primary=${state.replicaUrl}`);
+      const nextEpoch = currentEpochStr ? Number(currentEpochStr) : 2;
 
       // Bước 4: Ghi epoch mới (N + 1) vào bảng db_epoch trên primary mới (replica vừa thăng cấp)
       log.info?.(`[failover-manager] Bước 4: Ghi epoch ${nextEpoch} vào bảng db_epoch trên primary mới...`);

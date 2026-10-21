@@ -24,18 +24,25 @@ function makeMockEtcd() {
       };
     },
     if(k, field, op, val) {
-      let condPassed = false;
-      const cur = store.get(k);
-      if (field === 'Version' && op === '==' && val === 0) {
-        condPassed = cur === undefined;
-      } else if (field === 'Value' && op === '==') {
-        condPassed = String(cur) === String(val);
-      }
-
+      const conds = [{ k, field, op, val }];
       let thenOps = [];
       let elseOps = [];
 
+      function checkCond(c) {
+        const cur = store.get(c.k);
+        if (c.field === 'Version' && c.op === '==' && c.val === 0) {
+          return cur === undefined;
+        } else if (c.field === 'Value' && c.op === '==') {
+          return String(cur) === String(c.val);
+        }
+        return false;
+      }
+
       const builder = {
+        and(k2, field2, op2, val2) {
+          conds.push({ k: k2, field: field2, op: op2, val: val2 });
+          return builder;
+        },
         then(...ops) {
           thenOps = ops;
           return builder;
@@ -45,7 +52,8 @@ function makeMockEtcd() {
           return builder;
         },
         async commit() {
-          if (condPassed) {
+          const allPassed = conds.every(checkCond);
+          if (allPassed) {
             for (const opItem of thenOps) {
               if (opItem.op === 'put') {
                 store.set(opItem.key, opItem.val);
@@ -92,9 +100,12 @@ test('PD-14b manager: phát hiện 3 lần lỗi primary -> promote replica -> C
 
   const elector = {
     isLeader: () => true,
+    getPayload: () => '{"instanceId":"1"}',
+    getElectionKey: () => '/nhom16/election/failover',
     onLeaderStart: () => () => {},
     onLeaderStop: () => () => {},
   };
+  etcd.store.set('/nhom16/election/failover', '{"instanceId":"1"}');
 
   const manager = makeFailoverManager({
     etcdClient: etcd,
@@ -203,9 +214,53 @@ test('PD-14b manager: dừng ngay nếu giao dịch CAS trên etcd thất bại'
   assert.equal(res.ok, false);
   assert.equal(res.reason, 'CAS_FAILED');
 
-  // Không được cập nhật db_epoch vì CAS thất bại
+  // Tuyệt đối không được gọi pg_promote và không được cập nhật db_epoch vì CAS thất bại
+  const promoteCalled = executedQueries.some((q) => q.sql === 'SELECT pg_promote()');
+  assert.equal(promoteCalled, false, 'Tuyệt đối không được gọi pg_promote khi CAS thất bại');
   const epochUpdated = executedQueries.some((q) => q.sql.includes('UPDATE db_epoch'));
   assert.equal(epochUpdated, false, 'Không được cập nhật db_epoch khi CAS thất bại');
+});
+
+test('PD-14b manager: huỷ failover và không promote nếu mất quyền leader key trên etcd', async () => {
+  const etcd = makeMockEtcd();
+  etcd.store.set('/nhom16/parking/A/db/epoch', '1');
+  etcd.store.set('/nhom16/parking/A/db/primary', 'postgres://primary-a');
+  // Khoá election trên etcd đã bị instance khác chiếm (instanceId 2)
+  etcd.store.set('/nhom16/election/failover', '{"instanceId":"2"}');
+
+  const executedQueries = [];
+  const pgClientFactory = (url) => ({
+    async connect() {},
+    async query(sql, params) {
+      executedQueries.push({ url, sql, params });
+      if (sql === 'SELECT pg_last_wal_replay_lsn() AS lsn') {
+        return { rows: [{ lsn: '0/100' }] };
+      }
+      return { rows: [] };
+    },
+    async end() {},
+  });
+
+  const elector = {
+    isLeader: () => true,
+    getPayload: () => '{"instanceId":"1"}', // payload bản thân khác trên etcd
+    getElectionKey: () => '/nhom16/election/failover',
+  };
+
+  const manager = makeFailoverManager({
+    etcdClient: etcd,
+    parkings: [{ parkingId: 'A', primaryUrl: 'postgres://primary-a', replicaUrl: 'postgres://replica-a', sync: true }],
+    elector,
+    pgClientFactory,
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+  });
+
+  const res = await manager.doFailover(manager.parkingStates[0]);
+  assert.equal(res.ok, false);
+  assert.equal(res.reason, 'CAS_FAILED');
+
+  const promoteCalled = executedQueries.some((q) => q.sql === 'SELECT pg_promote()');
+  assert.equal(promoteCalled, false, 'Không được promote khi mất quyền leader key trên etcd');
 });
 
 test('PD-14b manager: tự động hạ cấp sync replication sang async khi replica chết quá 3s', async () => {
