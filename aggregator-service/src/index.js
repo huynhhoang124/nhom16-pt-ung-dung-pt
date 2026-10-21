@@ -38,7 +38,27 @@ async function main() {
     timeoutMs: Number(env('NODE_TIMEOUT_MS', 2000)),
     failThreshold: Number(env('FAIL_THRESHOLD', 3)),
   });
-  for (const row of (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows) reg.add(row);
+  const hasEtcd = Boolean(env('ETCD_ENDPOINTS'));
+  if (!hasEtcd) {
+    for (const row of (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows) reg.add(row);
+  }
+
+  // PD-09: Khám phá dịch vụ động qua etcd lease (khi có ETCD_ENDPOINTS thì không nạp/ghi DB)
+  const { startDiscovery } = require('./discovery');
+  const discovery = startDiscovery({
+    etcdEndpoints: env('ETCD_ENDPOINTS'),
+    reg,
+    log,
+  });
+  if (discovery.active) {
+    discovery.start().catch((e) => log.error('Lỗi khởi động discovery etcd', { error: e.message }));
+    const cleanup = async () => {
+      await discovery.stop();
+      process.exit(0);
+    };
+    process.once('SIGINT', cleanup);
+    process.once('SIGTERM', cleanup);
+  }
 
   const cache = new Map();
   const b64 = (k) => (process.env[k] ? Buffer.from(process.env[k], 'base64').toString() : undefined);
@@ -75,10 +95,15 @@ async function main() {
         .catch((e) => log.error(`Đối soát bãi ${n.id} lỗi`, { error: e.message }));
     }
   };
-  const check = () => pool.query('SELECT * FROM parking_nodes')
-    .then(({ rows }) => reg.sync(rows).forEach((id) => log.info(`Nạp bãi mới ${id} (do bản Aggregator khác thêm)`)))
-    .then(() => reg.check(onChange))
-    .catch((e) => log.error('health check lỗi', { error: e.message }));
+  const check = () => {
+    const p = hasEtcd
+      ? Promise.resolve()
+      : pool.query('SELECT * FROM parking_nodes')
+          .then(({ rows }) => reg.sync(rows).forEach((id) => log.info(`Nạp bãi mới ${id} (do bản Aggregator khác thêm)`)));
+    return p
+      .then(() => reg.check(onChange))
+      .catch((e) => log.error('health check lỗi', { error: e.message }));
+  };
   // Lần health check đầu xong (biết bãi nào sống) thì bù trừ các saga dở dang từ lần chạy trước (PT-07).
   check().then(() => app.locals.sagas.recover())
     .then((k) => k && log.info(`Khôi phục ${k} saga dở dang`))

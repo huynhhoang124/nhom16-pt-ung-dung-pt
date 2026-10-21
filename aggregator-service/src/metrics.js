@@ -10,8 +10,8 @@ function mountMetrics(app, { reg, instance = process.env.INSTANCE_ID ?? '1' }) {
   });
   // Trạng thái failure detector / circuit breaker theo từng bãi.
   new client.Gauge({
-    name: 'parking_node_up', help: '1 = bãi ONLINE, 0 = OFFLINE (mạch mở)', labelNames: ['node'], registers: [registry],
-    collect() { for (const n of reg.all()) this.set({ node: n.id }, n.status === 'ONLINE' ? 1 : 0); },
+    name: 'parking_node_up', help: '1 = bãi ONLINE/DEGRADED (HTTP sống), 0 = OFFLINE (mạch mở)', labelNames: ['node'], registers: [registry],
+    collect() { for (const n of reg.all()) this.set({ node: n.id }, n.status !== 'OFFLINE' ? 1 : 0); },
   });
   new client.Gauge({
     name: 'parking_node_fails', help: 'Số lần lỗi liên tiếp khi gọi bãi', labelNames: ['node'], registers: [registry],

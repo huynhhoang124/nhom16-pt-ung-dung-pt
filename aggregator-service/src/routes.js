@@ -74,19 +74,19 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
     const { type } = req.query;
     if (type && !['CAR', 'MOTO'].includes(type)) return res.status(400).json({ error: 'type must be CAR or MOTO' });
     let all = await availability();
-    if (type) all = all.map((p) => (p.status === 'ONLINE' ? { ...p, ...(p.byType?.[type] ?? { available: 0, total: 0 }) } : p));
-    res.json(req.query.available === 'true' ? all.filter((p) => p.status === 'ONLINE' && p.available > 0) : all);
+    if (type) all = all.map((p) => (p.status !== 'OFFLINE' ? { ...p, ...(p.byType?.[type] ?? { available: 0, total: 0 }) } : p));
+    res.json(req.query.available === 'true' ? all.filter((p) => p.status !== 'OFFLINE' && p.available > 0) : all);
   });
 
   // Chi tiết bãi. Bãi OFFLINE: trả bản cache cuối cùng, gắn stale=true (chấp nhận cũ để vẫn sẵn sàng).
   app.get('/api/parkings/:id', async (req, res) => {
     const n = reg.get(req.params.id);
     if (!n) return res.status(404).json({ error: 'PARKING_NOT_FOUND' });
-    if (n.status === 'ONLINE') {
+    if (n.status !== 'OFFLINE') {
       try { return res.json({ ...info(n), stale: false, slots: await reg.json(n, '/api/slots') }); }
       catch { /* rơi xuống bản cache */ }
     }
-    res.json({ ...info(n), status: 'OFFLINE', stale: true, slots: slotsFromCache(cache, n.id) });
+    res.json({ ...info(n), status: n.status, stale: true, slots: slotsFromCache(cache, n.id) });
   });
 
   // Nghiệp vụ 2: đặt chỗ. Idempotency-Key bắt buộc; ghép với userId để key của người này không đụng người khác.

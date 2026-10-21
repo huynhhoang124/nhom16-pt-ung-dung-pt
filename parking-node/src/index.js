@@ -3,6 +3,7 @@ const { init, readThrough } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
 const { expireDue, activateDue, warnExpiring } = require('./slots');
+const { makeRegistryClient } = require('./registry');
 const { log } = require('./log');
 
 const env = (k, d) => process.env[k] ?? d;
@@ -37,16 +38,47 @@ async function main() {
     },
   });
 
+  // PD-09: Đăng ký dịch vụ lên etcd bằng lease
+  const regClient = makeRegistryClient({
+    etcdEndpoints: process.env.ETCD_ENDPOINTS,
+    parkingId,
+    port,
+    log,
+  });
+
   const app = makeApp({
     readPool, metricsExtra: [lagMetric],
     pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
     reservationMinutes: Number(env('RESERVATION_MINUTES', 15)),
+    regClient,
     ...(process.env.QR_SECRET && { qrSecret: process.env.QR_SECRET }),
     // PT-05: khoá công khai của Aggregator (PEM, base64) -> nhân viên gọi thẳng node khi trung tâm sập
     jwtPublicKey: process.env.JWT_PUBLIC_KEY_B64 ? Buffer.from(process.env.JWT_PUBLIC_KEY_B64, 'base64').toString() : undefined,
     corsOrigins: env('CORS_ORIGIN', 'http://localhost:3000').split(','),
   });
-  app.listen(port, () => log.info(`Parking ${parkingId} chạy ở cổng ${port}`));
+
+  const server = app.listen(port, async () => {
+    log.info(`Parking ${parkingId} chạy ở cổng ${port}`);
+    // Đăng ký etcd SAU KHI cổng HTTP đã mở thành công để Aggregator ping 200 OK ngay (Issue 4)
+    if (regClient.active) {
+      try {
+        await regClient.register();
+      } catch (e) {
+        log.warn('Đăng ký etcd ban đầu thất bại, đang tự động thử lại trong nền...', { error: e.message });
+        regClient.scheduleRetry(1000);
+      }
+    }
+  });
+
+  if (regClient.active) {
+    const cleanup = async () => {
+      await regClient.stop();
+      server.close();
+      process.exit(0);
+    };
+    process.once('SIGINT', cleanup);
+    process.once('SIGTERM', cleanup);
+  }
 
   const relayOnce = makeRelay(pool, amqpPublisher(env('RABBITMQ_URL', 'amqp://localhost')));
   setInterval(() => relayOnce().catch((e) => log.error('relay lỗi', { error: e.message })), 500);
