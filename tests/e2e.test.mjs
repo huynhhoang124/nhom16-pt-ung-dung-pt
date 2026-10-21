@@ -12,8 +12,8 @@ import { fileURLToPath } from 'node:url';
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { io } = createRequire(new URL('../frontend/package.json', import.meta.url))('socket.io-client');
-const AGG = 'http://localhost:8000';
-const NODE = { A: 'http://localhost:8001', B: 'http://localhost:8002', C: 'http://localhost:8003' };
+const AGG = process.env.AGGREGATOR_URL ?? 'http://localhost:8000';
+const NODE = { A: 'http://localhost:8001', B: 'http://localhost:8002', C: 'http://localhost:8003', D: 'http://localhost:8004' };
 const KEY = process.env.INTERNAL_KEY ?? 'dev';
 const T = { timeout: 120_000 };
 
@@ -556,3 +556,69 @@ test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), o
     }
   }
 );
+
+// --- PD-09: Khám phá dịch vụ qua etcd (COORD=1 node --test tests/e2e.test.mjs) ---
+test('TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd -> tự động hiện trên API danh sách bãi trong <= 2s',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      compose('--profile extra up -d db-d parking-d');
+      const start = Date.now();
+      await until('bãi D xuất hiện trong danh sách bãi của Aggregator <= 2s', async () => {
+        const r = await agg('/api/parkings');
+        const d = r.body?.find((p) => p.parkingId === 'D');
+        return d && d.status === 'ONLINE';
+      }, 5000);
+      const elapsed = Date.now() - start;
+      console.log(`TC63 - Bãi D xuất hiện và ONLINE sau ${elapsed}ms`);
+      assert.ok(elapsed <= 4000, `Bãi mới phải hiện trong danh sách bãi kịp thời (thực tế: ${elapsed}ms)`);
+    } finally {
+      compose('--profile extra stop parking-d db-d');
+    }
+  }
+);
+
+test('TC64 phân hoạch mạng node <-> etcd: mất lease nhưng HTTP còn sống -> trạng thái chuyển DEGRADED',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      compose('--profile extra up -d db-d parking-d');
+      await until('bãi D ONLINE', async () => {
+        const r = await agg('/api/parkings');
+        return r.body?.find((p) => p.parkingId === 'D')?.status === 'ONLINE';
+      }, 10_000);
+
+      // Giả lập bãi D mất kết nối tới etcd trong 8 giây (lease TTL 5s sẽ hết hạn trên etcd)
+      const part = await node('D', '/api/test/fault/etcd-partition', {
+        method: 'POST',
+        body: { ms: 8000 },
+      });
+      assert.equal(part.status, 200);
+
+      // Node D HTTP vẫn sống
+      const h = await node('D', '/health');
+      assert.equal(h.status, 200);
+
+      // Chờ lease 5s hết hạn trên etcd -> Aggregator nhận DELETE event -> chuyển sang DEGRADED
+      await until('bãi D chuyển sang DEGRADED khi mất lease', async () => {
+        const r = await agg('/api/parkings');
+        const d = r.body?.find((p) => p.parkingId === 'D');
+        return d && d.status === 'DEGRADED';
+      }, 15_000);
+
+      console.log('TC64 - PASS: Bãi D chuyển sang DEGRADED khi mất lease etcd nhưng HTTP vẫn sống');
+
+      // Sau 8 giây partition kết thúc, bãi D đăng ký lại lease -> phục hồi ONLINE
+      await until('bãi D phục hồi ONLINE sau khi có lại lease', async () => {
+        const r = await agg('/api/parkings');
+        const d = r.body?.find((p) => p.parkingId === 'D');
+        return d && d.status === 'ONLINE';
+      }, 15_000);
+
+      console.log('TC64 - PASS: Bãi D tự động phục hồi ONLINE');
+    } finally {
+      compose('--profile extra stop parking-d db-d');
+    }
+  }
+);
+

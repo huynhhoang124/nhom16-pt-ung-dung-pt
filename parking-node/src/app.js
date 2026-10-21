@@ -17,7 +17,7 @@ const STAFF_WRITE = [/^\/slots\/[^/]+\/(enter|exit|maintenance|unmaintenance)$/,
 // jwtPublicKey: khoá công khai RS256 của Aggregator; có thì nhân viên bãi này gọi thẳng được (PT-05).
 // corsOrigins: trang web nào được gọi thẳng node từ trình duyệt.
 function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`,
-  jwtPublicKey, corsOrigins = ['http://localhost:3000'], metricsExtra = [], readPool = pool }) {
+  jwtPublicKey, corsOrigins = ['http://localhost:3000'], metricsExtra = [], readPool = pool, regClient = null }) {
   // readPool: bản sao chỉ đọc (PT-02) cho các truy vấn đọc thuần; mặc định = bản chính
   const app = express();
   app.use(withRequestId);
@@ -54,6 +54,13 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
   });
 
   const send = (res, r) => res.status(r.code).json(r.body);
+
+  // PD-09 / TC64: Giả lập lỗi đứt kết nối etcd
+  app.post('/api/test/fault/etcd-partition', async (req, res) => {
+    const ms = Number(req.body?.ms || 6000);
+    await regClient?.simulatePartition?.(ms);
+    res.json({ ok: true, durationMs: ms });
+  });
 
   app.get('/api/availability', async (_req, res) => res.json(await s.availability(readPool, parkingId)));
   const type = (req) => (['CAR', 'MOTO'].includes(req.query.type) ? req.query.type : undefined);

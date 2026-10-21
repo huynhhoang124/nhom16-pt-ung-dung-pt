@@ -3,6 +3,7 @@ const { init, readThrough } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
 const { expireDue, activateDue, warnExpiring } = require('./slots');
+const { makeRegistryClient } = require('./registry');
 const { log } = require('./log');
 
 const env = (k, d) => process.env[k] ?? d;
@@ -37,10 +38,39 @@ async function main() {
     },
   });
 
+  // PD-09: Đăng ký dịch vụ lên etcd bằng lease
+  const regClient = makeRegistryClient({
+    etcdEndpoints: process.env.ETCD_ENDPOINTS,
+    parkingId,
+    port,
+    log,
+  });
+  if (regClient.active) {
+    for (let i = 1; ; i++) {
+      try {
+        await regClient.register();
+        break;
+      } catch (e) {
+        if (i >= 15) {
+          log.error('Không thể đăng ký lên etcd', { error: e.message });
+          break;
+        }
+        await new Promise((r) => setTimeout(r, 1000));
+      }
+    }
+    const cleanup = async () => {
+      await regClient.stop();
+      process.exit(0);
+    };
+    process.once('SIGINT', cleanup);
+    process.once('SIGTERM', cleanup);
+  }
+
   const app = makeApp({
     readPool, metricsExtra: [lagMetric],
     pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
     reservationMinutes: Number(env('RESERVATION_MINUTES', 15)),
+    regClient,
     ...(process.env.QR_SECRET && { qrSecret: process.env.QR_SECRET }),
     // PT-05: khoá công khai của Aggregator (PEM, base64) -> nhân viên gọi thẳng node khi trung tâm sập
     jwtPublicKey: process.env.JWT_PUBLIC_KEY_B64 ? Buffer.from(process.env.JWT_PUBLIC_KEY_B64, 'base64').toString() : undefined,

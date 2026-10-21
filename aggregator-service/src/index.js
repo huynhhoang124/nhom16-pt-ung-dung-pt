@@ -40,6 +40,24 @@ async function main() {
   });
   for (const row of (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows) reg.add(row);
 
+  // PD-09: Khám phá dịch vụ động qua etcd lease
+  const { startDiscovery } = require('./discovery');
+  const discovery = startDiscovery({
+    etcdEndpoints: env('ETCD_ENDPOINTS'),
+    reg,
+    pool,
+    log,
+  });
+  if (discovery.active) {
+    discovery.start().catch((e) => log.error('Lỗi khởi động discovery etcd', { error: e.message }));
+    const cleanup = async () => {
+      await discovery.stop();
+      process.exit(0);
+    };
+    process.once('SIGINT', cleanup);
+    process.once('SIGTERM', cleanup);
+  }
+
   const cache = new Map();
   const b64 = (k) => (process.env[k] ? Buffer.from(process.env[k], 'base64').toString() : undefined);
   const auth = makeAuth(env('JWT_SECRET', 'dev-secret'), { privateKey: b64('JWT_PRIVATE_KEY_B64'), publicKey: b64('JWT_PUBLIC_KEY_B64') });

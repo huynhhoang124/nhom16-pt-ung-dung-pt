@@ -28,11 +28,62 @@ async function resolveUrl(url) {
 function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
   const nodes = new Map();
 
+  function computeStatus(n) {
+    const httpOk = n.fails < failThreshold;
+    if (n.hasLease === undefined) {
+      return httpOk ? 'ONLINE' : 'OFFLINE';
+    }
+    if (n.hasLease && httpOk) return 'ONLINE';
+    if (n.hasLease || httpOk) return 'DEGRADED';
+    return 'OFFLINE';
+  }
+
+  function setStatus(n, status) {
+    const prev = n.status;
+    n.status = status;
+    if (prev !== status) api.onChange?.(n, prev);
+  }
+
+  function setLease(id, hasLease) {
+    const n = nodes.get(id);
+    if (!n) return;
+    n.hasLease = hasLease;
+    setStatus(n, computeStatus(n));
+  }
+
   // Bãi mới bắt đầu ở OFFLINE: lần health check thành công đầu tiên = chuyển ONLINE = đối soát luôn.
-  const add = (row) => nodes.set(row.parking_id, {
-    id: row.parking_id, name: row.name, url: row.api_url, address: row.address ?? null, lat: row.lat ?? null, lng: row.lng ?? null, publicUrl: row.public_url ?? null,
-    status: 'OFFLINE', fails: failThreshold, lastSeen: null,
-  });
+  const add = (row) => {
+    let n = nodes.get(row.parking_id);
+    if (n) {
+      if (row.api_url) n.url = row.api_url;
+      if (row.name) n.name = row.name;
+      if (row.address !== undefined) n.address = row.address;
+      if (row.lat !== undefined) n.lat = row.lat;
+      if (row.lng !== undefined) n.lng = row.lng;
+      if (row.public_url !== undefined) n.publicUrl = row.public_url;
+      if (row.zone !== undefined) n.zone = row.zone;
+      if (row.hasLease !== undefined) n.hasLease = row.hasLease;
+      setStatus(n, computeStatus(n));
+      return n;
+    }
+    n = {
+      id: row.parking_id,
+      name: row.name || `Bãi ${row.parking_id}`,
+      url: row.api_url,
+      address: row.address ?? null,
+      lat: row.lat ?? null,
+      lng: row.lng ?? null,
+      publicUrl: row.public_url ?? null,
+      status: 'OFFLINE',
+      fails: failThreshold,
+      lastSeen: null,
+      zone: row.zone ?? null,
+      hasLease: row.hasLease,
+    };
+    nodes.set(row.parking_id, n);
+    setStatus(n, computeStatus(n));
+    return n;
+  };
 
   // Timeout dùng AbortSignal.timeout: bộ đếm của runtime, không phụ thuộc giờ hệ thống bị chỉnh.
   const raw = (n, path, { method = 'GET', body, ms = timeoutMs } = {}) =>
@@ -44,13 +95,11 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
       signal: AbortSignal.timeout(ms),
     });
 
-  function setStatus(n, status) {
-    const prev = n.status;
-    n.status = status;
-    if (prev !== status) api.onChange?.(n, prev);
-  }
-
-  const failed = (n) => { if (++n.fails >= failThreshold && n.status !== 'OFFLINE') setStatus(n, 'OFFLINE'); };
+  const failed = (n) => {
+    if (++n.fails >= failThreshold) {
+      setStatus(n, computeStatus(n));
+    }
+  };
 
   // Gọi node. Lỗi = mất kết nối, timeout hoặc 5xx. Retry tối đa 1 lần, chờ ngẫu nhiên 100–300 ms (jitter để
   // nhiều client không dồn vào cùng lúc), và CHỈ khi thao tác idempotent: GET (mặc định) hoặc ghi có
@@ -88,13 +137,13 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
     if (ok) {
       n.fails = 0;
       n.lastSeen = new Date().toISOString();
-      setStatus(n, 'ONLINE');
-    } else if (++n.fails >= failThreshold) {
-      setStatus(n, 'OFFLINE');
+    } else {
+      n.fails++;
     }
+    setStatus(n, computeStatus(n));
   }
 
-  // onChange(n, prev): báo khi bãi đổi ONLINE/OFFLINE, do health check hoặc do mạch mở khi gọi lỗi.
+  // onChange(n, prev): báo khi bãi đổi ONLINE/OFFLINE/DEGRADED, do health check hoặc do mạch mở khi gọi lỗi.
   const check = (onChange) => {
     if (onChange) api.onChange = onChange;
     return Promise.all([...nodes.values()].map(checkOne));
@@ -103,14 +152,29 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
   // Scatter–gather: gọi song song, bãi lỗi/chậm thì bỏ qua và gắn nhãn, vẫn trả phần còn lại.
   const gather = (fn) => Promise.all([...nodes.values()].map(async (n) => {
     if (n.status === 'OFFLINE') return { parkingId: n.id, status: 'OFFLINE' };
-    try { return { parkingId: n.id, status: 'ONLINE', ...(await fn(n)) }; }
+    try { return { parkingId: n.id, status: n.status, ...(await fn(n)) }; }
     catch { return { parkingId: n.id, status: 'OFFLINE' }; }
   }));
 
   // PT-01: nhiều bản Aggregator dùng chung DB điều phối -> mỗi vòng health check nạp bãi mới do bản khác thêm.
   const sync = (rows) => rows.filter((r) => !nodes.has(r.parking_id)).map((r) => (add(r), r.parking_id));
 
-  const api = { nodes, add, sync, get: (id) => nodes.get(id), all: () => [...nodes.values()], call, json, check, gather, onChange: null };
+  const api = {
+    nodes,
+    add,
+    sync,
+    get: (id) => nodes.get(id),
+    all: () => [...nodes.values()],
+    call,
+    json,
+    check,
+    checkOne,
+    gather,
+    setStatus,
+    setLease,
+    computeStatus,
+    onChange: null,
+  };
   return api;
 }
 
