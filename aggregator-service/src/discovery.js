@@ -58,7 +58,15 @@ function startDiscovery({
     activeLeaseKeys.get(parkingId).add(key);
 
     const url = data.url || `http://${hostname}:8001`;
-    const zone = data.zone ?? null;
+    const zone = data.zone ?? 'bac';
+
+    if (pool) {
+      pool.query(
+        `INSERT INTO parking_nodes(parking_id, name, api_url, zone, managed_by_etcd) VALUES ($1,$2,$3,$4,TRUE)
+         ON CONFLICT (parking_id) DO UPDATE SET api_url = EXCLUDED.api_url, zone = EXCLUDED.zone, managed_by_etcd = TRUE`,
+        [parkingId, data.name || `Bãi ${parkingId}`, url, zone]
+      ).catch((e) => log.error?.('[etcd-discovery] Lỗi lưu bãi mới vào DB', { error: e.message }));
+    }
 
     let n = reg.get(parkingId);
     if (!n) {
@@ -71,14 +79,6 @@ function startDiscovery({
         hasLease: true,
       });
 
-      // Lưu vào bảng parking_nodes nếu có pool để phục vụ các luồng tra cứu SQL khác
-      if (pool) {
-        pool.query(
-          `INSERT INTO parking_nodes(parking_id, name, api_url) VALUES ($1,$2,$3)
-           ON CONFLICT (parking_id) DO UPDATE SET api_url = EXCLUDED.api_url`,
-          [parkingId, data.name || `Bãi ${parkingId}`, url]
-        ).catch((e) => log.error?.('[etcd-discovery] Lỗi lưu bãi mới vào DB', { error: e.message }));
-      }
     } else {
       n.url = url;
       if (zone) n.zone = zone;

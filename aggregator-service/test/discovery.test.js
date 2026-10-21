@@ -87,6 +87,31 @@ test('PD-09 dynamic discovery: phát hiện bãi mới qua applyPut và thu hồ
   disc.client.close();
 });
 
+test('PD-12 discovery lưu zone và đánh dấu node do etcd quản lý', async () => {
+  const reg = makeRegistry({ internalKey: 'dev' });
+  const writes = [];
+  const pool = {
+    query: async (sql, params) => { writes.push({ sql, params }); return { rows: [] }; },
+  };
+  const disc = startDiscovery({
+    etcdEndpoints: 'http://localhost:2379',
+    reg,
+    pool,
+  });
+
+  disc.applyPut('/nhom16/parking/nodes/D/parking-d', JSON.stringify({
+    url: 'http://toxiproxy:18004',
+    zone: 'nam',
+    name: 'Bãi D',
+  }));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(reg.get('D').zone, 'nam');
+  assert.match(writes[0].sql, /zone, managed_by_etcd/);
+  assert.deepEqual(writes[0].params, ['D', 'Bãi D', 'http://toxiproxy:18004', 'nam']);
+  disc.client.close();
+});
+
 test('PD-09 discovery: khi không có ETCD_ENDPOINTS thì inactive, không lỗi', async () => {
   const reg = makeRegistry({ internalKey: 'dev' });
   const disc = startDiscovery({ etcdEndpoints: '', reg });
