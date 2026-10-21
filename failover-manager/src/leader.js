@@ -50,6 +50,8 @@ function makeLeaderElector({
       active: false,
       isLeader: () => true,
       getInstanceId: () => instanceId,
+      getPayload: () => JSON.stringify({ instanceId, hostname, pid: process.pid }),
+      getElectionKey: () => ELECTION_KEY,
       onLeaderStart: (fn) => {
         try { fn(); } catch (e) { log.error?.('Lỗi onLeaderStart callback', { error: e.message }); }
         return () => {};
@@ -204,6 +206,9 @@ function makeLeaderElector({
     client,
     isLeader,
     getInstanceId: () => instanceId,
+    getPayload: () => (leader ? payload : null),
+    getLease: () => (leader ? activeLease : null),
+    getElectionKey: () => ELECTION_KEY,
     onLeaderStart,
     onLeaderStop,
     demote,
