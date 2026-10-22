@@ -14,7 +14,7 @@ test('administrative endpoint publishes unknown parking, preserves old routes, a
     return { messageId: 'id', correlationId: 'id', status: 'BROKER_CONFIRMED' };
   } };
   const reg = { all: () => [], get: () => { throw new Error('must not precheck registry'); } };
-  const app = makeApp({ pool: {}, reg, cache: new Map(), auth: makeAuth('test'), commands });
+  const app = makeApp({ pool: {}, reg, cache: new Map(), auth: makeAuth('test'), commands, commandMode:'http' });
   const server = http.createServer(app);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   t.after(() => new Promise((r) => server.close(r)));

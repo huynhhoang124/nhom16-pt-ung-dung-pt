@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, centralDown, formatPlate, knownNode, message, newKey, nodeApi, rememberNodes, RESERVATION_LABEL, STATUS_LABEL, useLive } from '../api.js';
 import { TYPE_LABEL } from './Dashboard.jsx';
 import Pricing from './Pricing.jsx';
+import {commandRequest} from '../api.js';
 
 // Thao tác nhân viên theo trạng thái slot.
 const STAFF_ACTIONS = {
@@ -67,10 +68,10 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   async function reserve(e) {
     e.preventDefault();
     // Đổi giờ/thời lượng = yêu cầu mới -> key mới; chỉ "Thử lại" mới dùng lại key cũ.
-    const r = await api(`/api/parkings/${parkingId}/reservations`, {
+    const r = await commandRequest(`/api/parkings/${parkingId}/reservations`, {
       method: 'POST', headers: { 'idempotency-key': pending.key },
       body: { slotCode: pending.slotCode, licensePlate: plate, durationMinutes: duration, ...(when && { startTime: new Date(when).toISOString() }) },
-    });
+    },()=>setNote({kind:'ok',text:'Đang xử lý yêu cầu đặt chỗ…'}));
     if (r.ok) {
       const t = (k) => new Date(r.data[k]).toLocaleString('vi-VN');
       setNote({ kind: 'ok', text: `Đã đặt ${pending.slotCode} từ ${t('start_time')} đến ${t('end_time')}. Đến muộn quá ${t('expire_time')} sẽ mất chỗ. Mã QR vào cổng ở mục "Đặt chỗ của tôi".` });
@@ -111,7 +112,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   }
 
   async function cancel(id) {
-    const r = await api(`/api/parkings/${parkingId}/reservations/${id}`, { method: 'DELETE' });
+    const r = await commandRequest(`/api/parkings/${parkingId}/reservations/${id}`, { method: 'DELETE' },()=>setNote({kind:'ok',text:'Đang xử lý yêu cầu huỷ…'}));
     setNote(r.ok ? { kind: 'ok', text: 'Đã huỷ đặt chỗ.' } : { kind: 'error', text: message(r.data) });
     load();
   }
@@ -135,7 +136,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
           Xe vào/ra vẫn ghi vào bãi; trung tâm sẽ tự đồng bộ khi hoạt động lại.</p>
       )}
       {p.stale && (
-        <p className="banner">Bãi đang mất kết nối. Đây là trạng thái cuối cùng Aggregator biết (có thể đã cũ); tạm thời không nhận đặt chỗ.</p>
+        <p className="banner">Bãi đang mất kết nối. Dữ liệu hiển thị có thể đã cũ; theo dõi trạng thái các yêu cầu đã gửi ở thông báo phía trên.</p>
       )}
       <p className="legend">
         {[['', 'Tất cả'], ...Object.entries(TYPE_LABEL)].map(([k, v]) => (
@@ -172,7 +173,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
           <strong>{slot.slotCode}</strong> · {TYPE_LABEL[slot.type] ?? ''} · {STATUS_LABEL[slot.status]}
           {pending && (
             <form onSubmit={reserve} className="inline">
-              <input placeholder="Biển số, vd 30A-123.45" value={plate} onChange={(e) => setPlate(e.target.value)} required />
+              <input placeholder="Biển số, vd 30A-123.45" value={plate} onChange={(e) => {setPlate(e.target.value);setPending({...pending,key:newKey(),unknown:false});}} required />
               <label className="small">Giờ đến
                 <input type="datetime-local" value={when} onChange={(e) => { setWhen(e.target.value); setPending({ ...pending, key: newKey(), unknown: false }); }} />
               </label>

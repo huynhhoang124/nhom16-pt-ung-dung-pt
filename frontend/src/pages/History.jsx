@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, formatPlate, message, newKey, useLive } from '../api.js';
+import {commandRequest} from '../api.js';
 
 const time = (t) => (t ? new Date(t).toLocaleString('vi-VN') : '—');
 const money = (v) => (v == null ? '—' : `${v.toLocaleString('vi-VN')} đ`);
@@ -28,7 +29,7 @@ export default function History({ user }) {
 
   async function pay() {
     const { x } = paying;
-    const r = await api(`/api/me/sessions/${x.parkingId}/${x.id}/pay`, { method: 'POST', headers: { 'idempotency-key': paying.key } });
+    const r = await commandRequest(`/api/me/sessions/${x.parkingId}/${x.id}/pay`, { method: 'POST', headers: { 'idempotency-key': paying.key } },()=>setError('Đang xử lý thanh toán…'));
     if (r.ok) { setPaying(null); setError(''); load(); }
     else if (r.status === 504 || r.status === 0) setPaying({ ...paying, unknown: true });   // chưa rõ: thử lại cùng key
     else { setPaying(null); setError(message(r.data)); load(); }
