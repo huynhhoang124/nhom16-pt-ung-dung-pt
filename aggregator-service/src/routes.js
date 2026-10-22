@@ -7,16 +7,35 @@ const { mountMetrics } = require('./metrics');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) {
+function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 'broker', reserveTimeoutMs = 3000 }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
   // PT-01: cho biết request rơi vào bản Aggregator nào (demo cân bằng tải / tắt một bản)
-  const instance = `aggregator-${process.env.INSTANCE_ID ?? '1'}`;
+  const instance = `aggregator-${process.env.AGGREGATOR_ID ?? process.env.INSTANCE_ID ?? '1'}`;
   app.use((_req, res, next) => { res.set('x-instance', instance); next(); });
   mountMetrics(app, { reg });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
+  if(!['http','broker'].includes(commandMode))throw new Error('INVALID_COMMAND_MODE');
+  async function broker(req,res,type,payload,key=req.get('idempotency-key')){
+    if(!commandFlow)return res.status(503).json({error:'COMMAND_SERVICE_UNAVAILABLE'});
+    try{
+      const traceparent=req.get('traceparent');
+      if(traceparent&&!/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/.test(traceparent))return res.status(400).json({error:'INVALID_TRACEPARENT'});
+      const out=await commandFlow.execute({parkingId:req.params.id,type,user:req.user,payload,key,traceparent});
+      if(out.code===202)res.set('location',`/api/commands/${encodeURIComponent(out.body.commandId)}`);
+      res.status(out.code).json(out.body);
+    }catch(e){res.status(e.status??503).json({error:e.code??'COMMAND_SERVICE_UNAVAILABLE',...(e.commandId&&{commandId:e.commandId,unknown:e.unknown})});}
+  }
+  app.get('/api/commands/:id',need(),async(req,res)=>{
+    if(!commandFlow)return res.status(503).json({error:'COMMAND_SERVICE_UNAVAILABLE'});
+    const row=await commandFlow.get(req.params.id);
+    if(!row||(row.user_id!==req.user.sub&&req.user.role!=='ADMIN'))return res.status(404).json({error:'COMMAND_NOT_FOUND'});
+    res.json({commandId:row.id,parkingId:row.parking_id,type:row.type,status:row.status,result:row.result,statusCode:row.status_code,
+      publishState:row.publish_state,sendStatus:row.failure_phase==='SEND'?'FAILED_TO_SEND':undefined,
+      createdAt:row.created_at,updatedAt:row.updated_at});
+  });
 
   // Chuyển tiếp tới đúng node (định tuyến theo parking_id). Node OFFLINE: từ chối ngay, không xếp hàng ngầm.
   // Timeout khi GHI: không biết node đã làm hay chưa (bài toán hai tướng quân) -> 504, client retry cùng key.
@@ -110,6 +129,7 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
     const key = req.get('idempotency-key');
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
     const { slotCode, licensePlate, startTime, durationMinutes } = req.body ?? {};
+    if(commandMode==='broker')return broker(req,res,'reserve',{slotCode,licensePlate,...(startTime!==undefined&&{startTime}),...(durationMinutes!==undefined&&{durationMinutes})});
     await forward(res, reg.get(req.params.id), '/api/reservations', {
       method: 'POST', ms: reserveTimeoutMs, retry: true,   // an toàn vì requestId idempotent
       body: { requestId: `${req.user.sub}:${key}`, userId: req.user.sub, slotCode, licensePlate, startTime, durationMinutes },
@@ -145,6 +165,7 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
   app.delete('/api/parkings/:id/reservations/:rid', need('USER', 'STAFF', 'ADMIN'), async (req, res) => {
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
     const owner = req.user.role === 'USER' ? `?userId=${encodeURIComponent(req.user.sub)}` : '';
+    if(commandMode==='broker')return broker(req,res,'cancel',{reservationId:req.params.rid},req.get('idempotency-key')??`cancel-${req.params.rid}`);
     await forward(res, reg.get(req.params.id), `/api/reservations/${encodeURIComponent(req.params.rid)}${owner}`, { method: 'DELETE' });
   });
 
@@ -196,7 +217,7 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
     await forward(res, reg.get(req.params.id), '/api/reservations');
   });
 
-  mountSessions(app, { reg, need, forward, reserveTimeoutMs });
+  mountSessions(app, { reg, need, forward, reserveTimeoutMs, commandMode, broker });
 
   // Quản trị: trạng thái các node; thêm bãi mới không cần sửa code (tính mở rộng).
   app.get('/api/admin/nodes', need('ADMIN'), (_req, res) =>

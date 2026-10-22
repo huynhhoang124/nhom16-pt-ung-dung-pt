@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
+const { signature } = require('./command-signature');
 
 const EXCHANGE = 'parking.commands';
 const ATTEMPT_HEADER = 'x-command-publish-id';
@@ -14,7 +15,7 @@ function routingKey(parkingId, type) {
   return `cmd.${parkingId}.${type}`;
 }
 
-function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000 } = {}) {
+function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey } = {}) {
   const connectAny = makeConnector(url, connect);
   let current;
   let opening;
@@ -84,6 +85,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
     }
     const headers = { ...opts.headers };
     const envelope = { type, parkingId, schemaVersion: opts.schemaVersion ?? headers.schemaVersion ?? 1, payload: body };
+    for (const k of ['issuedAt','deadlineAt']) if (opts[k] !== undefined) envelope[k]=opts[k];
     for (const field of ['causationId', 'fencingToken', 'hlc', 'traceparent', 'actor']) {
       const value = opts[field] ?? headers[field];
       if (value !== undefined) envelope[field] = headers[field] = value;
@@ -117,6 +119,12 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       const publishTimer = setTimeout(() => discard(state, new Error('Publisher confirm timeout')), timeoutMs);
       state.pending.set(attempt, { finish });
       if (state.dead) return finish(failure('BROKER_UNAVAILABLE', 503));
+      if (opts.deadlineAt !== undefined) {
+        const remaining=opts.deadlineAt-Date.now();
+        if (!Number.isSafeInteger(remaining)||remaining<=0) return finish(failure('COMMAND_DEADLINE_BEFORE_SEND',410));
+        properties.expiration=String(remaining);
+      }
+      if (signingKey) headers['x-command-signature']=signature(signingKey,envelope,properties);
       try {
         // RabbitMQ sends basic.return BEFORE the confirm for an unroutable mandatory message.
         // Individual confirm callbacks avoid waitForConfirms() mixing concurrent sends.
