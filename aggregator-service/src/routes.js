@@ -4,10 +4,11 @@ const { mountSessions } = require('./sessions-routes');
 const { log, withRequestId } = require('./log');
 const { makeSagas } = require('./saga');
 const { mountMetrics } = require('./metrics');
+const { mountDlq } = require('./dlq');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) {
+function makeApp({ pool, reg, cache, auth, commands, dlq, reserveTimeoutMs = 3000 }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
@@ -17,6 +18,7 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
   mountMetrics(app, { reg });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
+  if (dlq) mountDlq(app, { dlq, need });
 
   // Chuyển tiếp tới đúng node (định tuyến theo parking_id). Node OFFLINE: từ chối ngay, không xếp hàng ngầm.
   // Timeout khi GHI: không biết node đã làm hay chưa (bài toán hai tướng quân) -> 504, client retry cùng key.

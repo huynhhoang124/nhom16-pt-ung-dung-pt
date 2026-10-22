@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, message, useLive } from '../api.js';
+import DeadLetters from '../DeadLetters.jsx';
 
 const EMPTY = { parkingId: '', name: '', apiUrl: '', address: '', lat: '', lng: '' };
 
@@ -26,6 +27,7 @@ export default function Admin() {
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
   return (
     <>
+      <DeadLetters />
       <h2>Giám sát các Parking Node</h2>
       <p className="muted">Health check mỗi 5 giây; đánh dấu OFFLINE sau 3 lần lỗi liên tiếp.</p>
       <div className="scroll"><table>

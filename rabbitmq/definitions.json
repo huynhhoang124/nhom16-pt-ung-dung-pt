@@ -82,6 +82,35 @@
       "arguments": {
         "x-queue-type": "quorum"
       }
+    },
+    {
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 2000
+      },
+      "durable": true,
+      "auto_delete": false,
+      "vhost": "/",
+      "name": "cmd.retry.2s"
+    },
+    {
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-message-ttl": 10000
+      },
+      "durable": true,
+      "auto_delete": false,
+      "vhost": "/",
+      "name": "cmd.retry.10s"
+    },
+    {
+      "arguments": {
+        "x-queue-type": "quorum"
+      },
+      "durable": true,
+      "auto_delete": false,
+      "vhost": "/",
+      "name": "cmd.dead"
     }
   ],
   "bindings": [
@@ -116,6 +145,30 @@
       "destination_type": "queue",
       "routing_key": "expired",
       "arguments": {}
+    },
+    {
+      "arguments": {},
+      "destination": "cmd.retry.2s",
+      "destination_type": "queue",
+      "vhost": "/",
+      "source": "parking.dlx",
+      "routing_key": "retry.1"
+    },
+    {
+      "arguments": {},
+      "destination": "cmd.retry.10s",
+      "destination_type": "queue",
+      "vhost": "/",
+      "source": "parking.dlx",
+      "routing_key": "retry.2"
+    },
+    {
+      "arguments": {},
+      "destination": "cmd.dead",
+      "destination_type": "queue",
+      "vhost": "/",
+      "source": "parking.dlx",
+      "routing_key": "dead"
     }
   ],
   "policies": [
@@ -133,6 +186,18 @@
         "max-length": 10000,
         "delivery-limit": 5
       }
+    },
+    {
+      "apply-to": "quorum_queues",
+      "definition": {
+        "dead-letter-strategy": "at-least-once",
+        "dead-letter-exchange": "parking.commands",
+        "overflow": "reject-publish"
+      },
+      "vhost": "/",
+      "name": "command-retry",
+      "pattern": "^cmd\\.retry\\.(2s|10s)$",
+      "priority": 10
     }
   ]
 }
