@@ -1,0 +1,225 @@
+PD-01 review correction evidence, 2026-10-22, isolated project pd01-review; pre-existing broker/volumes untouched
+Definitions now bootstrap command topology only; mutable command settings use policy command-delivery.
+Default mode verified: active runtime event queues have consumers; no aggregator-2 queues
+PD-01 Management API verified: vhost /, 2 exchanges, 4 quorum queues, 4 bindings, 1 policy, parking permissions
+Full e2e on revised definitions:
+✔ cô lập dữ liệu: node bãi A không biết địa chỉ DB của bãi khác (771.8498ms)
+✔ TC01 tra cứu tổng hợp 3 bãi (14.6497ms)
+✔ TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh (136.7872ms)
+✔ TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai (647.831ms)
+✔ TC09 20 request đồng thời cùng một slot (Postgres thật): đúng 1 thành công (290.3375ms)
+✔ 10 lần gửi đồng thời CÙNG một Idempotency-Key: chỉ 1 reservation, mọi phản hồi cùng id (92.3357ms)
+✔ TC27 hai lần trả tiền song song khác key cho cùng một phiên (Postgres thật): đúng 1 thành công (903.8876ms)
+✔ TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> RabbitMQ -> Aggregator -> Socket.IO (1057.4528ms)
+✔ TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B trả dữ liệu cũ; bật lại thì ONLINE (24691.5602ms)
+✔ DB bãi C khởi động lại: node C không sập, DB về thì tự kết nối lại và ghi được (1869.3673ms)
+✔ TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật lại thì được xử lý hết (9842.5763ms)
+✔ Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết (18485.6184ms)
+﹣ TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùng key -> đúng 1 lượt đặt (0.3048ms) # SKIP
+ℹ tests 13
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 60820.9506
+HA policy mutation test (separate from live publisher suite):
+✔ isolated RabbitMQ: policy routing can change with a command already queued, without recreating cmd.C (13403.379ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 13644.9881
+Publisher/unit/HTTP/live suite on revised HA topology:
+✔ administrative endpoint publishes unknown parking, preserves old routes, and maps publish outcomes (182.2434ms)
+✔ real RabbitMQ: concurrent mandatory returns, routed confirm, and reconnect (135.8889ms)
+✔ real isolated RabbitMQ: cmd.A reject reaches durable cmd.expired (74.7414ms)
+✔ routing key rejects wildcards, dots and empty segments without restricting parking registry (3.8162ms)
+✔ envelope and properties preserved; only resolve after individual publisher confirm (8.9357ms)
+✔ concurrent duplicate business IDs: return and out-of-order confirms match the exact attempt (2.6476ms)
+✔ nack is unavailable, non-NO_ROUTE return is not 404 (1.8362ms)
+✔ disconnect settles all in-flight sends as unknown; next send reconnects without automatic replay (1.3398ms)
+✔ connection failure and stalled connect are 503 before publish; connector tries next broker (33.1111ms)
+✔ stalled setup is retired; late connection cannot replace a reconnected channel (31.0531ms)
+✔ confirm timeout / closed channel callback / publish throw are unknown, never 404 (30.4154ms)
+✔ channel error invalidates publisher and does not become unhandled EventEmitter error (1.0257ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 801.9959
+Default mode verified: active runtime event queues have consumers; no aggregator-2 queues
+PD-01 Management API verified: vhost /, 2 exchanges, 4 quorum queues, 4 bindings, 1 policy, parking permissions
+[
+  {
+    "name": "aggregator.notifications.1",
+    "type": "quorum",
+    "consumers": 1,
+    "arguments": {
+      "x-queue-type": "quorum"
+    },
+    "policy": null,
+    "effective_policy_definition": {},
+    "members": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ],
+    "online": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ]
+  },
+  {
+    "name": "aggregator.slot-updates.1",
+    "type": "quorum",
+    "consumers": 1,
+    "arguments": {
+      "x-queue-type": "quorum"
+    },
+    "policy": null,
+    "effective_policy_definition": {},
+    "members": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ],
+    "online": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ]
+  },
+  {
+    "name": "cmd.A",
+    "type": "quorum",
+    "consumers": 0,
+    "arguments": {
+      "x-queue-type": "quorum",
+      "x-single-active-consumer": true
+    },
+    "policy": "command-delivery",
+    "effective_policy_definition": {
+      "dead-letter-exchange": "parking.dlx",
+      "dead-letter-routing-key": "expired",
+      "dead-letter-strategy": "at-least-once",
+      "delivery-limit": 5,
+      "max-length": 10000,
+      "overflow": "reject-publish"
+    },
+    "members": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ],
+    "online": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ]
+  },
+  {
+    "name": "cmd.B",
+    "type": "quorum",
+    "consumers": 0,
+    "arguments": {
+      "x-queue-type": "quorum",
+      "x-single-active-consumer": true
+    },
+    "policy": "command-delivery",
+    "effective_policy_definition": {
+      "dead-letter-exchange": "parking.dlx",
+      "dead-letter-routing-key": "expired",
+      "dead-letter-strategy": "at-least-once",
+      "delivery-limit": 5,
+      "max-length": 10000,
+      "overflow": "reject-publish"
+    },
+    "members": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ],
+    "online": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ]
+  },
+  {
+    "name": "cmd.C",
+    "type": "quorum",
+    "consumers": 0,
+    "arguments": {
+      "x-queue-type": "quorum",
+      "x-single-active-consumer": true
+    },
+    "policy": "command-delivery",
+    "effective_policy_definition": {
+      "dead-letter-exchange": "parking.dlx",
+      "dead-letter-routing-key": "expired",
+      "dead-letter-strategy": "at-least-once",
+      "delivery-limit": 5,
+      "max-length": 10000,
+      "overflow": "reject-publish"
+    },
+    "members": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ],
+    "online": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ]
+  },
+  {
+    "name": "cmd.expired",
+    "type": "quorum",
+    "consumers": 0,
+    "arguments": {
+      "x-queue-type": "quorum"
+    },
+    "policy": null,
+    "effective_policy_definition": {},
+    "members": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ],
+    "online": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ]
+  },
+  {
+    "name": "notification.events",
+    "type": "quorum",
+    "consumers": 1,
+    "arguments": {
+      "x-queue-type": "quorum"
+    },
+    "policy": null,
+    "effective_policy_definition": {},
+    "members": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ],
+    "online": [
+      "rabbit@rabbitmq",
+      "rabbit@rabbitmq-2",
+      "rabbit@rabbitmq-3"
+    ]
+  }
+]
