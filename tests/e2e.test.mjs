@@ -624,3 +624,39 @@ test('TC64 phân hoạch mạng node <-> etcd: mất lease nhưng HTTP còn số
   }
 );
 
+// --- PD-11: Cấu hình động qua etcd watch (COORD=1 node --test tests/e2e.test.mjs) ---
+test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> Aggregator nhận ngay không cần restart',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put "${k}" "${v}"`);
+
+    try {
+      // 1. Cập nhật cấu hình timeoutMs trên etcd thành 500
+      etcdPut('/nhom16/config/aggregator/timeoutMs', '500');
+
+      // 2. Chờ Aggregator nhận cấu hình mới qua watch trong <= 2s mà không cần restart container
+      await until('Aggregator nhận timeoutMs = 500', async () => {
+        const r = await agg('/api/config/timeoutMs');
+        return r.status === 200 && r.body?.value === 500;
+      }, 5000);
+
+      // 3. Kiểm tra log của Aggregator có chứa sự kiện cập nhật cấu hình kèm revision
+      const logs = compose('logs --tail 50 aggregator');
+      assert.match(logs, /\[etcd-config\] Cập nhật \/nhom16\/config\/aggregator\/timeoutMs|timeoutMs.*500/);
+      assert.match(logs, /revision/);
+
+      console.log('TC67 - PASS: Aggregator cập nhật timeoutMs = 500ms qua etcd watch tức thì và ghi log kèm revision');
+    } finally {
+      // Khôi phục giá trị mặc định 2000
+      try {
+        etcdPut('/nhom16/config/aggregator/timeoutMs', '2000');
+        await until('Aggregator khôi phục timeoutMs = 2000', async () => {
+          const r = await agg('/api/config/timeoutMs');
+          return r.status === 200 && r.body?.value === 2000;
+        }, 5000);
+      } catch { /* bỏ qua */ }
+    }
+  }
+);
+
+

@@ -7,7 +7,7 @@ const { mountMetrics } = require('./metrics');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
+function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000, config }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
@@ -65,6 +65,13 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
   });
 
   app.get('/api/parkings', (_req, res) => res.json(reg.all().map(info)));
+  // PD-11: Tra cứu cấu hình động hiện tại
+  app.get('/api/config', (_req, res) => res.json(config ? config.all() : {}));
+  app.get('/api/config/:key', (req, res) => {
+    if (!config) return res.status(404).json({ error: 'CONFIG_NOT_AVAILABLE' });
+    const val = config.get(req.params.key);
+    res.json({ key: req.params.key, value: val });
+  });
 
   // Nghiệp vụ 1: tra cứu toàn hệ thống (scatter–gather, kết quả một phần khi có bãi lỗi)
   const availability = () => reg.gather((n) => reg.json(n, '/api/availability'));

@@ -33,10 +33,21 @@ async function main() {
     catch (e) { if (i >= 30) throw e; log.info('DB chưa sẵn sàng, thử lại', { error: e.message }); await new Promise((r) => setTimeout(r, 2000)); }
   }
 
+  // PD-11: Cấu hình động qua etcd watch
+  const { makeConfig } = require('./config');
+  const config = makeConfig({
+    etcdEndpoints: env('ETCD_ENDPOINTS'),
+    log,
+  });
+  if (config.active) {
+    await config.start().catch((e) => log.error('Lỗi khởi động dynamic config etcd', { error: e.message }));
+  }
+
   const reg = makeRegistry({
     internalKey: env('INTERNAL_KEY', 'dev'),
-    timeoutMs: Number(env('NODE_TIMEOUT_MS', 2000)),
-    failThreshold: Number(env('FAIL_THRESHOLD', 3)),
+    config,
+    timeoutMs: config.get('timeoutMs'),
+    failThreshold: config.get('failThreshold'),
   });
   const hasEtcd = Boolean(env('ETCD_ENDPOINTS'));
   if (!hasEtcd) {
@@ -52,8 +63,12 @@ async function main() {
   });
   if (discovery.active) {
     discovery.start().catch((e) => log.error('Lỗi khởi động discovery etcd', { error: e.message }));
+  }
+
+  if (discovery.active || config.active) {
     const cleanup = async () => {
-      await discovery.stop();
+      if (discovery.active) await discovery.stop();
+      if (config.active) await config.stop();
       process.exit(0);
     };
     process.once('SIGINT', cleanup);
@@ -63,7 +78,7 @@ async function main() {
   const cache = new Map();
   const b64 = (k) => (process.env[k] ? Buffer.from(process.env[k], 'base64').toString() : undefined);
   const auth = makeAuth(env('JWT_SECRET', 'dev-secret'), { privateKey: b64('JWT_PRIVATE_KEY_B64'), publicKey: b64('JWT_PUBLIC_KEY_B64') });
-  const app = makeApp({ pool, reg, cache, auth });
+  const app = makeApp({ pool, reg, cache, auth, config, reserveTimeoutMs: config.get('reserveTimeoutMs', 3000) });
   const server = http.createServer(app);
   const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS
   // NV-08: socket có token hợp lệ thì vào phòng "user:<id>" để nhận thông báo riêng; không có vẫn nhận realtime chung.
