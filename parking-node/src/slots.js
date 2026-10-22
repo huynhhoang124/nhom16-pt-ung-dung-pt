@@ -13,12 +13,18 @@ async function tx(pool, fn) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
+    if (typeof pool.checkEpoch === 'function') {
+      await pool.checkEpoch(c);
+    }
     const out = await fn(c);
     await c.query('COMMIT');
     return out;
   } catch (e) {
     await c.query('ROLLBACK');
     if (e instanceof Abort) return { code: e.code, body: e.body };
+    if (e.code === 'STALE_DB_EPOCH' || e.status === 409) {
+      return { code: 409, body: { error: 'STALE_DB_EPOCH', message: e.message, ...e.details } };
+    }
     throw e;
   } finally {
     c.release();

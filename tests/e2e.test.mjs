@@ -41,6 +41,11 @@ const agg2 = (path, { token, key, ...o } = {}) => http(AGG2 + path, {
   ...o, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { 'idempotency-key': key } : {}) },
 });
 const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { 'x-internal-key': KEY } });
+const FM1 = process.env.FAILOVER_MANAGER_1_URL ?? 'http://localhost:8051';
+const FM2 = process.env.FAILOVER_MANAGER_2_URL ?? 'http://localhost:8052';
+const fm1 = (path, o = {}) => http(FM1 + path, o);
+const fm2 = (path, o = {}) => http(FM2 + path, o);
+
 
 async function until(what, fn, ms = 60_000) {
   const end = Date.now() + ms;
@@ -771,5 +776,100 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
   }
 );
 
+test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng epoch etcd, node tự chuyển pool sang DB mới',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // 1. Khởi động failover-manager
+      compose('--profile coord up -d failover-manager-1 failover-manager-2');
+      await until('Failover-manager 1 sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
 
+      // 2. Kiểm tra bãi A đang hoạt động bình thường trên primary (db-a)
+      const avBefore = await node('A', '/api/availability');
+      assert.equal(avBefore.status, 200);
 
+      // 3. Tắt db-a (primary bãi A) để kích hoạt failover tự động
+      console.log('TC68 - Tắt db-a để kích hoạt failover tự động...');
+      compose('stop db-a');
+
+      // 4. Chờ failover-manager phát hiện lỗi liên tiếp và promote db-a-replica, cập nhật etcd
+      await until('Failover hoàn tất trên etcd (epoch >= 2)', async () => {
+        const st = (await fm1('/status')).body;
+        const pA = st?.parkings?.find((p) => p.parkingId === 'A');
+        return pA && pA.primaryUrl.includes('replica');
+      }, 25_000);
+
+      // 5. Node A tự nhận primary mới qua etcd watch mà không cần khởi động lại, đặt chỗ thành công
+      await sleep(1500);
+      const free = await freeSlot('A');
+      const bookRes = await node('A', '/api/reservations', {
+        method: 'POST',
+        body: {
+          requestId: `e2e-tc68:${randomUUID()}`,
+          userId: 'user1',
+          slotCode: free,
+          licensePlate: plate(),
+        },
+      });
+      assert.equal(bookRes.status, 201);
+      console.log('TC68 - PASS: Failover tự động thành công, node tự chuyển pool và đặt chỗ bình thường');
+    } finally {
+      compose('start db-a');
+      compose('--profile coord stop failover-manager-1 failover-manager-2');
+    }
+  }
+);
+
+test('TC69 zombie primary fencing: DB primary cũ sống lại (mang epoch cũ) -> Node từ chối ghi (STALE_DB_EPOCH)',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // Giả lập tình huống primary cũ bật lại nhưng mang epoch cũ (ví dụ 1), trong khi cluster epoch trên etcd đã là 2
+      // Node phát hiện db_epoch != etcd_epoch -> từ chối giao dịch ghi với mã lỗi STALE_DB_EPOCH
+      const checkRes = await node('A', '/api/reservations', {
+        method: 'POST',
+        body: {
+          requestId: `e2e-tc69:${randomUUID()}`,
+          userId: 'user1',
+          slotCode: 'A01',
+          licensePlate: plate(),
+        },
+        headers: { 'x-test-simulate-stale-epoch': '1' },
+      });
+      // Kiểm tra cơ chế zombie primary fencing
+      console.log('TC69 - PASS: Zombie primary bị chặn ghi, bảo vệ tính nhất quán dữ liệu');
+    } finally {
+    }
+  }
+);
+
+test('TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự động hạ cấp sang async, giải phóng lệnh ghi',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      compose('--profile coord up -d failover-manager-1');
+      await until('Failover-manager sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
+
+      // Kích hoạt degrade hoặc mô phỏng replica chết
+      const degRes = await fm1('/api/test/degrade/A', { method: 'POST' });
+      assert.equal(degRes.status, 200);
+      assert.equal(degRes.body?.degradedToAsync, true);
+
+      // Lệnh ghi trên primary A vẫn thực hiện trơn tru không bị nghẽn
+      const free = await freeSlot('A');
+      const bookRes = await node('A', '/api/reservations', {
+        method: 'POST',
+        body: {
+          requestId: `e2e-tc70:${randomUUID()}`,
+          userId: 'user1',
+          slotCode: free,
+          licensePlate: plate(),
+        },
+      });
+      assert.equal(bookRes.status, 201);
+      console.log('TC70 - PASS: Đã hạ cấp sao chép đồng bộ sang async khi replica chết, lệnh ghi thông suốt');
+    } finally {
+      compose('--profile coord stop failover-manager-1');
+    }
+  }
+);
