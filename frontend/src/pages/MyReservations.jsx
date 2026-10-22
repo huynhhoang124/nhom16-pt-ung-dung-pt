@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, message, useLive } from '../api.js';
 import QrCode from '../QrCode.jsx';
 import GroupBooking from '../GroupBooking.jsx';
+import { commandRequest } from '../api.js';
 import { Icon, Plate, ResStatus } from '../ui.jsx';
 
 const dt = (t) => new Date(t).toLocaleString('vi-VN');
@@ -19,7 +20,8 @@ export default function MyReservations() {
   useLive(['SLOT_UPDATED', 'NODE_STATUS'], load);
 
   async function cancel(r) {
-    const res = await api(`/api/parkings/${r.parkingId}/reservations/${r.id}`, { method: 'DELETE' });
+    const res = await commandRequest(`/api/parkings/${r.parkingId}/reservations/${r.id}`, { method: 'DELETE' },
+      () => setNote({ kind: 'ok', text: 'Đang xử lý yêu cầu huỷ…' }));
     setNote(res.ok ? { kind: 'ok', text: 'Đã huỷ.' } : { kind: 'error', text: message(res.data) });
     load();
   }

@@ -24,6 +24,7 @@ x-node-env: &node-env
   INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
   RABBITMQ_URL: *amqp
   RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
+  COMMAND_MODE: ${COMMAND_MODE:-http}
   JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}          # PT-05: nhân viên gọi thẳng node khi Aggregator sập
   CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
   ETCD_ENDPOINTS: ${ETCD_ENDPOINTS:-}
@@ -100,6 +101,9 @@ services:
     image: nhom16/aggregator
     environment: &agg-env
       INSTANCE_ID: "1"
+      COMMAND_MODE: ${COMMAND_MODE:-http}
+      REPLY_WAIT_MS: ${REPLY_WAIT_MS:-3000}
+      COMMAND_TTL_MS: ${COMMAND_TTL_MS:-10000}
       PORT: 8000
       DATABASE_URL: "postgres://postgres:dev@db-agg/parking"
       RABBITMQ_URL: *amqp

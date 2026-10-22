@@ -1,5 +1,7 @@
 # Nhóm 16 – Bãi đỗ xe thông minh liên kết nhiều bãi
 
+PD-03: [API request–reply, cấu hình và runbook](tai-lieu/pd-03-request-reply.md).
+
 **Môn:** Hệ thống / Ứng dụng phân tán – PTIT
 
 **Thành viên:** Vũ Văn Hùng, Hoàng Văn Huynh, Nguyễn Văn Luân, Trịnh Kim Loan, Đỗ Huyền Trang, Phạm Sỹ Hiệp

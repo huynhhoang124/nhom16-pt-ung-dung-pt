@@ -5,6 +5,7 @@ const os = require('node:os');
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
 const { canonical, verifySignature } = require('./command-signature');
+const { enrichReply } = require('./reply-envelope');
 const { reserveIn, endReservationIn, payIn } = require('./slots');
 const { normalizePlate, isPlate } = require('./plate');
 const { tokenFor } = require('./gate');
@@ -104,6 +105,7 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         actor: env.actor, statusCode: out.code, result: out.body, ...metadata };
       const properties = { messageId: randomUUID(), correlationId: env.correlationId, type: 'COMMAND_RESULT',
         headers: { schemaVersion: 1, ...metadata, causationId: env.causationId ?? env.messageId } };
+      await enrichReply(c, env, payload, properties, internalKey);
       await c.query('INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties) VALUES ($1,$2,$3,$4)',
         [env.messageId, env.replyTo, payload, properties]);
       await c.query('COMMIT');
