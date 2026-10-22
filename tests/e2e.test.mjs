@@ -8,6 +8,8 @@ import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { registerCommandInboxTests } from './command-inbox.e2e.mjs';
+import './command-inbox-http.test.mjs';
 
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -232,3 +234,5 @@ test('TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùn
   assert.equal(sql('db-b', `SELECT count(*) FROM reservations WHERE license_plate='${lp.replace(/[^0-9A-Z]/g, '')}'`), '1');
   cancelLater('B', again.body.id);
 });
+
+registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot });

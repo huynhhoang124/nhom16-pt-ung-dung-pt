@@ -1,6 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
+const { signature } = require('./command-signature');
 
 const EXCHANGE = 'parking.commands';
 const ATTEMPT_HEADER = 'x-command-publish-id';
@@ -14,7 +15,7 @@ function routingKey(parkingId, type) {
   return `cmd.${parkingId}.${type}`;
 }
 
-function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000 } = {}) {
+function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey = process.env.INTERNAL_KEY } = {}) {
   const connectAny = makeConnector(url, connect);
   let current;
   let opening;
@@ -99,6 +100,8 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       ...(opts.replyTo !== undefined && { replyTo: opts.replyTo }),
       ...(opts.expiration !== undefined && { expiration: String(opts.expiration) }),
     };
+    // Only trusted server code supplies signingKey/actor; HTTP never accepts a client actor.
+    if (signingKey) properties.headers['x-command-signature'] = signature(signingKey, JSON.parse(content), properties);
     let state;
     let timer;
     try {

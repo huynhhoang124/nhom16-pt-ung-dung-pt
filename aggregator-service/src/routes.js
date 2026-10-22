@@ -1,4 +1,5 @@
 const express = require('express');
+const { randomUUID } = require('node:crypto');
 const { slotsFromCache } = require('./events');
 const { mountSessions } = require('./sessions-routes');
 const { log, withRequestId } = require('./log');
@@ -38,9 +39,17 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
   app.post('/api/admin/parkings/:id/commands', need('ADMIN'), async (req, res) => {
     if (!commands) return res.status(503).json({ error: 'BROKER_UNAVAILABLE' });
     try {
+      const key = req.get('idempotency-key') ?? randomUUID();
+      const messageId = req.body?.messageId ?? `${req.user.sub}:${key}`;
+      if (typeof key !== 'string' || !key.length || key.length > 64 || typeof messageId !== 'string' ||
+          !messageId.startsWith(`${req.user.sub}:`) || !messageId.slice(String(req.user.sub).length + 1).length ||
+          messageId.slice(String(req.user.sub).length + 1).length > 64) {
+        return res.status(400).json({ error: 'INVALID_COMMAND_ID' });
+      }
       const result = await commands.send(req.params.id, req.body?.type, req.body?.payload, {
-        messageId: req.body?.messageId,
+        messageId,
         correlationId: req.body?.correlationId,
+        replyTo: `agg.${process.env.INSTANCE_ID ?? '1'}`,
         actor: { userId: req.user.sub, role: req.user.role },
       });
       res.status(202).json({ ...result, processed: false });

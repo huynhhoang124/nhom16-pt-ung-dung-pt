@@ -41,6 +41,8 @@ jobs:
       - run: cp .env.example .env
       - run: npm ci
         working-directory: frontend   # e2e dùng socket.io-client của frontend
+      - run: npm ci
+        working-directory: aggregator-service   # PD-02 e2e broker publisher / amqplib
       - run: docker compose up -d --build --wait
       - run: node --test tests/e2e.test.mjs
       - if: failure()
