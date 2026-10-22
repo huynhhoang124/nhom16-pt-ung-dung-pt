@@ -75,3 +75,10 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
   overnight_fee   INT NOT NULL,
   max_day_fee     INT
 );
+
+-- PD-10: Bảng fencing chống lệnh từ Leader cũ (split-brain)
+CREATE TABLE IF NOT EXISTS fencing (
+  job       TEXT PRIMARY KEY,
+  max_token BIGINT NOT NULL
+);
+

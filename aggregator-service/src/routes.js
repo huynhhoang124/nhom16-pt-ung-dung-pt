@@ -7,14 +7,14 @@ const { mountMetrics } = require('./metrics');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000, config }) {
+function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000, config, leader }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
   // PT-01: cho biết request rơi vào bản Aggregator nào (demo cân bằng tải / tắt một bản)
-  const instance = `aggregator-${process.env.INSTANCE_ID ?? '1'}`;
-  app.use((_req, res, next) => { res.set('x-instance', instance); next(); });
-  mountMetrics(app, { reg });   // GET /metrics; nginx không chuyển /metrics ra ngoài
+  const instance = process.env.INSTANCE_ID ?? '1';
+  app.use((_req, res, next) => { res.set('x-instance', `aggregator-${instance}`); next(); });
+  mountMetrics(app, { reg, leader, instance });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
 
@@ -71,6 +71,25 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000, config }) {
     if (!config) return res.status(404).json({ error: 'CONFIG_NOT_AVAILABLE' });
     const val = config.get(req.params.key);
     res.json({ key: req.params.key, value: val });
+  });
+
+  // PD-10: Tra cứu trạng thái leader hiện tại
+  app.get('/api/leader', (_req, res) => {
+    res.json({
+      isLeader: leader ? leader.isLeader() : true,
+      fencingToken: leader ? leader.getToken() : null,
+      instanceId: process.env.INSTANCE_ID || '1',
+    });
+  });
+
+  // PD-10 / TC66: Giả lập lỗi pause leader (chỉ bật khi ENABLE_TEST_FAULTS=1)
+  app.post('/api/test/fault/leader-pause', async (req, res) => {
+    if (process.env.ENABLE_TEST_FAULTS !== '1') {
+      return res.status(403).json({ error: 'FAULT_INJECTION_DISABLED' });
+    }
+    const ms = Number(req.body?.ms || 15000);
+    const result = await leader?.simulatePause?.(ms);
+    res.json(result || { ok: true, ms });
   });
 
   // Nghiệp vụ 1: tra cứu toàn hệ thống (scatter–gather, kết quả một phần khi có bãi lỗi)

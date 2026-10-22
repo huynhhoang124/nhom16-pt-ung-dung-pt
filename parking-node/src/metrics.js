@@ -2,9 +2,26 @@
 const client = require('prom-client');
 const { availability } = require('./slots');
 
+let fencingRejectedCounter = null;
+
+function incFencingRejected(job = 'default') {
+  if (fencingRejectedCounter) {
+    try { fencingRejectedCounter.inc({ job }); } catch { /* ignore */ }
+  }
+}
+
 function mountMetrics(app, { pool, parkingId, extra = [] }) {
   const registry = new client.Registry();
   registry.setDefaultLabels({ parking: parkingId });
+
+  // PD-10: Đếm số lệnh bị từ chối do stale fencing token
+  fencingRejectedCounter = new client.Counter({
+    name: 'fencing_rejected_total',
+    help: 'Số lần từ chối lệnh từ Leader cũ do fencing token không hợp lệ',
+    labelNames: ['job'],
+    registers: [registry],
+  });
+
   const http = new client.Histogram({
     name: 'http_request_duration_seconds', help: 'Thời gian xử lý request',
     labelNames: ['method', 'route', 'code'], buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5], registers: [registry],
@@ -37,4 +54,5 @@ function mountMetrics(app, { pool, parkingId, extra = [] }) {
   });
 }
 
-module.exports = { mountMetrics };
+module.exports = { mountMetrics, incFencingRejected };
+
