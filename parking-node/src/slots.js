@@ -14,6 +14,8 @@ async function tx(pool, fn) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
+    // PD-14b: DB không khớp epoch trên etcd (primary cũ sống lại) thì từ chối ghi
+    if (typeof pool.checkEpoch === 'function') await pool.checkEpoch(c);
     // PD-10: lệnh của leader (có fencing token) kiểm token trong CÙNG giao dịch với lệnh ghi
     const fence = await fenceIn(c);
     if (!fence.ok) throw new Abort(fence.code, { error: fence.error, job: fence.job, token: fence.token });
@@ -23,6 +25,9 @@ async function tx(pool, fn) {
   } catch (e) {
     await c.query('ROLLBACK');
     if (e instanceof Abort) return { code: e.code, body: e.body };
+    if (e.code === 'STALE_DB_EPOCH' || e.status === 409) {
+      return { code: 409, body: { error: 'STALE_DB_EPOCH', message: e.message, ...e.details } };
+    }
     throw e;
   } finally {
     c.release();

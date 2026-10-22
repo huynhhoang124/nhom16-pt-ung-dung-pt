@@ -1,6 +1,6 @@
 const { Pool, Client } = require('pg');
 const { createScheduledJobsLock } = require('./scheduled-lock');
-const { init, readThrough } = require('./db');
+const { init, readThrough, makeDynamicPool } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
 const { expireDue, activateDue, warnExpiring } = require('./slots');
@@ -18,7 +18,12 @@ const port = Number(env('PORT', 8001));
 const pricing = process.env.PRICING ? JSON.parse(process.env.PRICING) : undefined;
 
 async function main() {
-  const pool = new Pool({ connectionString: env('DATABASE_URL') });
+  const pool = await makeDynamicPool({
+    etcdEndpoints: process.env.ETCD_ENDPOINTS,
+    parkingId,
+    defaultDatabaseUrl: env('DATABASE_URL'),
+    log,
+  });
   // DB khởi động lại / mất mạng: kết nối nhàn rỗi trong pool phát 'error'. Không bắt thì cả tiến trình sập (gặp khi tập
   // failover: stop db-a làm node A chết luôn, đọc bản sao cũng không được). Bắt rồi thì pool tự mở kết nối mới khi DB về.
   pool.on('error', (e) => log.error('mất kết nối DB chính', { error: e.message }));
