@@ -17,7 +17,7 @@ docker compose up -d --build
 - Thêm bãi D để demo mở rộng: `docker compose --profile extra up -d`, rồi đăng ký trên trang Quản trị với `http://parking-d:8004`.
 - Giả lập barrier gọi thẳng bãi: `node scripts/barrier.mjs A A05 enter 30A-123.45` (đọc khoá từ `.env`)
 - Chịu lỗi nâng cao: bỏ dấu `#` ở 2 dòng `A_READ_DATABASE_URL` và `RABBITMQ_URL` trong `.env` (xem `.env.example`), rồi `docker compose --profile ha up -d` thêm bản sao DB bãi A, aggregator-2 và 2 nút RabbitMQ (cụm 3 nút, quorum queue). Thử `docker compose stop aggregator` hoặc `docker compose stop rabbitmq`: hệ thống vẫn chạy
-- Lần đầu sau khi kéo bản này: `docker compose down -v` (schema đặt chỗ đổi, queue đổi sang quorum)
+- Nâng cấp RabbitMQ: giữ volume, đối chiếu tham số queue trước khi nạp definitions; xem [PD-01: topology, kiểm thử và chuyển đổi bảo toàn dữ liệu](tai-lieu/pd-01-command-topology.md).
 - Mạng xấu: `docker compose -f docker-compose.yml -f docker-compose.chaos.yml --profile chaos up -d`, rồi `node scripts/net.mjs B latency 3500` / `down` / `loss 30` / `reset`
 - Giám sát: `docker compose --profile obs up -d` → Grafana http://localhost:3001 (dashboard nạp sẵn), Prometheus :9090
 - Lần theo một request qua mọi dịch vụ (log JSON, mã ở header `X-Request-Id` của response): `docker compose logs | grep <mã>`
@@ -77,3 +77,9 @@ Trình duyệt ── Aggregator ── DB Aggregator
 - [ ] Giao diện nhân viên đi qua Aggregator nên Aggregator sập thì không xác nhận xe vào/ra được (barrier vẫn gọi thẳng node). Ghi là hạn chế.
 - [ ] "Phân mảnh dọc SLOT_DEF/SLOT_STATE" nằm cùng một DB, nên gọi là "tách bảng trong site".
 - [ ] Câu CAP: chỉ phải chọn khi có phân vùng mạng (ghi chọn nhất quán, đọc chọn sẵn sàng).
+
+## PD-01 – Kênh publish lệnh RabbitMQ
+
+Topology lệnh tự nạp trên mọi broker: `parking.commands`, `parking.dlx`, quorum queue `cmd.A/B/C` có Single Active Consumer và đích bền vững `cmd.expired`. DLX và giới hạn lệnh dùng policy có thể cập nhật. Definitions không tạo sẵn queue/binding sự kiện; dịch vụ đang chạy tự tạo chúng, tránh tạo queue Aggregator `.2` khi chưa bật bản thứ hai. Vhost thống nhất là `/` (URI `/%2F`). Tài khoản `parking/parking` trong definitions chỉ dành cho demo; cấu hình riêng bằng `RABBITMQ_DEFINITIONS_FILE` và `RABBITMQ_URL`.
+
+Endpoint bổ sung `POST /api/admin/parkings/:id/commands` (ADMIN) dùng broker thật; return `NO_ROUTE` trả 404, confirm trả 202 `BROKER_CONFIRMED`, `processed:false`. Các API nghiệp vụ tiếp tục dùng HTTP. Xem [hướng dẫn chạy, envelope, mã lỗi, kiểm chứng và giới hạn PD-01](tai-lieu/pd-01-command-topology.md).
