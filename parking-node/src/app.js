@@ -53,7 +53,32 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     next();
   });
 
+  const { checkFencing } = require('./fencing');
+
+  // PD-10: Kiểm tra Fencing Token chống split-brain từ Leader cũ
+  app.use('/api', async (req, res, next) => {
+    const fencingToken = req.get('x-fencing-token');
+    if (fencingToken !== undefined && fencingToken !== '') {
+      const job = req.get('x-fencing-job') || 'default';
+      const check = await checkFencing(pool, job, fencingToken);
+      if (!check.ok) {
+        return res.status(check.code || 409).json({ error: check.error, job, token: fencingToken });
+      }
+    }
+    next();
+  });
+
   const send = (res, r) => res.status(r.code).json(r.body);
+
+  // PD-10: Endpoint nhận việc định kỳ có Fencing Token
+  app.post('/api/internal/fenced-job', async (req, res) => {
+    const { job = 'default', token } = req.body ?? {};
+    const check = await checkFencing(pool, job, token);
+    if (!check.ok) {
+      return res.status(check.code || 409).json({ error: check.error, job, token });
+    }
+    res.json({ ok: true, job, maxToken: check.maxToken });
+  });
 
   // PD-09 / TC64: Giả lập lỗi đứt kết nối etcd (chỉ cho phép khi bật cờ test ENABLE_TEST_FAULTS=1 hoặc FAULT_INJECTION=1)
   app.post('/api/test/fault/etcd-partition', async (req, res) => {
