@@ -31,3 +31,23 @@ CREATE TABLE IF NOT EXISTS sagas (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- PD-08: additive migration, source bytes/properties never returned directly by the API.
+CREATE TABLE IF NOT EXISTS dead_letters (
+  id BIGSERIAL PRIMARY KEY,
+  dedup_key TEXT UNIQUE NOT NULL,
+  message_id TEXT,
+  content_base64 TEXT NOT NULL,
+  properties JSONB NOT NULL,
+  routing_key TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'READY' CHECK(status IN ('READY','PUBLISHING','BROKER_CONFIRMED','REPLAY_EXPIRED')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  replay_message_id TEXT,
+  replay_body JSONB,
+  replay_properties JSONB,
+  replay_admin TEXT,
+  replay_requested_at TIMESTAMPTZ,
+  replayed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_dead_letters_pending ON dead_letters(id) WHERE status='PUBLISHING';

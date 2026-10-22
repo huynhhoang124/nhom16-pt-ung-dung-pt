@@ -7,6 +7,7 @@ const { mountGate, tokenFor } = require('./gate');
 const { log, withRequestId } = require('./log');
 const { verifyRS256 } = require('./jwt');
 const { mountMetrics } = require('./metrics');
+const { mountReplayClaim } = require('./replay-claim');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -54,6 +55,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
   });
 
   const send = (res, r) => res.status(r.code).json(r.body);
+  mountReplayClaim(app,{pool,internalKey});
 
   app.get('/api/availability', async (_req, res) => res.json(await s.availability(readPool, parkingId)));
   const type = (req) => (['CAR', 'MOTO'].includes(req.query.type) ? req.query.type : undefined);

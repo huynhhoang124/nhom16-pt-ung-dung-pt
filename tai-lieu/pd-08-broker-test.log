@@ -1,0 +1,54 @@
+TAP version 13
+# TC57 retry intervals ms: 2067 10023
+# Subtest: PD08 broker + PostgreSQL integration with separate PD02 checkout
+    # Subtest: TC57: two transient errors, 2s + 10s, third delivery one committed effect
+    ok 1 - TC57: two transient errors, 2s + 10s, third delivery one committed effect
+      ---
+      duration_ms: 12202.5907
+      type: 'test'
+      ...
+    # Subtest: TC58 backend: invalid schema -> durable DLQ -> ADMIN edit/replay -> one reservation
+    ok 2 - TC58 backend: invalid schema -> durable DLQ -> ADMIN edit/replay -> one reservation
+      ---
+      duration_ms: 467.3067
+      type: 'test'
+      ...
+    # Subtest: edited replay cannot bypass an existing inbox result under the original ID
+    ok 3 - edited replay cannot bypass an existing inbox result under the original ID
+      ---
+      duration_ms: 170.3598
+      type: 'test'
+      ...
+    # Subtest: retry exhaustion reaches durable DLQ after two delays; business 409 never retries
+    ok 4 - retry exhaustion reaches durable DLQ after two delays; business 409 never retries
+      ---
+      duration_ms: 12358.1885
+      type: 'test'
+      ...
+    # Subtest: retry crosses total deadline: no renewal and no late reservation
+    ok 5 - retry crosses total deadline: no renewal and no late reservation
+      ---
+      duration_ms: 2161.663
+      type: 'test'
+      ...
+    # Subtest: total deadline elapsed before dispatch: no late effect, forwarded to PD06 expired queue
+    ok 6 - total deadline elapsed before dispatch: no late effect, forwarded to PD06 expired queue
+      ---
+      duration_ms: 257.342
+      type: 'test'
+      ...
+    1..6
+ok 1 - PD08 broker + PostgreSQL integration with separate PD02 checkout
+  ---
+  duration_ms: 27947.5376
+  type: 'test'
+  ...
+1..1
+# tests 7
+# suites 0
+# pass 7
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 28943.3566
