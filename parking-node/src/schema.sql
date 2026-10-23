@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS parking_events (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at  TIMESTAMPTZ
 );
+-- PD-17: bổ sung HLC cho các sự kiện mới; dữ liệu lịch sử cũ giữ nguyên.
+ALTER TABLE parking_events
+  ADD COLUMN IF NOT EXISTS hlc VARCHAR(18);
 CREATE INDEX IF NOT EXISTS ix_events_unpublished ON parking_events(id) WHERE published_at IS NULL;
 
 -- Phiên gửi xe: mở khi xe vào, đóng khi xe ra (lịch sử, tính phí, thanh toán).

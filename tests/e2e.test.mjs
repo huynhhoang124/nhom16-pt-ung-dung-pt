@@ -570,4 +570,92 @@ test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), o
   }
 );
 
+test(
+  'TC74 bãi D lệch +30 s: xe ra A rồi vào D được sắp đúng theo HLC',
+  { ...T, skip: process.env.HLC_TEST !== '1' },
+  async () => {
+    // Xác nhận độ lệch đang áp dụng trong container thật.
+    const skew = compose('exec -T parking-d printenv CLOCK_SKEW_MS');
+    assert.equal(skew, '30000', 'Bãi D phải chạy với CLOCK_SKEW_MS=30000');
+
+    const slotA = await freeSlot('A');
+    const slotD = sql(
+      'db-d',
+      "SELECT slot_code FROM parking_slots WHERE status = 'AVAILABLE' ORDER BY slot_code LIMIT 1"
+    );
+
+    assert.ok(slotA, 'Phải có slot trống ở bãi A');
+    assert.ok(slotD, 'Phải có slot trống ở bãi D');
+
+    const licensePlate = plate();
+
+    // Ghi lại ID cuối trước khi chạy để không lấy nhầm sự kiện cũ.
+    const beforeA = Number(
+      sql('db-a', 'SELECT COALESCE(MAX(id), 0) FROM public.parking_events')
+    );
+
+    const beforeD = Number(
+      sql('db-d', 'SELECT COALESCE(MAX(id), 0) FROM public.parking_events')
+    );
+
+    let aInside = false;
+    let dInside = false;
+
+    const readHlc = (db, beforeId, eventType, slot) =>
+      sql(
+        db,
+        `SELECT hlc::text FROM public.parking_events WHERE id > ${beforeId} AND event_type = '${eventType}' AND slot_code = '${slot}' ORDER BY id DESC LIMIT 1`
+      );
+
+    try {
+      // Chuỗi nghiệp vụ: vào A -> ra A -> vào D.
+      sh(`node scripts/barrier.mjs A ${slotA} enter ${licensePlate}`);
+      aInside = true;
+
+      sh(`node scripts/barrier.mjs A ${slotA} exit cash`);
+      aInside = false;
+
+      sh(`node scripts/barrier.mjs D ${slotD} enter ${licensePlate}`);
+      dInside = true;
+
+      // Chờ sự kiện được ghi vào DB của từng bãi.
+      const exitHlc = await until(
+        'HLC CAR_EXIT mới của bãi A',
+        () => readHlc('db-a', beforeA, 'CAR_EXIT', slotA) || null,
+        30_000
+      );
+
+      const enterHlc = await until(
+        'HLC CAR_ENTER mới của bãi D',
+        () => readHlc('db-d', beforeD, 'CAR_ENTER', slotD) || null,
+        30_000
+      );
+
+      assert.match(exitHlc, /^\d{13}-\d{4}$/, 'HLC sự kiện ra A không hợp lệ');
+      assert.match(enterHlc, /^\d{13}-\d{4}$/, 'HLC sự kiện vào D không hợp lệ');
+
+      // HLC có định dạng cố định nên so sánh chuỗi được.
+      assert.ok(
+        exitHlc < enterHlc,
+        `Phải có HLC ra A < HLC vào D; thực tế: ${exitHlc} >= ${enterHlc}`
+      );
+
+      console.log('TC74 HLC CAR_EXIT A:', exitHlc);
+      console.log('TC74 HLC CAR_ENTER D:', enterHlc);
+    } finally {
+      // Dọn xe thử nghiệm, không để D bị OCCUPIED sau test.
+      if (dInside) {
+        try {
+          sh(`node scripts/barrier.mjs D ${slotD} exit cash`);
+        } catch {}
+      }
+
+      if (aInside) {
+        try {
+          sh(`node scripts/barrier.mjs A ${slotA} exit cash`);
+        } catch {}
+      }
+    }
+  }
+);
 registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot });
