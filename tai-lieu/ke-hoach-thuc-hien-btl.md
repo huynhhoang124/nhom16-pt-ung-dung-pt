@@ -133,12 +133,12 @@ Dự phòng nếu demo lỗi: chạy `node --test tests/e2e.test.mjs` cho xem 9 
 ## 7. Checklist trước buổi bảo vệ
 
 **Tài liệu (Hiệp chính, mọi người góp)**
-- [ ] Kế hoạch 33 trang: sửa phân công 4 → 6 người theo mục 4.
-- [ ] HLD Câu 2: ghi "bốn lớp" nhưng bảng có 6 dòng → sửa cho khớp.
-- [ ] HLD: Aggregator "không giữ dữ liệu slot" nhưng có "trạng thái tổng hợp" → ghi rõ: cache trong RAM chỉ để đọc, nguồn gốc ở DB bãi.
-- [ ] HLD: "phân mảnh dọc SLOT_DEF/SLOT_STATE" → thực tế là tách bảng trong một site.
-- [ ] HLD Câu 3: câu CAP sửa thành "chỉ phải chọn khi có phân vùng mạng: ghi chọn nhất quán, đọc chọn sẵn sàng".
-- [ ] Ghi hạn chế: Aggregator, DB Aggregator, RabbitMQ là điểm tập trung; nhân viên thao tác qua Aggregator.
+- [x] Kế hoạch 33 trang: sửa phân công 4 → 6 người theo mục 4 (đã sửa trang 32).
+- [x] HLD Câu 2: ghi "bốn lớp" nhưng bảng có 6 dòng → sửa cho khớp 6 thành phần.
+- [x] HLD: Aggregator "không giữ dữ liệu slot" nhưng có "trạng thái tổng hợp" → ghi rõ: cache trong RAM chỉ để đọc, nguồn gốc ở DB bãi.
+- [x] HLD: "phân mảnh dọc SLOT_DEF/SLOT_STATE" → thực tế là tách bảng trong một site.
+- [x] HLD Câu 3: câu CAP sửa thành "chỉ phải chọn khi có phân vùng mạng: ghi chọn nhất quán, đọc chọn sẵn sàng".
+- [x] Ghi hạn chế: Aggregator, DB Aggregator, RabbitMQ là điểm tập trung; đã xử lý nhân viên gọi thẳng node bãi khi Aggregator sập (PT-05).
 - [ ] Báo cáo có ảnh chụp: tổng quan, bãi OFFLINE, RabbitMQ queue, kết quả test.
 
 **Kỹ thuật (Trang chính)**

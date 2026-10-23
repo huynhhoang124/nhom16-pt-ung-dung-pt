@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { session, socket, toast } from './api.js';
 import Toaster from './Toaster.jsx';
+import { Icon } from './ui.jsx';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import ParkingDetail from './pages/ParkingDetail.jsx';
@@ -45,24 +46,30 @@ export default function App() {
     ...(user.role === 'ADMIN' ? [['admin', 'Quản trị']] : []),
   ];
   const go = (page) => setView(page === 'parking' ? { page, parkingId: user.parkingId } : { page });
+  const logout = () => { session.set(null); setUser(null); relogin(); setView({ page: 'dashboard' }); };
 
   return (
     <div className="app">
       <header className="bar">
-        <strong className="brand"><img src="/favicon.svg" alt="" width="22" height="22" /> Smart Parking</strong>
+        <strong className="brand"><span className="brand-mark" aria-hidden="true">P</span> Smart Parking</strong>
         <nav>
           {tabs.map(([page, label]) => (
             <button key={page} className={view.page === page ? 'tab active' : 'tab'} onClick={() => go(page)}>{label}</button>
           ))}
         </nav>
         <span className="who">
-          <span className={live ? 'dot on' : 'dot'} title={live ? 'Đang nhận realtime' : 'Mất kết nối realtime'} />
-          {user.username} · {ROLE_LABEL[user.role]}{user.parkingId ? ` bãi ${user.parkingId}` : ''}
-          <button className="link" onClick={() => setView({ page: 'account' })}>Tài khoản</button>
-          <button className="link" onClick={() => { session.set(null); setUser(null); relogin(); setView({ page: 'dashboard' }); }}>Đăng xuất</button>
+          <span className={live ? 'rt' : 'rt off'} title={live ? 'Đang nhận realtime' : 'Mất kết nối realtime'}>
+            <span className={live ? 'dot on' : 'dot'} />
+            <span className="hide-sm">{live ? 'Đang nhận realtime' : 'Mất kết nối realtime'}</span>
+          </span>
+          <span>{user.username} <span className="role hide-sm">· {ROLE_LABEL[user.role]}{user.parkingId ? ` bãi ${user.parkingId}` : ''}</span></span>
+          <button className="link hide-sm" onClick={() => setView({ page: 'account' })}>Tài khoản</button>
+          <button className="link hide-sm" onClick={logout}>Đăng xuất</button>
+          <button className="show-sm" title="Tài khoản" aria-label="Tài khoản" onClick={() => setView({ page: 'account' })}><Icon name="user" /></button>
+          <button className="show-sm" title="Đăng xuất" aria-label="Đăng xuất" onClick={logout}><Icon name="logout" /></button>
         </span>
       </header>
-      <main>
+      <main className={user.role === 'USER' ? undefined : 'dense'}>
         {view.page === 'dashboard' && <Dashboard onOpen={(parkingId) => setView({ page: 'parking', parkingId })} />}
         {view.page === 'parking' && <ParkingDetail key={view.parkingId} parkingId={view.parkingId} user={user} onBack={() => go('dashboard')} />}
         {view.page === 'mine' && <MyReservations />}

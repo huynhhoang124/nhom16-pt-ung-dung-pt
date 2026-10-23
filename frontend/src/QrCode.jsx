@@ -8,7 +8,8 @@ export default function QrCode({ value }) {
     const q = qrcode(0, 'M');
     q.addData(value);
     q.make();
-    return q.createDataURL(big ? 8 : 2, 2);
-  }, [value, big]);
-  return <img src={src} alt="Mã QR vào bãi" className="qr" onClick={() => setBig(!big)} title="Bấm để phóng to / thu nhỏ" />;
+    return q.createDataURL(8, 2);
+  }, [value]);
+  return <img src={src} alt="Mã QR vào bãi" className="qr" style={big ? { width: 280, height: 280 } : undefined}
+    onClick={() => setBig(!big)} title="Bấm để phóng to / thu nhỏ" />;
 }

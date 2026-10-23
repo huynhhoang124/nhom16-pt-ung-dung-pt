@@ -16,6 +16,7 @@ docker compose up -d --build
 - RabbitMQ: http://localhost:15672 (parking / parking) · Aggregator: :8000 · Parking A/B/C: :8001/:8002/:8003
 - Thêm bãi D để demo mở rộng: `docker compose --profile extra up -d`, rồi đăng ký trên trang Quản trị với `http://parking-d:8004`.
 - Giả lập barrier gọi thẳng bãi: `node scripts/barrier.mjs A A05 enter 30A-123.45` (đọc khoá từ `.env`)
+- Sinh dữ liệu mẫu trang Thống kê: `node scripts/du-lieu-mau.mjs [số_lượt]` (mặc định 150 lượt xe vào/ra ngẫu nhiên trên cả 3 bãi)
 - Chịu lỗi nâng cao: bỏ dấu `#` ở 2 dòng `A_READ_DATABASE_URL` và `RABBITMQ_URL` trong `.env` (xem `.env.example`), rồi `docker compose --profile ha up -d` thêm bản sao DB bãi A, aggregator-2 và 2 nút RabbitMQ (cụm 3 nút, quorum queue). Thử `docker compose stop aggregator` hoặc `docker compose stop rabbitmq`: hệ thống vẫn chạy
 - Nâng cấp RabbitMQ: giữ volume, đối chiếu tham số queue trước khi nạp definitions; xem [PD-01: topology, kiểm thử và chuyển đổi bảo toàn dữ liệu](tai-lieu/pd-01-command-topology.md).
 - Mạng xấu: `docker compose -f docker-compose.yml -f docker-compose.chaos.yml --profile chaos up -d`, rồi `node scripts/net.mjs B latency 3500` / `down` / `loss 30` / `reset`
@@ -35,7 +36,9 @@ cd parking-node && npm install && npm test          # PGlite, không cần Docke
 cd ../aggregator-service && npm install && npm test # cần npm install ở parking-node trước
 cd ../notification-service && npm install && npm test   # quy tắc thông báo (NV-08)
 cd ../frontend && npm install && cd ..
-node --test tests/e2e.test.mjs                      # 9 test trên Docker; tự dọn dữ liệu sau khi chạy
+node --test tests/e2e.test.mjs                      # test trên Docker; tự dọn dữ liệu sau khi chạy
+#   TC46 cần khoá RS256: node scripts/gen-keys.mjs rồi docker compose up -d
+#   TC43, TC44 cần --profile ha: HA=1 node --test tests/e2e.test.mjs
 docker run --rm -i --network nhom16-parking_default -e BASE=http://aggregator:8000 grafana/k6 run - < tests/load/k6.js   # GS-05 test tải
 node tests/load/check-invariants.mjs                # GS-05/06 kiểm bất biến (không đặt trùng, outbox về 0...)
 node tests/chaos.mjs                                # GS-06 vừa tải vừa tắt/bật ngẫu nhiên (cần --profile ha)
@@ -67,16 +70,18 @@ Trình duyệt ── Aggregator ── DB Aggregator
 - `tai-lieu/ly-thuyet-ap-dung-xuyen-suot.md` – lý thuyết áp vào 8 kịch bản của đề tài, kèm vấn đáp.
 - `tai-lieu/ap-dung-vao-btl.md` – thiết kế chi tiết (schema, API, test case, dàn báo cáo).
 - `tai-lieu/Nhom16_Mo_hinh_HLD.pdf` – mô hình HLD đã nộp (bản mới nhất).
-- `tai-lieu/Ke_hoach_trien_khai.pdf` – kế hoạch triển khai 33 trang đã nộp.
+- `tai-lieu/Ke_hoach_trien_khai.pdf` – kế hoạch triển khai 33 trang đã nộp (đã cập nhật phân công 6 người).
+- `tai-lieu/mo-hinh-hld.md` – mô hình HLD dạng Markdown đầy đủ, chuẩn hóa thuật ngữ phân tán.
+- `tai-lieu/kiem-thu-cong-qr.md` – checklist và ghi nhận kiểm thử màn hình cổng + quét QR trên điện thoại thật (UX-04.5).
 - `so-do/` – sơ đồ kiến trúc draw.io.
 
-## Cần sửa trong tài liệu đã nộp
-- [ ] Phân công trong kế hoạch đang viết cho 4 người, cần sửa thành 6.
-- [ ] HLD Câu 2 ghi "bốn lớp" nhưng bảng có 6 dòng.
-- [ ] Trang 2 ghi Aggregator "không giữ dữ liệu slot", trang 3 lại có "trạng thái tổng hợp / đối soát". Cần ghi rõ: cache chỉ đọc, nguồn gốc ở DB bãi.
-- [ ] Giao diện nhân viên đi qua Aggregator nên Aggregator sập thì không xác nhận xe vào/ra được (barrier vẫn gọi thẳng node). Ghi là hạn chế.
-- [ ] "Phân mảnh dọc SLOT_DEF/SLOT_STATE" nằm cùng một DB, nên gọi là "tách bảng trong site".
-- [ ] Câu CAP: chỉ phải chọn khi có phân vùng mạng (ghi chọn nhất quán, đọc chọn sẵn sàng).
+## Cần sửa trong tài liệu đã nộp (Đã hoàn thành - TL-01)
+- [x] Phân công trong kế hoạch đang viết cho 4 người, cần sửa thành 6 (đã sửa trang 32 `Ke_hoach_trien_khai.pdf` và `ke-hoach-chi-tiet-ban-hoan-chinh.md`).
+- [x] HLD Câu 2 ghi "bốn lớp" nhưng bảng có 6 dòng (đã hiệu chỉnh khớp 6 thành phần phân tán).
+- [x] Trang 2 ghi Aggregator "không giữ dữ liệu slot", trang 3 lại có "trạng thái tổng hợp / đối soát". Cần ghi rõ: cache chỉ đọc (read-only), nguồn gốc ở DB bãi.
+- [x] Giao diện nhân viên đi qua Aggregator: đã giải quyết dứt điểm bằng tính năng PT-05 (nhân viên xác thực offline và gọi thẳng Parking Node khi Aggregator sập).
+- [x] "Phân mảnh dọc SLOT_DEF/SLOT_STATE" nằm cùng một DB, nên gọi là "tách bảng trong site".
+- [x] Câu CAP: chỉ phải chọn khi có phân vùng mạng (ghi chọn nhất quán C, đọc chọn sẵn sàng A).
 
 ## PD-01 – Kênh publish lệnh RabbitMQ
 
