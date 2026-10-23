@@ -51,7 +51,7 @@ const statusOf = async (id) => (await agg('/api/parkings')).body?.find((p) => p.
 // biển số ngẫu nhiên: lần chạy trước hỏng giữa chừng để xe còn trong bãi thì lần sau không bị PLATE_ALREADY_INSIDE
 const plate = () => `30A-${String(Math.random()).slice(2, 5)}.${String(Math.random()).slice(2, 4)}`;
 const freeSlot = async (id) => (await node(id, '/api/slots/available')).body[0].slotCode;
-const login = async (u) => (await agg('/api/auth/login', { method: 'POST', body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' } })).body.token;
+const login = async (u) => (await until(`đăng nhập ${u}`, async () => (await agg('/api/auth/login', { method: 'POST', body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' } })).body?.token, 10_000));
 
 // Dọn sau test (huỷ đặt chỗ, cho xe ra) để chạy lặp lại được nhiều lần.
 const undo = [];
@@ -62,7 +62,7 @@ test.after(async () => { for (const f of undo) await f(); });
 let tok;
 test.before(async () => {
   await until('3 bãi ONLINE', async () => (await Promise.all(['A', 'B', 'C'].map(statusOf))).every((s) => s === 'ONLINE'), 120_000);
-  tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a') };
+  tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a'), admin: await login('admin') };
 });
 
 test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bãi khác', T, () => {
@@ -644,7 +644,7 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
   { ...T, skip: !process.env.COORD },
   async () => {
     const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put "${k}" "${v}"`);
-    const adminToken = await login('admin');
+    const adminToken = tok?.admin ?? await login('admin');
 
     try {
       // 1. Cập nhật cấu hình timeoutMs trên etcd thành 500
