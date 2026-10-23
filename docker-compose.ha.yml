@@ -1,0 +1,32 @@
+services:
+  db-a:
+    command:
+      - postgres
+      - -c
+      - wal_log_hints=on
+      - -c
+      - synchronous_commit=on
+
+  # Chờ replica A streaming rồi mới bật chế độ đồng bộ.
+  # Không đặt synchronous_standby_names trên dòng lệnh postgres,
+  # để PD-14b có thể thay đổi bằng ALTER SYSTEM.
+  db-a-sync-config:
+    profiles: [ha]
+    image: postgres:16-alpine
+    environment:
+      PGPASSWORD: dev
+    volumes:
+      - ./postgres/configure-sync-a.sh:/configure-sync-a.sh:ro
+    entrypoint: ["/bin/sh", "/configure-sync-a.sh"]
+    depends_on:
+      db-a:
+        condition: service_healthy
+      db-a-replica:
+        condition: service_healthy
+
+  parking-a:
+    depends_on:
+      db-a:
+        condition: service_healthy
+      db-a-sync-config:
+        condition: service_completed_successfully
