@@ -81,9 +81,9 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, co
   });
 
   app.get('/api/parkings', (_req, res) => res.json(reg.all().map(info)));
-  // PD-11: Tra cứu cấu hình động hiện tại
-  app.get('/api/config', (_req, res) => res.json(config ? config.all() : {}));
-  app.get('/api/config/:key', (req, res) => {
+  // PD-11: Tra cứu cấu hình động hiện tại (chỉ ADMIN)
+  app.get('/api/config', need('ADMIN'), (_req, res) => res.json(config ? config.all() : {}));
+  app.get('/api/config/:key', need('ADMIN'), (req, res) => {
     if (!config) return res.status(404).json({ error: 'CONFIG_NOT_AVAILABLE' });
     const val = config.get(req.params.key);
     res.json({ key: req.params.key, value: val });
@@ -117,8 +117,9 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, co
     const key = req.get('idempotency-key');
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
     const { slotCode, licensePlate, startTime, durationMinutes } = req.body ?? {};
+    const effectiveTimeout = config ? config.get('reserveTimeoutMs', reserveTimeoutMs) : reserveTimeoutMs;
     await forward(res, reg.get(req.params.id), '/api/reservations', {
-      method: 'POST', ms: reserveTimeoutMs, retry: true,   // an toàn vì requestId idempotent
+      method: 'POST', ms: effectiveTimeout, retry: true,   // an toàn vì requestId idempotent
       body: { requestId: `${req.user.sub}:${key}`, userId: req.user.sub, slotCode, licensePlate, startTime, durationMinutes },
     });
   });

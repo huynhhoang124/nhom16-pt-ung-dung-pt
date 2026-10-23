@@ -644,6 +644,7 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
   { ...T, skip: !process.env.COORD },
   async () => {
     const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put "${k}" "${v}"`);
+    const adminToken = await login('admin');
 
     try {
       // 1. Cập nhật cấu hình timeoutMs trên etcd thành 500
@@ -651,7 +652,7 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
 
       // 2. Chờ Aggregator nhận cấu hình mới qua watch trong <= 2s mà không cần restart container
       await until('Aggregator nhận timeoutMs = 500', async () => {
-        const r = await agg('/api/config/timeoutMs');
+        const r = await agg('/api/config/timeoutMs', { token: adminToken });
         return r.status === 200 && r.body?.value === 500;
       }, 5000);
 
@@ -666,7 +667,7 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
       try {
         etcdPut('/nhom16/config/aggregator/timeoutMs', '2000');
         await until('Aggregator khôi phục timeoutMs = 2000', async () => {
-          const r = await agg('/api/config/timeoutMs');
+          const r = await agg('/api/config/timeoutMs', { token: adminToken });
           return r.status === 200 && r.body?.value === 2000;
         }, 5000);
       } catch { /* bỏ qua */ }
