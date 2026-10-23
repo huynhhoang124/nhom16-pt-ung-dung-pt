@@ -8,6 +8,8 @@ import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { registerCommandInboxTests } from './command-inbox.e2e.mjs';
+import './command-inbox-http.test.mjs';
 
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -567,3 +569,5 @@ test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), o
     }
   }
 );
+
+registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot });

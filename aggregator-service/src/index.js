@@ -44,7 +44,7 @@ async function main() {
   const cache = new Map();
   const b64 = (k) => (process.env[k] ? Buffer.from(process.env[k], 'base64').toString() : undefined);
   const auth = makeAuth(env('JWT_SECRET', 'dev-secret'), { privateKey: b64('JWT_PRIVATE_KEY_B64'), publicKey: b64('JWT_PUBLIC_KEY_B64') });
-  const commands = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'));
+  const commands = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'), { signingKey: env('INTERNAL_KEY', 'dev') });
   const app = makeApp({ pool, reg, cache, auth, commands });
   const server = http.createServer(app);
   const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS

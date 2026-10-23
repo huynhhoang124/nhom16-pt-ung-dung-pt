@@ -88,3 +88,9 @@ Trình duyệt ── Aggregator ── DB Aggregator
 Topology lệnh tự nạp trên mọi broker: `parking.commands`, `parking.dlx`, quorum queue `cmd.A/B/C` có Single Active Consumer và đích bền vững `cmd.expired`. DLX và giới hạn lệnh dùng policy có thể cập nhật. Definitions không tạo sẵn queue/binding sự kiện; dịch vụ đang chạy tự tạo chúng, tránh tạo queue Aggregator `.2` khi chưa bật bản thứ hai. Vhost thống nhất là `/` (URI `/%2F`). Tài khoản `parking/parking` trong definitions chỉ dành cho demo; cấu hình riêng bằng `RABBITMQ_DEFINITIONS_FILE` và `RABBITMQ_URL`.
 
 Endpoint bổ sung `POST /api/admin/parkings/:id/commands` (ADMIN) dùng broker thật; return `NO_ROUTE` trả 404, confirm trả 202 `BROKER_CONFIRMED`, `processed:false`. Các API nghiệp vụ tiếp tục dùng HTTP. Xem [hướng dẫn chạy, envelope, mã lỗi, kiểm chứng và giới hạn PD-01](tai-lieu/pd-01-command-topology.md).
+
+## PD-02 – Inbox tại parking node
+
+Node nhận lệnh đã được server ký từ `cmd.<PARKING_ID>`, ghi inbox + nghiệp vụ + outbox phản hồi trong cùng transaction rồi mới ack. Tin giao lại dùng kết quả cũ; key dùng cho nội dung khác trả 422. `INTERNAL_KEY` phải nhất quán giữa Aggregator và node. Dọn inbox quá 7 ngày mỗi 30 giây; không bảo đảm dedup vô hạn.
+
+API nghiệp vụ cũ tiếp tục dùng HTTP. PD-02 chưa có HTTP request–reply/tra cứu kết quả của PD-03. Xem [thiết kế, schema, nâng cấp bảo toàn dữ liệu và TC52/TC53 broker](tai-lieu/pd-02-command-inbox.md). Chạy `node --test --test-name-pattern='PD-02' tests/e2e.test.mjs` trên stack Docker test cô lập; test khôi phục service và không xóa volume.
