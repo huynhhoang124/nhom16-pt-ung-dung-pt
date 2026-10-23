@@ -2,6 +2,7 @@
 // chỉ đánh dấu published_at SAU khi broker xác nhận (publisher confirm).
 // Chết giữa "publish" và "đánh dấu" => lần sau gửi lại (at-least-once); Aggregator bỏ tin trùng nhờ version.
 const { makeConnector } = require('./amqp-connect');
+const { log } = require('./log');
 
 const EXCHANGE = 'parking.events';
 
@@ -27,7 +28,7 @@ function amqpPublisher(url) {
     ch = c;
     return c;
   }
-  return async (routingKey, payload) => {
+  const publish = async (routingKey, payload) => {
     try {
       const c = await channel();
       c.publish(EXCHANGE, routingKey, Buffer.from(JSON.stringify(payload)),
@@ -39,9 +40,11 @@ function amqpPublisher(url) {
       return false;
     }
   };
+  publish.close = async () => { const old = conn; conn = ch = null; if (old) await old.close().catch(() => {}); };
+  return publish;
 }
 
-function makeRelay(pool, publish) {
+function makeRelay(pool, publish, logger = log) {
   let running = false;
   return async function relayOnce() {
     if (running) return 0;               // không chạy chồng (setInterval có thể gọi khi lần trước chưa xong)
@@ -54,6 +57,7 @@ function makeRelay(pool, publish) {
         const key = `parking.${e.payload.parkingId}.slot.${e.payload.slot}`;
         if (!(await publish(key, e.payload))) break;   // dừng để giữ thứ tự; lần sau gửi tiếp từ đây
         await pool.query('UPDATE parking_events SET published_at = now() WHERE id = $1', [e.id]);
+        logger.info('outbox đã gửi', { requestId: e.payload.requestId, eventId: e.id, type: e.payload.type, routingKey: key });
         sent++;
       }
     } finally {

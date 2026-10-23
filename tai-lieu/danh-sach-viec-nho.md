@@ -313,18 +313,18 @@ Tuần 5 (03–09/11) chung cho cả nhóm: TL-05 vấn đáp, sửa lỗi, tậ
 - [ ] **UX-04.2** (2,5h) Quét QR bằng camera: `BarcodeDetector` nếu có, không thì `html5-qrcode`.
 - [ ] **UX-04.3** (1,5h) Gọi thẳng node của bãi (`/api/gate/scan`), đăng nhập STAFF như PT-05.
 - [ ] **UX-04.4** (1,5h) Màn hình kết quả: xanh (mời vào, số slot) / đỏ (lý do), âm thanh báo.
-- [ ] **UX-04.5** (2h) **[Hiệp]** Thử trên điện thoại/máy tính bảng thật, chụp ảnh.
+- [x] **UX-04.5** (2h) **[Hiệp & Luân]** Thử trên điện thoại/máy tính bảng thật, ghi nhận tài liệu `tai-lieu/kiem-thu-cong-qr.md`.
 
 ---
 
 ## E · Tài liệu và bảo vệ
 
 ### TL-01 · Sửa HLD và kế hoạch PDF · Hiệp · 4,5h · Bắt buộc · hạn 12/10
-- [ ] **TL-01.1** (1h) Kế hoạch: sửa phân công 4 → 6 người.
-- [ ] **TL-01.2** (1h) HLD: số lớp ở Câu 2; ghi rõ cache Aggregator chỉ đọc; đổi "phân mảnh dọc" thành "tách bảng trong site".
-- [ ] **TL-01.3** (0,5h) HLD Câu 3: sửa câu CAP.
-- [ ] **TL-01.4** (0,5h) Ghi hạn chế điểm tập trung (sẽ bỏ dòng "nhân viên qua Aggregator" sau PT-05).
-- [ ] **TL-01.5** (1h) Xuất lại PDF, thay vào `tai-lieu/`, tick checklist trong README.
+- [x] **TL-01.1** (1h) Kế hoạch: sửa phân công 4 → 6 người.
+- [x] **TL-01.2** (1h) HLD: số lớp ở Câu 2; ghi rõ cache Aggregator chỉ đọc; đổi "phân mảnh dọc" thành "tách bảng trong site".
+- [x] **TL-01.3** (0,5h) HLD Câu 3: sửa câu CAP.
+- [x] **TL-01.4** (0,5h) Ghi hạn chế điểm tập trung (bỏ dòng "nhân viên qua Aggregator" sau PT-05).
+- [x] **TL-01.5** (1h) Xuất lại PDF, thay vào `tai-lieu/`, tick checklist trong README.
 
 ### TL-02 · Sơ đồ kiến trúc bản hoàn chỉnh · Hiệp · 4,5h · Bắt buộc · hạn 26/10
 - [ ] **TL-02.1** (1h) Phác tay các thành phần mới, gửi Huynh duyệt.

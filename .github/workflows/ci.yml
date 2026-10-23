@@ -39,8 +39,11 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: "**/package-lock.json" }
       - run: cp .env.example .env
+      - run: node scripts/gen-keys.mjs   # PT-05: khoá RS256 để chạy TC46 (nhân viên gọi thẳng node khi Aggregator sập)
       - run: npm ci
         working-directory: frontend   # e2e dùng socket.io-client của frontend
+      - run: npm ci
+        working-directory: aggregator-service   # PD-02 e2e broker publisher / amqplib
       - run: docker compose up -d --build --wait
       - run: node --test tests/e2e.test.mjs
       - if: failure()

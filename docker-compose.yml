@@ -43,12 +43,16 @@ services:
     <<: *rabbit
     profiles: [ha]
     hostname: rabbitmq-2
-    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro, "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"]
+    entrypoint: ["/bin/sh", "/join-wait.sh"]      # lần đầu chờ nút gốc rồi mới vào cụm (xem rabbitmq/join-wait.sh)
+    command: ["rabbitmq-server"]
+    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro, ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro, "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"]
   rabbitmq-3:
     <<: *rabbit
     profiles: [ha]
     hostname: rabbitmq-3
-    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro, "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"]
+    entrypoint: ["/bin/sh", "/join-wait.sh"]      # lần đầu chờ nút gốc rồi mới vào cụm (xem rabbitmq/join-wait.sh)
+    command: ["rabbitmq-server"]
+    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro, ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro, "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"]
 
   db-a:                                           # PT-02: bản chính của bãi A, có user 'replicator' cho bản sao
     <<: *pg
@@ -108,12 +112,15 @@ services:
     depends_on: { db-agg: { condition: service_healthy } }
 
   # --- PT-01: bản Aggregator thứ hai (docker compose --profile ha up -d). Cùng tên mạng "aggregator" nên nginx
-  #     tự chia tải giữa 2 bản; không mở cổng ra ngoài. Demo: docker compose stop aggregator -> web vẫn chạy. ---
+  #     tự chia tải giữa 2 bản. Cổng 8010 chỉ để test TC44 nối socket thẳng vào bản 2.
+  #     Demo: docker compose stop aggregator -> web vẫn chạy. ---
   aggregator-2:
     profiles: [ha]
     image: nhom16/aggregator
     environment: { <<: *agg-env, INSTANCE_ID: "2" }
     networks: { default: { aliases: [aggregator] } }
+    ports:
+    - "8010:8000"
     depends_on: { db-agg: { condition: service_healthy } }
 
   # NV-08: dịch vụ thông báo (nghe parking.events, gửi user.notifications); tắt thì hệ thống vẫn chạy

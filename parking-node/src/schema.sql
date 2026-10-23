@@ -1,5 +1,28 @@
 -- Schema của MỘT bãi. Mỗi bãi có DB riêng (shared-nothing), node khác không truy cập được.
 
+-- PD-02: additive migration; command_type is the canonical column name.
+CREATE TABLE IF NOT EXISTS inbox_messages (
+  message_id TEXT PRIMARY KEY,
+  command_type TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  result JSONB,
+  status_code INT,
+  processed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_inbox_processed_at ON inbox_messages(processed_at);
+
+-- Separate reply outbox: replies need no slot_code and can include business failures.
+CREATE TABLE IF NOT EXISTS command_reply_outbox (
+  id BIGSERIAL PRIMARY KEY,
+  command_id TEXT NOT NULL,
+  reply_to TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  properties JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_command_replies_unpublished ON command_reply_outbox(id) WHERE published_at IS NULL;
+
 CREATE EXTENSION IF NOT EXISTS btree_gist;   -- cho ràng buộc EXCLUDE (slot_id WITH =, khoảng thời gian WITH &&)
 
 CREATE TABLE IF NOT EXISTS parking_slots (
