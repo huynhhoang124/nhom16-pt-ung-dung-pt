@@ -1,0 +1,138 @@
+{
+  "users": [
+    {
+      "name": "parking",
+      "password_hash": "UEQwMarjSUeCGLsylpwJ7409AzQgURkhMmcJmxoz2oojL/5v",
+      "hashing_algorithm": "rabbit_password_hashing_sha256",
+      "tags": [
+        "administrator"
+      ]
+    }
+  ],
+  "vhosts": [
+    {
+      "name": "/"
+    }
+  ],
+  "permissions": [
+    {
+      "user": "parking",
+      "vhost": "/",
+      "configure": ".*",
+      "write": ".*",
+      "read": ".*"
+    }
+  ],
+  "exchanges": [
+    {
+      "name": "parking.commands",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    },
+    {
+      "name": "parking.dlx",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
+    }
+  ],
+  "queues": [
+    {
+      "name": "cmd.A",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.B",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.C",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.expired",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum"
+      }
+    }
+  ],
+  "bindings": [
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.A",
+      "destination_type": "queue",
+      "routing_key": "cmd.A.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.B",
+      "destination_type": "queue",
+      "routing_key": "cmd.B.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.C",
+      "destination_type": "queue",
+      "routing_key": "cmd.C.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.dlx",
+      "vhost": "/",
+      "destination": "cmd.expired",
+      "destination_type": "queue",
+      "routing_key": "expired",
+      "arguments": {}
+    }
+  ],
+  "policies": [
+    {
+      "vhost": "/",
+      "name": "command-delivery",
+      "pattern": "^cmd\\.[A-F]$",
+      "apply-to": "quorum_queues",
+      "priority": 10,
+      "definition": {
+        "dead-letter-exchange": "parking.dlx",
+        "dead-letter-routing-key": "expired",
+        "dead-letter-strategy": "at-least-once",
+        "overflow": "reject-publish",
+        "max-length": 10000,
+        "delivery-limit": 5
+      }
+    }
+  ]
+}

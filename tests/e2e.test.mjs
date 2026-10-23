@@ -8,6 +8,8 @@ import { execSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { registerCommandInboxTests } from './command-inbox.e2e.mjs';
+import './command-inbox-http.test.mjs';
 
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -74,6 +76,17 @@ test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bã
 test('TC01 tra cứu tổng hợp 3 bãi', T, async () => {
   const r = await agg('/api/parkings/availability');
   assert.deepEqual(r.body.map((p) => [p.parkingId, p.status, p.total]), [['A', 'ONLINE', 40], ['B', 'ONLINE', 60], ['C', 'ONLINE', 30]]);
+});
+
+test('TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh', T, async () => {
+  const admin = await login('admin');
+  const started = performance.now();
+  const r = await agg(`/api/admin/parkings/MISSING-${randomUUID()}/commands`, {
+    method: 'POST', token: admin, body: { type: 'reserve', payload: { slotCode: 'UNKNOWN' } },
+  });
+  assert.equal(r.status, 404);
+  assert.equal(r.body.error, 'PARKING_NOT_FOUND');
+  assert(performance.now() - started < 2500, 'mandatory return phải tới trước timeout publish 3s');
 });
 
 test('TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai', T, async () => {
@@ -556,3 +569,5 @@ test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), o
     }
   }
 );
+
+registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot });

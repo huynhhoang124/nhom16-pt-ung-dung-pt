@@ -28,7 +28,7 @@ function amqpPublisher(url) {
     ch = c;
     return c;
   }
-  return async (routingKey, payload) => {
+  const publish = async (routingKey, payload) => {
     try {
       const c = await channel();
       c.publish(EXCHANGE, routingKey, Buffer.from(JSON.stringify(payload)),
@@ -40,6 +40,8 @@ function amqpPublisher(url) {
       return false;
     }
   };
+  publish.close = async () => { const old = conn; conn = ch = null; if (old) await old.close().catch(() => {}); };
+  return publish;
 }
 
 function makeRelay(pool, publish, logger = log) {

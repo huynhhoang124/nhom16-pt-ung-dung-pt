@@ -48,46 +48,60 @@ const findByRequest = (pool, requestId) =>
 //   - Đặt TRƯỚC: chỉ ghi reservation; job activateDue giữ chỗ khi gần đến giờ.
 // expire_time = giờ đến + `minutes`: quá giờ này chưa đến thì hết hạn (no-show).
 // Mốc thời gian lấy theo now() của DB bãi.
-async function reserve(pool, parkingId, { requestId, userId, slotCode, licensePlate, startTime, durationMinutes = 120 }, minutes = 15) {
-  // Đã có bản ghi với requestId này (retry, hoặc request trùng chạy song song đã thắng) -> trả lại bản đó.
+// Bodies below use the caller's transaction; no BEGIN/COMMIT inside inbox processing.
+async function business(c, fn, recover) {
+  await c.query('SAVEPOINT business_operation');
+  try {
+    const out = await fn();
+    await c.query('RELEASE SAVEPOINT business_operation');
+    return out;
+  } catch (e) {
+    await c.query('ROLLBACK TO SAVEPOINT business_operation');
+    await c.query('RELEASE SAVEPOINT business_operation');
+    if (recover) return recover(e);
+    if (e instanceof Abort) return { code: e.code, body: e.body };
+    throw e;
+  }
+}
+
+async function reserveIn(c, parkingId, input, minutes = 15) {
+  const { requestId, userId, slotCode, licensePlate, startTime, durationMinutes = 120 } = input;
   const replayOr = async (fallback) => {
-    const prior = await findByRequest(pool, requestId);
+    const prior = await findByRequest(c, requestId);
     return prior.rowCount ? { code: 200, body: prior.rows[0], replayed: true } : fallback;
   };
   const prior = await replayOr(null);
   if (prior) return prior;
-
-  try {
-    const out = await tx(pool, async (c) => {
-      const now = (await c.query('SELECT now() AS now')).rows[0].now;
-      const start = startTime && new Date(startTime) > now ? new Date(startTime) : now;
-      const instant = start - now <= minutes * 60_000;
-      let slot;
-      if (instant) {
-        // compare-and-swap nguyên tử: chỉ một request thấy 1 dòng bị ảnh hưởng
-        slot = (await c.query(
-          `UPDATE parking_slots SET status='RESERVED', version=version+1, updated_at=now()
-           WHERE slot_code=$1 AND status='AVAILABLE' RETURNING id, version`, [slotCode])).rows[0];
-      } else {
-        slot = (await c.query(`SELECT id FROM parking_slots WHERE slot_code=$1 AND status NOT IN ('MAINTENANCE','HIDDEN')`, [slotCode])).rows[0];
-      }
-      if (!slot) throw new Abort(409, { error: 'SLOT_TAKEN' });
-      const r = await c.query(
-        `INSERT INTO reservations(request_id, user_id, slot_id, license_plate, start_time, end_time, expire_time)
-         VALUES ($1,$2,$3,$4, $5::timestamptz, $5::timestamptz + make_interval(mins => $6), $5::timestamptz + make_interval(mins => $7)) RETURNING *`,
-        [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes]);
-      if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', slot.version, licensePlate, { userId, reservationId: r.rows[0].id });
-      return { code: 201, body: { ...r.rows[0], slot_code: slotCode } };
-    });
-    // 409 có thể do chính request trùng của mình vừa giữ slot: chờ khoá xong thì slot đã RESERVED.
-    return out.code === 409 ? await replayOr(out) : out;
-  } catch (e) {
-    // 23P01: khung giờ giao với một đặt chỗ khác của slot này (ex_no_overlap)
+  return business(c, async () => {
+    const now = (await c.query('SELECT now() AS now')).rows[0].now;
+    const start = startTime && new Date(startTime) > now ? new Date(startTime) : now;
+    const instant = start - now <= minutes * 60_000;
+    let slot;
+    if (instant) {
+      // compare-and-swap nguyên tử: chỉ một request thấy 1 dòng bị ảnh hưởng
+      slot = (await c.query(
+        `UPDATE parking_slots SET status='RESERVED', version=version+1, updated_at=now()
+         WHERE slot_code=$1 AND status='AVAILABLE' RETURNING id, version`, [slotCode])).rows[0];
+    } else {
+      slot = (await c.query(`SELECT id FROM parking_slots WHERE slot_code=$1 AND status NOT IN ('MAINTENANCE','HIDDEN')`, [slotCode])).rows[0];
+    }
+    if (!slot) throw new Abort(409, { error: 'SLOT_TAKEN' });
+    const r = await c.query(
+      `INSERT INTO reservations(request_id, user_id, slot_id, license_plate, start_time, end_time, expire_time)
+       VALUES ($1,$2,$3,$4, $5::timestamptz, $5::timestamptz + make_interval(mins => $6), $5::timestamptz + make_interval(mins => $7)) RETURNING *`,
+      [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes]);
+    if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', slot.version, licensePlate, { userId, reservationId: r.rows[0].id });
+    return { code: 201, body: { ...r.rows[0], slot_code: slotCode } };
+  }, async (e) => {
+    if (e instanceof Abort) return replayOr({ code: e.code, body: e.body });
     if (e.code === '23P01') return replayOr({ code: 409, body: { error: 'TIME_CONFLICT' } });
-    if (e.code !== '23505') throw e;
-    // vi phạm UNIQUE(request_id) khi đua nhau
-    return replayOr({ code: 409, body: { error: 'SLOT_TAKEN' } });
-  }
+    if (e.code === '23505') return replayOr({ code: 409, body: { error: 'SLOT_TAKEN' } });
+    throw e;
+  });
+}
+
+function reserve(pool, parkingId, input, minutes = 15) {
+  return tx(pool, (c) => reserveIn(c, parkingId, input, minutes));
 }
 
 // Xe vãng lai không được vào slot sắp có người đặt trong khoảng này (phút).
@@ -176,33 +190,35 @@ const listPricing = async (pool) => (await pool.query('SELECT * FROM pricing_rul
 
 // NV-04: thanh toán (giả lập). paymentKey = "<userId>:<Idempotency-Key>": bấm lại / retry trả lại kết quả cũ,
 // không ghi nhận lần hai. Trả khi xe còn trong bãi thì khoá số tiền theo phí tạm tính lúc trả.
-async function pay(pool, { sessionId, method, paymentKey, userId }) {
+async function payIn(c, { sessionId, method, paymentKey, userId }) {
   const replay = async (fallback) => {
-    const r = (await pool.query(`SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
-                                 WHERE ps.payment_key=$1 AND ps.id=$2`, [paymentKey, sessionId])).rows[0];
+    const r = (await c.query(`SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
+      WHERE ps.payment_key=$1 AND ps.id=$2 AND ($3::text IS NULL OR ps.user_id=$3)`, [paymentKey, sessionId, userId ?? null])).rows[0];
     return r ? { code: 200, body: r, replayed: true } : fallback;
   };
   const prior = await replay(null);
   if (prior) return prior;
-  try {
-    return await tx(pool, async (c) => {
-      const cur = (await c.query(
-        `SELECT paid_at, user_id FROM parking_sessions WHERE id=$1 FOR UPDATE`, [sessionId])).rows[0];
-      if (!cur || (userId && cur.user_id !== userId)) throw new Abort(404, { error: 'SESSION_NOT_FOUND' });
-      if (cur.paid_at) throw new Abort(409, { error: 'ALREADY_PAID' });
-      const q = await quoteIn(c, sessionId);
-      if (q.fee <= 0) throw new Abort(409, { error: 'NOTHING_TO_PAY' });
-      await c.query(
-        `UPDATE parking_sessions SET paid_at=now(), payment_method=$2, payment_key=$3, fee=$4 WHERE id=$1`,
-        [sessionId, method, paymentKey, q.fee]);
-      return { code: 200, body: await getSession(c, sessionId) };
-    }).then((out) => (out.code === 409 && out.body.error === 'ALREADY_PAID' ? replay(out) : out));
-  } catch (e) {
-    if (e.code !== '23505') throw e;   // payment_key trùng: 2 request cùng key chạy song song (replay thấy) hoặc
-    // key đã dùng cho phiên KHÁC -> từ chối, không được trả kết quả của phiên kia như thể đã trả tiền phiên này
-    return replay({ code: 422, body: { error: 'IDEMPOTENCY_KEY_REUSED' } });
-  }
+  return business(c, async () => {
+    const cur = (await c.query(
+      `SELECT paid_at, user_id FROM parking_sessions WHERE id=$1 FOR UPDATE`, [sessionId])).rows[0];
+    if (!cur || (userId && cur.user_id !== userId)) throw new Abort(404, { error: 'SESSION_NOT_FOUND' });
+    if (cur.paid_at) throw new Abort(409, { error: 'ALREADY_PAID' });
+    const q = await quoteIn(c, sessionId);
+    if (q.fee <= 0) throw new Abort(409, { error: 'NOTHING_TO_PAY' });
+    await c.query(
+      `UPDATE parking_sessions SET paid_at=now(), payment_method=$2, payment_key=$3, fee=$4 WHERE id=$1`,
+      [sessionId, method, paymentKey, q.fee]);
+    return { code: 200, body: await getSession(c, sessionId) };
+  }, (e) => {
+    if (e instanceof Abort) {
+      const out = { code: e.code, body: e.body };
+      return e.code === 409 && e.body.error === 'ALREADY_PAID' ? replay(out) : out;
+    }
+    if (e.code === '23505') return replay({ code: 422, body: { error: 'IDEMPOTENCY_KEY_REUSED' } });
+    throw e;
+  });
 }
+function pay(pool, input) { return tx(pool, (c) => payIn(c, input)); }
 
 // Lịch sử phiên gửi xe. Biển số so khớp sau khi bỏ dấu cách/chấm/gạch, không phân biệt hoa thường.
 const listSessions = async (pool, { plate, userId, from, to } = {}) => (await pool.query(
@@ -215,8 +231,8 @@ const listSessions = async (pool, { plate, userId, from, to } = {}) => (await po
    ORDER BY ps.entered_at DESC LIMIT 200`, [plate || null, userId || null, from || null, to || null])).rows;
 
 // Kết thúc một reservation ACTIVE (huỷ hoặc hết hạn): không xoá cứng, đổi status (dấu vết để đối soát).
-function endReservation(pool, parkingId, id, status, userId) {
-  return tx(pool, async (c) => {
+function endReservationIn(c, parkingId, id, status, userId) {
+  return business(c, async () => {
     const r = await c.query(
       `UPDATE reservations SET status=$2 WHERE id=$1 AND status='ACTIVE'
        AND ($3::text IS NULL OR user_id=$3) RETURNING slot_id, license_plate, start_time, user_id`, [id, status, userId ?? null]);
@@ -234,6 +250,10 @@ function endReservation(pool, parkingId, id, status, userId) {
     }
     return { code: 200, body: { id, status } };
   });
+}
+
+function endReservation(pool, parkingId, id, status, userId) {
+  return tx(pool, (c) => endReservationIn(c, parkingId, id, status, userId));
 }
 
 // Hết hạn theo đồng hồ DB của CHÍNH bãi này (một nguồn thời gian duy nhất, không tin giờ client).
@@ -396,4 +416,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };
+module.exports = { reserveIn, endReservationIn, payIn, reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };
