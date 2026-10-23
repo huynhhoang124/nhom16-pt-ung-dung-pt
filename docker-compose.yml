@@ -133,7 +133,14 @@ services:
     profiles: [extra]
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, PARKING_ID: D, PORT: 8004, SLOT_COUNT: 10, DATABASE_URL: "postgres://postgres:dev@db-d/parking" }
+    environment:
+      <<: *node-env
+      NODE_URL: "http://parking-d:8004"
+      PARKING_ID: D
+      PORT: 8004
+      SLOT_COUNT: 10
+      CLOCK_SKEW_MS: "${CLOCK_SKEW_MS:-0}"
+      DATABASE_URL: "postgres://postgres:dev@db-d/parking"
     ports: ["8004:8004"]
     depends_on: { db-d: { condition: service_healthy } }
 

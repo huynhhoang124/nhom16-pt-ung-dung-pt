@@ -45,10 +45,25 @@ test('đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện', async ()
   assert.equal(r.code, 201);
   assert.equal(r.body.slot_code, 'A01');
   assert.deepEqual(await slot(pool, 'A01'), { status: 'RESERVED', version: 1 });
-  const ev = await one(pool, 'SELECT payload FROM parking_events');
-  assert.deepEqual(ev.payload, {
-    event: 'SLOT_UPDATED', type: 'RESERVED', parkingId: 'A', slot: 'A01', status: 'RESERVED', version: 1,
-    available: 4, total: 5, userId: 'u1', reservationId: r.body.id,   // NV-08: số chỗ trống + người nhận thông báo
+  const ev = await one(pool, 'SELECT payload, hlc FROM parking_events');
+
+  assert.match(ev.hlc, /^\d{13}-\d{4}$/);
+  assert.equal(ev.payload.hlc, ev.hlc);
+
+  const { hlc: payloadHlc, ...payload } = ev.payload;
+  assert.match(payloadHlc, /^\d{13}-\d{4}$/);
+
+  assert.deepEqual(payload, {
+    event: 'SLOT_UPDATED',
+    type: 'RESERVED',
+    parkingId: 'A',
+    slot: 'A01',
+    status: 'RESERVED',
+    version: 1,
+    available: 4,
+    total: 5,
+    userId: 'u1',
+    reservationId: r.body.id,
   });
 });
 
@@ -203,6 +218,10 @@ test('TC17 vào bằng đặt chỗ rồi ra: đúng 1 phiên, lấy biển số
   assert.equal((await s.listSessions(pool, { plate: '30a r1' })).length, 1);
   assert.equal((await s.listSessions(pool, { userId: 'u1' })).length, 1);
   assert.equal((await s.listSessions(pool, { userId: 'u2' })).length, 0);
+  
+  const sessions = await s.listSessions(pool, { userId: 'u1' });
+  assert.equal(sessions.length, 1);
+  assert.match(sessions[0].hlc, /^\d{13}-\d{4}$/);
 });
 
 test('TC25 xe ra: phiên có phí theo bảng giá của bãi; xem phí tạm tính khi xe còn trong bãi', async () => {

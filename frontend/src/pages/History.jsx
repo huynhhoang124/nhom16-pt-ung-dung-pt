@@ -3,6 +3,19 @@ import { api, formatPlate, message, newKey, useLive } from '../api.js';
 
 const time = (t) => (t ? new Date(t).toLocaleString('vi-VN') : '—');
 const money = (v) => (v == null ? '—' : `${v.toLocaleString('vi-VN')} đ`);
+const historyHlcKey = (session) => {
+  if (
+    typeof session.hlc === 'string' &&
+    /^\d{13}-\d{4}$/.test(session.hlc)
+  ) {
+    return session.hlc;
+  }
+
+  const parsed = Date.parse(session.enteredAt);
+  const ms = Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
+
+  return `${String(ms).padStart(13, '0')}-0000`;
+};
 
 // Lịch sử gửi xe. USER: phiên của mình. STAFF/ADMIN: tra biển số trên toàn hệ thống.
 export default function History({ user }) {
@@ -34,6 +47,13 @@ export default function History({ user }) {
     else { setPaying(null); setError(message(r.data)); load(); }
   }
 
+  const sessions = (data?.sessions ?? []).slice().sort((a, b) => {
+    const ka = historyHlcKey(a);
+    const kb = historyHlcKey(b);
+
+    return ka < kb ? 1 : ka > kb ? -1 : 0;
+  });
+
   return (
     <>
       <h2>{mine ? 'Lịch sử gửi xe' : 'Tra cứu biển số'}</h2>
@@ -64,7 +84,7 @@ export default function History({ user }) {
         <div className="scroll"><table>
           <thead><tr><th>Bãi</th><th>Slot</th><th>Biển số</th><th>Vào</th><th>Ra</th><th>Phí</th><th /></tr></thead>
           <tbody>
-            {data.sessions.map((x) => (
+            {sessions.map((x) => (
               <tr key={`${x.parkingId}:${x.id}`}>
                 <td>{x.parkingId}</td><td>{x.slotCode}</td><td>{formatPlate(x.licensePlate)}</td>
                 <td>{time(x.enteredAt)}</td><td>{x.exitedAt ? time(x.exitedAt) : <strong>Đang gửi</strong>}</td>
@@ -72,7 +92,7 @@ export default function History({ user }) {
                 <td>{mine && !x.paidAt && !x.exitedAt && <button className="link" onClick={() => startPay(x)}>Thanh toán</button>}</td>
               </tr>
             ))}
-            {!data.sessions.length && <tr><td colSpan="7" className="muted">Không có phiên gửi xe nào.</td></tr>}
+            {!sessions.length && <tr><td colSpan="7" className="muted">Không có phiên gửi xe nào.</td></tr>}
           </tbody>
         </table></div>
       )}
