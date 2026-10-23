@@ -7,7 +7,7 @@ const { mountMetrics } = require('./metrics');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
+function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
@@ -32,6 +32,22 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
   const info = (n) => ({ parkingId: n.id, name: n.name, address: n.address, lat: n.lat, lng: n.lng, publicUrl: n.publicUrl, status: n.status, lastSeen: n.lastSeen });
 
   app.get('/health', (_req, res) => res.json({ status: 'UP' }));
+
+  // PD-01: administrative publish surface; 202 means broker confirm, not node completion.
+  // No registry lookup: a 404 here must come from RabbitMQ mandatory basic.return.
+  app.post('/api/admin/parkings/:id/commands', need('ADMIN'), async (req, res) => {
+    if (!commands) return res.status(503).json({ error: 'BROKER_UNAVAILABLE' });
+    try {
+      const result = await commands.send(req.params.id, req.body?.type, req.body?.payload, {
+        messageId: req.body?.messageId,
+        correlationId: req.body?.correlationId,
+        actor: { userId: req.user.sub, role: req.user.role },
+      });
+      res.status(202).json({ ...result, processed: false });
+    } catch (e) {
+      res.status(e.status ?? 500).json({ error: e.code ?? 'INTERNAL_ERROR' });
+    }
+  });
 
   // Sai mật khẩu 5 lần / 15 phút theo username + IP thì khoá tạm (chống dò mật khẩu).
   app.post('/api/auth/login', async (req, res) => {
