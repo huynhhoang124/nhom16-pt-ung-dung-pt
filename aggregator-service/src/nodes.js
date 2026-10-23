@@ -56,7 +56,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
     let n = nodes.get(row.parking_id);
     if (n) {
       if (row.api_url) n.url = row.api_url;
-      if (row.name) n.name = row.name;
+      if (row.name && (!n.name || row.name !== `Bãi ${row.parking_id}`)) n.name = row.name;
       if (row.address !== undefined) n.address = row.address;
       if (row.lat !== undefined) n.lat = row.lat;
       if (row.lng !== undefined) n.lng = row.lng;

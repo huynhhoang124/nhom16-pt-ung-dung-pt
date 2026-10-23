@@ -7,6 +7,7 @@ const { makeRegistry } = require('./nodes');
 const { applyEvent, reconcile, startConsumer } = require('./events');
 const { makeAuth, seedUsers } = require('./auth');
 const { makeApp } = require('./routes');
+const { makeCommands } = require('./commands');
 const { log } = require('./log');
 
 const env = (k, d) => process.env[k] ?? d;
@@ -50,11 +51,12 @@ async function main() {
     failThreshold: config.get('failThreshold'),
   });
   const hasEtcd = Boolean(env('ETCD_ENDPOINTS'));
-  if (!hasEtcd) {
-    for (const row of (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows) reg.add(row);
+  const nodeRows = (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows;
+  for (const row of nodeRows) {
+    reg.add(hasEtcd ? { ...row, hasLease: false } : row);
   }
 
-  // PD-09: Khám phá dịch vụ động qua etcd lease (khi có ETCD_ENDPOINTS thì không nạp/ghi DB)
+  // PD-09: Khám phá dịch vụ động qua etcd lease (khi có ETCD_ENDPOINTS, giữ metadata từ DB và quản lý hasLease qua etcd)
   const { startDiscovery } = require('./discovery');
   const discovery = startDiscovery({
     etcdEndpoints: env('ETCD_ENDPOINTS'),
@@ -78,7 +80,8 @@ async function main() {
   const cache = new Map();
   const b64 = (k) => (process.env[k] ? Buffer.from(process.env[k], 'base64').toString() : undefined);
   const auth = makeAuth(env('JWT_SECRET', 'dev-secret'), { privateKey: b64('JWT_PRIVATE_KEY_B64'), publicKey: b64('JWT_PUBLIC_KEY_B64') });
-  const app = makeApp({ pool, reg, cache, auth, config, reserveTimeoutMs: config.get('reserveTimeoutMs', 3000) });
+  const commands = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'));
+  const app = makeApp({ pool, reg, cache, auth, commands, config, reserveTimeoutMs: config.get('reserveTimeoutMs', 3000) });
   const server = http.createServer(app);
   const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS
   // NV-08: socket có token hợp lệ thì vào phòng "user:<id>" để nhận thông báo riêng; không có vẫn nhận realtime chung.

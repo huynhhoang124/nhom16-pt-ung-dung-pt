@@ -76,6 +76,17 @@ test('TC01 tra cứu tổng hợp 3 bãi', T, async () => {
   assert.deepEqual(r.body.map((p) => [p.parkingId, p.status, p.total]), [['A', 'ONLINE', 40], ['B', 'ONLINE', 60], ['C', 'ONLINE', 30]]);
 });
 
+test('TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh', T, async () => {
+  const admin = await login('admin');
+  const started = performance.now();
+  const r = await agg(`/api/admin/parkings/MISSING-${randomUUID()}/commands`, {
+    method: 'POST', token: admin, body: { type: 'reserve', payload: { slotCode: 'UNKNOWN' } },
+  });
+  assert.equal(r.status, 404);
+  assert.equal(r.body.error, 'PARKING_NOT_FOUND');
+  assert(performance.now() - started < 2500, 'mandatory return phải tới trước timeout publish 3s');
+});
+
 test('TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai', T, async () => {
   const slot = await freeSlot('A');
   const key = randomUUID();
@@ -563,6 +574,10 @@ test('TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd
   async () => {
     try {
       compose('--profile extra up -d db-d parking-d');
+      await until('parking-d sẵn sàng', async () => {
+        const r = await node('D', '/health');
+        return r.status === 200;
+      }, 30_000);
       const start = Date.now();
       await until('bãi D xuất hiện trong danh sách bãi của Aggregator <= 2s', async () => {
         const r = await agg('/api/parkings');
