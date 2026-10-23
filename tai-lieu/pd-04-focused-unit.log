@@ -1,0 +1,20 @@
+✔ target snapshot includes offline lots; unknown zone and no ordinary/admin double routing (4.7709ms)
+✔ persistent snapshot, per-lot dedup and late replies, key reuse, unknown publish, admin authorization (2508.017ms)
+✔ PD-04 signed broadcast retains target snapshot and original 10-minute deadline (7.889ms)
+✔ routing key rejects wildcards, dots and empty segments without restricting parking registry (0.4494ms)
+✔ envelope and properties preserved; only resolve after individual publisher confirm (1.647ms)
+✔ concurrent duplicate business IDs: return and out-of-order confirms match the exact attempt (1.4515ms)
+✔ nack is unavailable, non-NO_ROUTE return is not 404 (1.005ms)
+✔ disconnect settles all in-flight sends as unknown; next send reconnects without automatic replay (1.3141ms)
+✔ connection failure and stalled connect are 503 before publish; connector tries next broker (30.4118ms)
+✔ stalled setup is retired; late connection cannot replace a reconnected channel (29.8324ms)
+✔ confirm timeout / closed channel callback / publish throw are unknown, never 404 (31.4237ms)
+✔ channel error invalidates publisher and does not become unhandled EventEmitter error (0.5167ms)
+ℹ tests 12
+ℹ suites 0
+ℹ pass 12
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3070.7991

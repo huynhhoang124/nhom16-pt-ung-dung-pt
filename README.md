@@ -1,5 +1,9 @@
 # Nhóm 16 – Bãi đỗ xe thông minh liên kết nhiều bãi
 
+PD-04: [broadcast quản trị theo vùng, topology, API và tích hợp](tai-lieu/pd-04-admin-broadcast.md).
+Chức năng mặc định tắt (`ADMIN_BROADCAST_ENABLED=false`) chờ inbox/request–reply PD-02/PD-03;
+PR draft chưa xác nhận TC61 D/E/F. Xem [bằng chứng kiểm thử](tai-lieu/pd-04-evidence.md).
+
 **Môn:** Hệ thống / Ứng dụng phân tán – PTIT
 
 **Thành viên:** Vũ Văn Hùng, Hoàng Văn Huynh, Nguyễn Văn Luân, Trịnh Kim Loan, Đỗ Huyền Trang, Phạm Sỹ Hiệp
