@@ -26,6 +26,7 @@ x-node-env: &node-env
   RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
   JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}          # PT-05: nhân viên gọi thẳng node khi Aggregator sập
   CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+  ADMIN_BROADCAST_ENABLED: "${ADMIN_BROADCAST_ENABLED:-false}"
 
 services:
   rabbitmq:
@@ -92,6 +93,8 @@ services:
     image: nhom16/aggregator
     environment: &agg-env
       INSTANCE_ID: "1"
+      ADMIN_BROADCAST_ENABLED: "${ADMIN_BROADCAST_ENABLED:-false}"
+      PARKING_ZONES: '${PARKING_ZONES:-{"A":"bac","B":"bac","C":"bac"}}'
       PORT: 8000
       DATABASE_URL: "postgres://postgres:dev@db-agg/parking"
       RABBITMQ_URL: *amqp

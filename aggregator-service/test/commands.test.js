@@ -24,6 +24,17 @@ const ack = (m, error) => m[4](error);
 const returned = (b, m, code = 312) => b.connections.at(-1).ch.emit('return', { properties: m[3], fields: { replyCode: code } });
 const rejects = (p, code) => assert.rejects(p, { code });
 
+test('PD-04 signed broadcast retains target snapshot and original 10-minute deadline', async(t)=>{
+  const b=broker(),pub=makeCommands('amqp://test',{connect:b.connect,signingKey:'key'});t.after(()=>pub.close());
+  const issuedAt=Date.now()-12000,deadlineAt=issuedAt+600000;
+  const p=pub.send('zone-nam','setPricing',{rules:[]},{issuedAt,deadlineAt,targets:['D','E','F'],actor:{userId:'admin',role:'ADMIN'},messageId:'admin:broadcast-key',correlationId:'admin:broadcast-key',replyTo:'agg.broadcast'});
+  await tick();const wire=b.sent[0],body=JSON.parse(wire[2]);
+  assert.equal(wire[1],'cmd.zone-nam.setPricing');assert.deepEqual(body.targets,['D','E','F']);assert.equal(body.deadlineAt,deadlineAt);
+  assert.ok(Number(wire[3].expiration)<=588000&&Number(wire[3].expiration)>587000);
+  assert.ok(require('../src/command-signature').verifySignature('key',body,wire[3]));ack(wire);await p;
+  await rejects(pub.send('all','lockFloor',{}, {deadlineAt:Date.now()-1}),'COMMAND_DEADLINE_BEFORE_SEND');assert.equal(b.sent.length,1);
+});
+
 test('routing key rejects wildcards, dots and empty segments without restricting parking registry', () => {
   assert.equal(routingKey('UNKNOWN', 'reserve'), 'cmd.UNKNOWN.reserve');
   for (const [id, type] of [['A.#', 'reserve'], ['*', 'reserve'], ['', 'reserve'], ['A', 'x.y'], ['A', undefined]]) {

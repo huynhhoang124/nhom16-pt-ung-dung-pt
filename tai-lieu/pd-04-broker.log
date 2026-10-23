@@ -1,0 +1,38 @@
+ Container pd04-broadcast-parking-c-1 Stopping
+ Container pd04-broadcast-parking-c-1 Stopped
+▶ PD-04 broker candidate A/B/C: fanout, duplicate, offline >10s, expiry, persistence, authorization
+  ✔ one publish; all targets apply; ten HTTP duplicates and broker redelivery stay one inbox effect (5288.78ms)
+ Container pd04-broadcast-db-c-1 Waiting
+ Container pd04-broadcast-db-c-1 Healthy
+ Container pd04-broadcast-parking-c-1 Starting
+ Container pd04-broadcast-parking-c-1 Started
+ Container pd04-broadcast-parking-c-1 Restarting
+ Container pd04-broadcast-parking-c-1 Started
+C late application elapsed ms: 15877
+  ✔ C stopped >10 seconds: 2/3 first, durable late result then persistence after restart (16596.3403ms)
+ Container pd04-broadcast-parking-c-1 Stopping
+ Container pd04-broadcast-parking-c-1 Stopped
+  ✔ signed expired admin command is recorded as 410, with no late mutation (3193.7965ms)
+ Container pd04-broadcast-db-c-1 Waiting
+ Container pd04-broadcast-db-c-1 Healthy
+ Container pd04-broadcast-parking-c-1 Starting
+ Container pd04-broadcast-parking-c-1 Started
+  ✔ broker expires remaining admin deadline while C is offline; restart cannot apply it (5049.6804ms)
+  ✔ management topology: only admin route, quorum/SAC, prefetch 16/4; admin-only endpoints (1199.8972ms)
+ Container pd04-broadcast-parking-a-1 Restarting
+ Container pd04-broadcast-parking-a-1 Started
+ Container pd04-broadcast-db-a-1 Waiting
+ Container pd04-broadcast-db-c-1 Waiting
+ Container pd04-broadcast-db-c-1 Healthy
+ Container pd04-broadcast-db-a-1 Healthy
+  ✔ lockFloor and banPlates persist across node restart; duplicate lock does not increment version (11400.794ms)
+✔ PD-04 broker candidate A/B/C: fanout, duplicate, offline >10s, expiry, persistence, authorization (66221.1567ms)
+﹣ TC61 Nam D/E/F (0.2386ms) # Blocked: PD-03 not merged and dev has no D/E/F services or authoritative zone data
+ℹ tests 8
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 66305.4807

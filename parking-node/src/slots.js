@@ -3,6 +3,7 @@
 
 const { calcFee, fromRow } = require('./pricing');
 const { requestId } = require('./log');
+const { guardAdminIn } = require('./admin-guards');
 
 // Dừng giao dịch với kết quả nghiệp vụ (409, 404...) thay vì lỗi hệ thống.
 class Abort {
@@ -59,6 +60,8 @@ async function reserve(pool, parkingId, { requestId, userId, slotCode, licensePl
 
   try {
     const out = await tx(pool, async (c) => {
+      const denied = await guardAdminIn(c, { slotCode, licensePlate });
+      if (denied) throw new Abort(denied.code, denied.body);
       const now = (await c.query('SELECT now() AS now')).rows[0].now;
       const start = startTime && new Date(startTime) > now ? new Date(startTime) : now;
       const instant = start - now <= minutes * 60_000;
@@ -101,6 +104,10 @@ const SESSION_COLS = `ps.id, s.slot_code AS "slotCode", ps.license_plate AS "lic
 // Xe vào mở phiên gửi xe, xe ra đóng phiên, cùng giao dịch với đổi trạng thái slot.
 function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
   return tx(pool, async (c) => {
+    if (type === 'CAR_ENTER' || type === 'MAINTENANCE_OFF') {
+      const denied = await guardAdminIn(c, { slotCode, licensePlate: plate, unlock: type === 'MAINTENANCE_OFF' });
+      if (denied) throw new Abort(denied.code, denied.body);
+    }
     const cur = (await c.query(`SELECT id, status FROM parking_slots WHERE slot_code=$1 FOR UPDATE`, [slotCode])).rows[0];
     if (!cur || !from.includes(cur.status)) throw new Abort(409, { error: 'INVALID_STATE' });
     const slotId = cur.id;
@@ -120,6 +127,8 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
            SELECT id FROM reservations WHERE slot_id=$1 AND status='ACTIVE' ORDER BY start_time LIMIT 1)
          RETURNING id, user_id, license_plate`, [slotId])).rows[0];
       plate = plate || r?.license_plate || null;          // xe đặt trước: lấy biển số từ đặt chỗ
+      const denied = await guardAdminIn(c, { licensePlate: plate });
+      if (denied) throw new Abort(denied.code, denied.body);
       const id = (await c.query(
         `INSERT INTO parking_sessions(slot_id, license_plate, reservation_id, user_id) VALUES ($1,$2,$3,$4) RETURNING id`,
         [slotId, plate, r?.id ?? null, r?.user_id ?? null])).rows[0].id;
