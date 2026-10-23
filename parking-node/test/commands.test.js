@@ -24,7 +24,7 @@ async function until(fn, ms = 2000) {
 }
 
 test('signed envelope: property authority, identity, metadata and producer/consumer canonical contract', () => {
-  const m = message('signed', 'reserve', {}, { causationId: 'cause', traceparent: 'trace', hlc: '123.4', fencingToken: 42 });
+  const m = message('signed', 'reserve', {}, { causationId: 'cause', traceparent: 'trace', hlc: '1000000000000-0004', fencingToken: 42 });
   const e = decodeCommand(m, 'A', KEY);
   assert.equal(e.messageId, 'u42:signed'); assert.equal(e.correlationId, 'corr-signed'); assert.equal(e.fencingToken, 42);
   assert.equal(signature(KEY, JSON.parse(m.content), m.properties), m.properties.headers['x-command-signature']);
@@ -41,6 +41,14 @@ test('signed envelope: property authority, identity, metadata and producer/consu
   assert.throws(() => decodeCommand(message('x', 'reserve', {}, { schemaVersion: 2 }), 'A', KEY), InvalidCommand);
   assert.throws(() => decodeCommand(message('x', 'reserve', {}, { messageId: 'body-not-authoritative' }), 'A', KEY), InvalidCommand);
   assert.throws(() => decodeCommand(message('x'), 'B', KEY), InvalidCommand);
+  assert.throws(
+    () => decodeCommand(
+      message('bad-hlc', 'reserve', {}, { hlc: '123.4' }),
+      'A',
+      KEY,
+    ),
+    InvalidCommand,
+  );
 });
 
 test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, replies and retention', async (t) => {
@@ -48,8 +56,16 @@ test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, re
   const processCommand = makeCommandProcessor({ pool, parkingId: 'A', internalKey: KEY });
   let original;
   await t.test('same command returns exact saved status/body and creates a reply for each delivery', async () => {
-    const metadata = { causationId: 'saga:1', traceparent: 'trace', hlc: '123.1', fencingToken: 42 };
+    const metadata = { causationId: 'saga:1', traceparent: 'trace', hlc: '1000000000000-0001', fencingToken: 42 };
     original = await processCommand(message('one', 'reserve', undefined, metadata));
+    const event = await one(
+      pool,
+      'SELECT hlc, payload FROM parking_events ORDER BY id DESC LIMIT 1',
+    );
+
+    assert.match(event.hlc, /^\d{13}-\d{4}$/);
+    assert.equal(event.payload.hlc, event.hlc);
+    assert.ok(event.hlc > metadata.hlc);
     const second = await processCommand(message('one', 'reserve', undefined, metadata));
     assert.equal(original.code, 201); assert.equal(second.code, 201); assert.equal(second.duplicate, true);
     assert.deepEqual(second.body, original.body);
@@ -57,7 +73,12 @@ test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, re
     assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM parking_events')).n, 1);
     const replies = (await pool.query('SELECT payload, properties FROM command_reply_outbox ORDER BY id')).rows;
     assert.equal(replies.length, 2); assert.deepEqual(replies[0].payload.result, replies[1].payload.result);
-    for (const r of replies) { assert.equal(r.properties.correlationId, 'corr-one'); assert.equal(r.properties.headers.hlc, '123.1'); assert.equal(r.payload.fencingToken, 42); }
+    for (const r of replies) {
+      assert.equal(r.properties.correlationId, 'corr-one');
+      assert.match(r.properties.headers.hlc, /^\d{13}-\d{4}$/);
+      assert.ok(r.properties.headers.hlc > metadata.hlc);
+      assert.equal(r.payload.hlc, r.properties.headers.hlc);
+      assert.equal(r.payload.fencingToken, 42); }
   });
   await t.test('same key with changed payload/type is rejected without changing the original inbox', async () => {
     const changed = await processCommand(message('one', 'reserve', { slotCode: 'A02', licensePlate: '30A-123.45' }));
