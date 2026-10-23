@@ -40,11 +40,12 @@ async function main() {
     failThreshold: Number(env('FAIL_THRESHOLD', 3)),
   });
   const hasEtcd = Boolean(env('ETCD_ENDPOINTS'));
-  if (!hasEtcd) {
-    for (const row of (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows) reg.add(row);
+  const nodeRows = (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows;
+  for (const row of nodeRows) {
+    reg.add(hasEtcd ? { ...row, hasLease: false } : row);
   }
 
-  // PD-09: Khám phá dịch vụ động qua etcd lease (khi có ETCD_ENDPOINTS thì không nạp/ghi DB)
+  // PD-09: Khám phá dịch vụ động qua etcd lease (khi có ETCD_ENDPOINTS, giữ metadata từ DB và quản lý hasLease qua etcd)
   const { startDiscovery } = require('./discovery');
   const discovery = startDiscovery({
     etcdEndpoints: env('ETCD_ENDPOINTS'),

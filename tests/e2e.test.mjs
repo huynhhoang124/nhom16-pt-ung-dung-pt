@@ -574,6 +574,10 @@ test('TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd
   async () => {
     try {
       compose('--profile extra up -d db-d parking-d');
+      await until('parking-d sẵn sàng', async () => {
+        const r = await node('D', '/health');
+        return r.status === 200;
+      }, 30_000);
       const start = Date.now();
       await until('bãi D xuất hiện trong danh sách bãi của Aggregator <= 2s', async () => {
         const r = await agg('/api/parkings');
