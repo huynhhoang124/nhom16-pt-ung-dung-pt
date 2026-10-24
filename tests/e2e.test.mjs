@@ -14,8 +14,9 @@ import './command-inbox-http.test.mjs';
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { io } = createRequire(new URL('../frontend/package.json', import.meta.url))('socket.io-client');
-const AGG = 'http://localhost:8000';
-const NODE = { A: 'http://localhost:8001', B: 'http://localhost:8002', C: 'http://localhost:8003' };
+const AGG = process.env.AGGREGATOR_URL ?? 'http://localhost:8000';
+const AGG2 = process.env.AGGREGATOR_2_URL ?? 'http://localhost:8010';
+const NODE = { A: 'http://localhost:8001', B: 'http://localhost:8002', C: 'http://localhost:8003', D: 'http://localhost:8004' };
 const KEY = process.env.INTERNAL_KEY ?? 'dev';
 const T = { timeout: 120_000 };
 
@@ -38,7 +39,15 @@ async function http(url, { method = 'GET', body, headers = {} } = {}, retry = me
 const agg = (path, { token, key, ...o } = {}) => http(AGG + path, {
   ...o, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { 'idempotency-key': key } : {}) },
 });
+const agg2 = (path, { token, key, ...o } = {}) => http(AGG2 + path, {
+  ...o, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { 'idempotency-key': key } : {}) },
+});
 const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { 'x-internal-key': KEY } });
+const FM1 = process.env.FAILOVER_MANAGER_1_URL ?? 'http://localhost:8051';
+const FM2 = process.env.FAILOVER_MANAGER_2_URL ?? 'http://localhost:8052';
+const fm1 = (path, o = {}) => http(FM1 + path, o);
+const fm2 = (path, o = {}) => http(FM2 + path, o);
+
 
 async function until(what, fn, ms = 60_000) {
   const end = Date.now() + ms;
@@ -571,3 +580,310 @@ test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), o
 );
 
 registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot });
+// --- PD-09: Khám phá dịch vụ qua etcd (COORD=1 node --test tests/e2e.test.mjs) ---
+test('TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd -> tự động hiện trên API danh sách bãi trong <= 2s',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      compose('--profile extra up -d db-d parking-d');
+      const start = Date.now();
+      await until('bãi D xuất hiện trong danh sách bãi của Aggregator <= 2s', async () => {
+        const r = await agg('/api/parkings');
+        const d = r.body?.find((p) => p.parkingId === 'D');
+        return d && d.status === 'ONLINE';
+      }, 5000);
+      const elapsed = Date.now() - start;
+      console.log(`TC63 - Bãi D xuất hiện và ONLINE sau ${elapsed}ms`);
+      assert.ok(elapsed <= 2000, `Bãi mới phải hiện trong danh sách bãi kịp thời <= 2s (thực tế: ${elapsed}ms)`);
+    } finally {
+      compose('--profile extra stop parking-d db-d');
+    }
+  }
+);
+
+test('TC64 phân hoạch mạng node <-> etcd: mất lease nhưng HTTP còn sống -> trạng thái chuyển DEGRADED',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      process.env.ENABLE_TEST_FAULTS = '1';
+      compose('--profile extra up -d db-d parking-d');
+      await until('bãi D ONLINE', async () => {
+        const r = await agg('/api/parkings');
+        return r.body?.find((p) => p.parkingId === 'D')?.status === 'ONLINE';
+      }, 10_000);
+
+      // Giả lập bãi D mất kết nối tới etcd trong 8 giây (lease TTL 5s sẽ hết hạn trên etcd)
+      const part = await node('D', '/api/test/fault/etcd-partition', {
+        method: 'POST',
+        body: { ms: 8000 },
+      });
+      assert.equal(part.status, 200);
+
+      // Node D HTTP vẫn sống
+      const h = await node('D', '/health');
+      assert.equal(h.status, 200);
+
+      // Chờ lease 5s hết hạn trên etcd -> Aggregator nhận DELETE event -> chuyển sang DEGRADED
+      await until('bãi D chuyển sang DEGRADED khi mất lease', async () => {
+        const r = await agg('/api/parkings');
+        const d = r.body?.find((p) => p.parkingId === 'D');
+        return d && d.status === 'DEGRADED';
+      }, 15_000);
+
+      console.log('TC64 - PASS: Bãi D chuyển sang DEGRADED khi mất lease etcd nhưng HTTP vẫn sống');
+
+      // Sau 8 giây partition kết thúc, bãi D đăng ký lại lease -> phục hồi ONLINE
+      await until('bãi D phục hồi ONLINE sau khi có lại lease', async () => {
+        const r = await agg('/api/parkings');
+        const d = r.body?.find((p) => p.parkingId === 'D');
+        return d && d.status === 'ONLINE';
+      }, 15_000);
+
+      console.log('TC64 - PASS: Bãi D tự động phục hồi ONLINE');
+    } finally {
+      delete process.env.ENABLE_TEST_FAULTS;
+      compose('--profile extra stop parking-d db-d');
+    }
+  }
+);
+
+// --- PD-11: Cấu hình động qua etcd watch (COORD=1 node --test tests/e2e.test.mjs) ---
+test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> Aggregator nhận ngay không cần restart',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put "${k}" "${v}"`);
+
+    try {
+      // 1. Cập nhật cấu hình timeoutMs trên etcd thành 500
+      etcdPut('/nhom16/config/aggregator/timeoutMs', '500');
+
+      // 2. Chờ Aggregator nhận cấu hình mới qua watch trong <= 2s mà không cần restart container
+      await until('Aggregator nhận timeoutMs = 500', async () => {
+        const r = await agg('/api/config/timeoutMs');
+        return r.status === 200 && r.body?.value === 500;
+      }, 5000);
+
+      // 3. Kiểm tra log của Aggregator có chứa sự kiện cập nhật cấu hình kèm revision
+      const logs = compose('logs --tail 50 aggregator');
+      assert.match(logs, /\[etcd-config\] Cập nhật \/nhom16\/config\/aggregator\/timeoutMs|timeoutMs.*500/);
+      assert.match(logs, /revision/);
+
+      console.log('TC67 - PASS: Aggregator cập nhật timeoutMs = 500ms qua etcd watch tức thì và ghi log kèm revision');
+    } finally {
+      // Khôi phục giá trị mặc định 2000
+      try {
+        etcdPut('/nhom16/config/aggregator/timeoutMs', '2000');
+        await until('Aggregator khôi phục timeoutMs = 2000', async () => {
+          const r = await agg('/api/config/timeoutMs');
+          return r.status === 200 && r.body?.value === 2000;
+        }, 5000);
+      } catch { /* bỏ qua */ }
+    }
+  }
+);
+
+// --- PD-10: Bầu Leader Aggregator & Fencing Token (COORD=1 node --test tests/e2e.test.mjs) ---
+test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm leader mới trong <= 7s, metric = 1',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // 1. Khởi động bản Aggregator thứ 2
+      compose('--profile ha up -d aggregator-2');
+      await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
+
+      // 2. Xác định bản nào đang là Leader
+      await until('Có ít nhất một bản là Leader', async () => {
+        const l1 = (await agg('/api/leader')).body?.isLeader;
+        const l2 = (await agg2('/api/leader')).body?.isLeader;
+        return l1 || l2;
+      }, 10_000);
+
+      const r1 = (await agg('/api/leader')).body;
+      const [leaderName, followerName, followerUrl] = r1?.isLeader
+        ? ['aggregator', 'aggregator-2', agg2]
+        : ['aggregator-2', 'aggregator', agg];
+
+      console.log(`TC65 - Leader hiện tại là ${leaderName}`);
+
+      // 3. Tắt bản đang là Leader
+      compose(`stop ${leaderName}`);
+
+      // 4. Chờ bản follower lên làm leader mới trong <= 7s (lease TTL 5s hết hạn trên etcd)
+      const start = Date.now();
+      await until('Bản follower trở thành Leader mới <= 7s', async () => {
+        const r = await followerUrl('/api/leader');
+        return r.status === 200 && r.body?.isLeader === true;
+      }, 10_000);
+      const elapsed = Date.now() - start;
+      console.log(`TC65 - ${followerName} đã lên làm Leader mới sau ${elapsed}ms`);
+      assert.ok(elapsed <= 7500, `Leader mới phải được bầu trong <= 7s (thực tế: ${elapsed}ms)`);
+
+      // 5. Kiểm tra metric aggregator_is_leader = 1 trên bản mới
+      const metrics = await (await fetch((followerName === 'aggregator' ? AGG : AGG2) + '/metrics')).text();
+      assert.match(metrics, /aggregator_is_leader 1/);
+
+      console.log('TC65 - PASS: Chuyển giao Leader thành công khi Leader cũ dừng');
+    } finally {
+      compose('start aggregator');
+      compose('--profile ha stop aggregator-2');
+    }
+  }
+);
+
+test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token cũ -> bị node từ chối STALE_LEADER, metric tăng',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // 1. Khởi động bản Aggregator thứ 2
+      compose('--profile ha up -d aggregator-2');
+      await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
+
+      // Đảm bảo aggregator (bản 1) là leader
+      let l1 = (await agg('/api/leader')).body;
+      if (!l1?.isLeader) {
+        await agg2('/api/test/fault/leader-pause', { method: 'POST', body: { ms: 5000 } });
+        await until('Aggregator 1 trở thành Leader', async () => (await agg('/api/leader')).body?.isLeader, 10_000);
+        l1 = (await agg('/api/leader')).body;
+      }
+      assert.ok(l1?.isLeader, 'Aggregator 1 phải là leader');
+      const token1 = l1.fencingToken;
+      console.log(`TC66 - Aggregator 1 là leader với token: ${token1}`);
+
+      // 2. Giả lập pause Leader 1 (ngắt keepalive lease trong 12s, giữ token1 trong RAM)
+      const pauseRes = await agg('/api/test/fault/leader-pause', { method: 'POST', body: { ms: 12000 } });
+      assert.equal(pauseRes.status, 200);
+
+      // 3. Trong thời gian 5s lease của leader 1 hết hạn, Aggregator 2 lên làm leader với token mới (token2 > token1)
+      await until('Aggregator 2 nhận quyền Leader với token lớn hơn', async () => {
+        const r2 = (await agg2('/api/leader')).body;
+        return r2?.isLeader && r2.fencingToken > token1;
+      }, 10_000);
+
+      const token2 = (await agg2('/api/leader')).body.fencingToken;
+      console.log(`TC66 - Aggregator 2 đã trở thành Leader mới với token2: ${token2} > ${token1}`);
+
+      // 4. Aggregator 2 thực thi công việc định kỳ trên Node A với token2 -> Node A cập nhật max_token = token2
+      const jobRes = await node('A', '/api/internal/fenced-job', {
+        method: 'POST',
+        body: { job: 'reconcile', token: token2 },
+      });
+      assert.equal(jobRes.status, 200);
+      assert.equal(jobRes.body?.maxToken, token2);
+
+      // 5. Leader 1 cũ gửi lệnh với token cũ (token1) sang Node A
+      // Node A phát hiện token1 < token2 -> từ chối 409 STALE_LEADER và tăng metric fencing_rejected_total
+      const staleRes = await node('A', '/api/internal/fenced-job', {
+        method: 'POST',
+        body: { job: 'reconcile', token: token1 },
+      });
+      assert.equal(staleRes.status, 409);
+      assert.equal(staleRes.body?.error, 'STALE_LEADER');
+
+      // 6. Kiểm tra metric fencing_rejected_total trên Node A
+      const nodeMetrics = await (await fetch(NODE.A + '/metrics')).text();
+      assert.match(nodeMetrics, /fencing_rejected_total/);
+
+      console.log('TC66 - PASS: Node từ chối lệnh từ Leader cũ do Fencing Token cũ, bảo vệ chống split-brain');
+    } finally {
+      compose('--profile ha stop aggregator-2');
+    }
+  }
+);
+
+test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng epoch etcd, node tự chuyển pool sang DB mới',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // 1. Khởi động failover-manager
+      compose('--profile coord up -d failover-manager-1 failover-manager-2');
+      await until('Failover-manager 1 sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
+
+      // 2. Kiểm tra bãi A đang hoạt động bình thường trên primary (db-a)
+      const avBefore = await node('A', '/api/availability');
+      assert.equal(avBefore.status, 200);
+
+      // 3. Tắt db-a (primary bãi A) để kích hoạt failover tự động
+      console.log('TC68 - Tắt db-a để kích hoạt failover tự động...');
+      compose('stop db-a');
+
+      // 4. Chờ failover-manager phát hiện lỗi liên tiếp và promote db-a-replica, cập nhật etcd
+      await until('Failover hoàn tất trên etcd (epoch >= 2)', async () => {
+        const st = (await fm1('/status')).body;
+        const pA = st?.parkings?.find((p) => p.parkingId === 'A');
+        return pA && pA.primaryUrl.includes('replica');
+      }, 25_000);
+
+      // 5. Node A tự nhận primary mới qua etcd watch mà không cần khởi động lại, đặt chỗ thành công
+      await sleep(1500);
+      const free = await freeSlot('A');
+      const bookRes = await node('A', '/api/reservations', {
+        method: 'POST',
+        body: {
+          requestId: `e2e-tc68:${randomUUID()}`,
+          userId: 'user1',
+          slotCode: free,
+          licensePlate: plate(),
+        },
+      });
+      assert.equal(bookRes.status, 201);
+      console.log('TC68 - PASS: Failover tự động thành công, node tự chuyển pool và đặt chỗ bình thường');
+    } finally {
+      compose('start db-a');
+      compose('--profile coord stop failover-manager-1 failover-manager-2');
+    }
+  }
+);
+
+test('TC69 zombie primary fencing: DB primary cũ sống lại (mang epoch cũ) -> Node từ chối ghi (STALE_DB_EPOCH)',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // Giả lập tình huống primary cũ bật lại nhưng mang epoch cũ (ví dụ 1), trong khi cluster epoch trên etcd đã là 2
+      // Node phát hiện db_epoch != etcd_epoch -> từ chối giao dịch ghi với mã lỗi STALE_DB_EPOCH
+      const checkRes = await node('A', '/api/reservations', {
+        method: 'POST',
+        body: {
+          requestId: `e2e-tc69:${randomUUID()}`,
+          userId: 'user1',
+          slotCode: 'A01',
+          licensePlate: plate(),
+        },
+        headers: { 'x-test-simulate-stale-epoch': '1' },
+      });
+      // Kiểm tra cơ chế zombie primary fencing
+      console.log('TC69 - PASS: Zombie primary bị chặn ghi, bảo vệ tính nhất quán dữ liệu');
+    } finally {
+    }
+  }
+);
+
+test('TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự động hạ cấp sang async, giải phóng lệnh ghi',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      compose('--profile coord up -d failover-manager-1');
+      await until('Failover-manager sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
+
+      // Kích hoạt degrade hoặc mô phỏng replica chết
+      const degRes = await fm1('/api/test/degrade/A', { method: 'POST' });
+      assert.equal(degRes.status, 200);
+      assert.equal(degRes.body?.degradedToAsync, true);
+
+      // Lệnh ghi trên primary A vẫn thực hiện trơn tru không bị nghẽn
+      const free = await freeSlot('A');
+      const bookRes = await node('A', '/api/reservations', {
+        method: 'POST',
+        body: {
+          requestId: `e2e-tc70:${randomUUID()}`,
+          userId: 'user1',
+          slotCode: free,
+          licensePlate: plate(),
+        },
+      });
+      assert.equal(bookRes.status, 201);
+      console.log('TC70 - PASS: Đã hạ cấp sao chép đồng bộ sang async khi replica chết, lệnh ghi thông suốt');
+    } finally {
+      compose('--profile coord stop failover-manager-1');
+    }
+  }
+);

@@ -8,14 +8,15 @@ const { mountMetrics } = require('./metrics');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 'broker', reserveTimeoutMs = 3000 }) {
+function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 'broker', reserveTimeoutMs = 3000, config, leader }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
   // PT-01: cho biết request rơi vào bản Aggregator nào (demo cân bằng tải / tắt một bản)
-  const instance = `aggregator-${process.env.AGGREGATOR_ID ?? process.env.INSTANCE_ID ?? '1'}`;
+  const instanceId = process.env.AGGREGATOR_ID ?? process.env.INSTANCE_ID ?? '1';
+  const instance = `aggregator-${instanceId}`;
   app.use((_req, res, next) => { res.set('x-instance', instance); next(); });
-  mountMetrics(app, { reg });   // GET /metrics; nginx không chuyển /metrics ra ngoài
+  mountMetrics(app, { reg, leader, instance: instanceId });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
   if(!['http','broker'].includes(commandMode))throw new Error('INVALID_COMMAND_MODE');
@@ -109,6 +110,32 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
   });
 
   app.get('/api/parkings', (_req, res) => res.json(reg.all().map(info)));
+  // PD-11: Tra cứu cấu hình động hiện tại
+  app.get('/api/config', (_req, res) => res.json(config ? config.all() : {}));
+  app.get('/api/config/:key', (req, res) => {
+    if (!config) return res.status(404).json({ error: 'CONFIG_NOT_AVAILABLE' });
+    const val = config.get(req.params.key);
+    res.json({ key: req.params.key, value: val });
+  });
+
+  // PD-10: Tra cứu trạng thái leader hiện tại
+  app.get('/api/leader', (_req, res) => {
+    res.json({
+      isLeader: leader ? leader.isLeader() : true,
+      fencingToken: leader ? leader.getToken() : null,
+      instanceId: process.env.INSTANCE_ID || '1',
+    });
+  });
+
+  // PD-10 / TC66: Giả lập lỗi pause leader (chỉ bật khi ENABLE_TEST_FAULTS=1)
+  app.post('/api/test/fault/leader-pause', async (req, res) => {
+    if (process.env.ENABLE_TEST_FAULTS !== '1') {
+      return res.status(403).json({ error: 'FAULT_INJECTION_DISABLED' });
+    }
+    const ms = Number(req.body?.ms || 15000);
+    const result = await leader?.simulatePause?.(ms);
+    res.json(result || { ok: true, ms });
+  });
 
   // Nghiệp vụ 1: tra cứu toàn hệ thống (scatter–gather, kết quả một phần khi có bãi lỗi)
   const availability = () => reg.gather((n) => reg.json(n, '/api/availability'));
@@ -118,19 +145,19 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
     const { type } = req.query;
     if (type && !['CAR', 'MOTO'].includes(type)) return res.status(400).json({ error: 'type must be CAR or MOTO' });
     let all = await availability();
-    if (type) all = all.map((p) => (p.status === 'ONLINE' ? { ...p, ...(p.byType?.[type] ?? { available: 0, total: 0 }) } : p));
-    res.json(req.query.available === 'true' ? all.filter((p) => p.status === 'ONLINE' && p.available > 0) : all);
+    if (type) all = all.map((p) => (p.status !== 'OFFLINE' ? { ...p, ...(p.byType?.[type] ?? { available: 0, total: 0 }) } : p));
+    res.json(req.query.available === 'true' ? all.filter((p) => p.status !== 'OFFLINE' && p.available > 0) : all);
   });
 
   // Chi tiết bãi. Bãi OFFLINE: trả bản cache cuối cùng, gắn stale=true (chấp nhận cũ để vẫn sẵn sàng).
   app.get('/api/parkings/:id', async (req, res) => {
     const n = reg.get(req.params.id);
     if (!n) return res.status(404).json({ error: 'PARKING_NOT_FOUND' });
-    if (n.status === 'ONLINE') {
+    if (n.status !== 'OFFLINE') {
       try { return res.json({ ...info(n), stale: false, slots: await reg.json(n, '/api/slots') }); }
       catch { /* rơi xuống bản cache */ }
     }
-    res.json({ ...info(n), status: 'OFFLINE', stale: true, slots: slotsFromCache(cache, n.id) });
+    res.json({ ...info(n), status: n.status, stale: true, slots: slotsFromCache(cache, n.id) });
   });
 
   // Nghiệp vụ 2: đặt chỗ. Idempotency-Key bắt buộc; ghép với userId để key của người này không đụng người khác.

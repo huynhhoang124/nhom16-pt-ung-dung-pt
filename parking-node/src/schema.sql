@@ -98,3 +98,17 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
   overnight_fee   INT NOT NULL,
   max_day_fee     INT
 );
+
+-- PD-10: Bảng fencing chống lệnh từ Leader cũ (split-brain)
+CREATE TABLE IF NOT EXISTS fencing (
+  job       TEXT PRIMARY KEY,
+  max_token BIGINT NOT NULL
+);
+
+-- PD-14b: Bảng db_epoch chống zombie primary ghi đè sau failover
+CREATE TABLE IF NOT EXISTS db_epoch (
+  epoch BIGINT NOT NULL
+);
+INSERT INTO db_epoch (epoch) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM db_epoch);
+
+

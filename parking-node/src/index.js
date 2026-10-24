@@ -1,8 +1,9 @@
 const { Pool } = require('pg');
-const { init, readThrough } = require('./db');
+const { init, readThrough, makeDynamicPool } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
 const { expireDue, activateDue, warnExpiring } = require('./slots');
+const { makeRegistryClient } = require('./registry');
 const { log } = require('./log');
 const { startCommandConsumer, makeCommandProcessor, cleanupInbox } = require('./commands');
 const { makeReplyPublisher, makeReplyRelay } = require('./command-replies');
@@ -15,7 +16,12 @@ const port = Number(env('PORT', 8001));
 const pricing = process.env.PRICING ? JSON.parse(process.env.PRICING) : undefined;
 
 async function main() {
-  const pool = new Pool({ connectionString: env('DATABASE_URL') });
+  const pool = await makeDynamicPool({
+    etcdEndpoints: process.env.ETCD_ENDPOINTS,
+    parkingId,
+    defaultDatabaseUrl: env('DATABASE_URL'),
+    log,
+  });
   // DB khởi động lại / mất mạng: kết nối nhàn rỗi trong pool phát 'error'. Không bắt thì cả tiến trình sập (gặp khi tập
   // failover: stop db-a làm node A chết luôn, đọc bản sao cũng không được). Bắt rồi thì pool tự mở kết nối mới khi DB về.
   pool.on('error', (e) => log.error('mất kết nối DB chính', { error: e.message }));
@@ -39,16 +45,36 @@ async function main() {
     },
   });
 
+  // PD-09: Đăng ký dịch vụ lên etcd bằng lease
+  const regClient = makeRegistryClient({
+    etcdEndpoints: process.env.ETCD_ENDPOINTS,
+    parkingId,
+    port,
+    log,
+  });
+
   const app = makeApp({
     readPool, metricsExtra: [lagMetric],
     pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
     reservationMinutes: Number(env('RESERVATION_MINUTES', 15)),
+    regClient,
     ...(process.env.QR_SECRET && { qrSecret: process.env.QR_SECRET }),
     // PT-05: khoá công khai của Aggregator (PEM, base64) -> nhân viên gọi thẳng node khi trung tâm sập
     jwtPublicKey: process.env.JWT_PUBLIC_KEY_B64 ? Buffer.from(process.env.JWT_PUBLIC_KEY_B64, 'base64').toString() : undefined,
     corsOrigins: env('CORS_ORIGIN', 'http://localhost:3000').split(','),
   });
-  const server = app.listen(port, () => log.info(`Parking ${parkingId} chạy ở cổng ${port}`));
+  const server = app.listen(port, async () => {
+    log.info(`Parking ${parkingId} chạy ở cổng ${port}`);
+    // Đăng ký etcd SAU KHI cổng HTTP đã mở thành công để Aggregator ping 200 OK ngay (Issue 4)
+    if (regClient.active) {
+      try {
+        await regClient.register();
+      } catch (e) {
+        log.warn('Đăng ký etcd ban đầu thất bại, đang tự động thử lại trong nền...', { error: e.message });
+        regClient.scheduleRetry(1000);
+      }
+    }
+  });
 
   const url = env('RABBITMQ_URL', 'amqp://localhost/%2F');
   const publishEvents = amqpPublisher(url);
@@ -88,6 +114,7 @@ async function main() {
       for (const job of jobs) clearInterval(job.timer);
       await consumer.stop();
       await Promise.allSettled(jobs.map((job) => job.running));
+      await regClient.stop();
       await Promise.all([replyPublisher.close(), publishEvents.close(), httpClosed]);
       await Promise.all([pool.end(), replica?.end()]);
       clearTimeout(deadline);

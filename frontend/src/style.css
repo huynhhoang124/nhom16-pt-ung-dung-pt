@@ -177,7 +177,7 @@ main.dense { max-width: 1360px; font-size: var(--fs-sm); padding-top: var(--spac
 .badge, .st { display: inline-flex; align-items: center; gap: 5px; font-size: var(--fs-xs); font-weight: 700; padding: 3px 8px; border: 1px solid currentColor; border-radius: 0; white-space: nowrap; line-height: 1.3; }
 .st { font-size: var(--fs-sm); font-weight: 600; padding: 3px 10px; }  /* MỚI: đặt chỗ, lệnh, bước */
 .badge.ONLINE, .st.ok { background: var(--ok-soft); color: var(--ok); }
-.badge.PARTIAL, .st.warn { background: var(--warn-soft); color: var(--warn); }
+.badge.PARTIAL, .badge.DEGRADED, .st.warn { background: var(--warn-soft); color: var(--warn); }
 .badge.OFFLINE, .st.off { background: var(--off-soft); color: var(--off); }
 .st.bad { background: var(--bad-soft); color: var(--bad); }
 .st.info { background: var(--primary-soft); color: var(--primary); }
