@@ -21,6 +21,19 @@ test('PD-12 sinh đúng ba bãi Nam với DB, node, zone và lease etcd riêng',
   }
   assert.equal(services.aggregator.environment.ZONE, 'bac');
   assert.equal(services['parking-a'].environment.ZONE, 'bac');
+  assert.deepEqual(
+    ['aggregator-bac-1', 'aggregator-bac-2', 'aggregator-nam-1', 'aggregator-nam-2']
+      .map((name) => services[name].environment.ZONE),
+    ['bac', 'bac', 'nam', 'nam'],
+  );
+  assert.equal(services['aggregator-bac-1'].environment.REGION_AGGREGATOR_URL, 'http://aggregator-nam:8000');
+  assert.equal(services['aggregator-nam-1'].environment.REGION_AGGREGATOR_URL, 'http://aggregator-bac:8000');
+  assert.deepEqual(services['aggregator-bac-1'].networks.default.aliases, ['aggregator', 'aggregator-bac']);
+  assert.deepEqual(services['frontend-regional'].depends_on, [
+    'aggregator-bac-1', 'aggregator-bac-2', 'aggregator-nam-1', 'aggregator-nam-2',
+  ]);
+  assert.deepEqual(services.aggregator.profiles, ['legacy']);
+  assert.deepEqual(services.frontend.profiles, ['legacy']);
   for (const id of ['a', 'b', 'c', 'agg', 'd', 'e', 'f']) {
     assert.equal(services[`db-${id}`].mem_limit, '192m');
     assert.deepEqual(services[`db-${id}`].command, ['postgres', '-c', 'shared_buffers=32MB']);

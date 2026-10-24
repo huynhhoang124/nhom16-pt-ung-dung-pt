@@ -150,7 +150,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
   };
 
   // Scatter–gather: gọi song song, bãi lỗi/chậm thì bỏ qua và gắn nhãn, vẫn trả phần còn lại.
-  const gather = (fn) => Promise.all([...nodes.values()].map(async (n) => {
+  const gather = (fn, candidates = nodes.values()) => Promise.all([...candidates].map(async (n) => {
     if (n.status === 'OFFLINE') return { parkingId: n.id, status: 'OFFLINE' };
     try { return { parkingId: n.id, status: n.status, ...(await fn(n)) }; }
     catch { return { parkingId: n.id, status: 'OFFLINE' }; }

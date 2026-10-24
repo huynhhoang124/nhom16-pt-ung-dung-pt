@@ -19,6 +19,12 @@ const NODE = Object.fromEntries(['A', 'B', 'C', 'D', 'E', 'F'].map((id, index) =
 const COMPOSE = SCALE
   ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord'
   : 'docker compose';
+const PRIMARY_AGGREGATOR = SCALE ? 'aggregator-bac-1' : 'aggregator';
+const ALL_AGGREGATORS = SCALE
+  ? 'aggregator-bac-1 aggregator-bac-2 aggregator-nam-1 aggregator-nam-2'
+  : 'aggregator aggregator-2';
+const PRIMARY_QUEUE = SCALE ? 'aggregator.slot-updates.bac-1' : 'aggregator.slot-updates.1';
+const primaryQueuePattern = new RegExp(`${PRIMARY_QUEUE.replaceAll('.', '\\.')}\\s+(\\d+)`);
 const KEY = process.env.INTERNAL_KEY ?? 'dev';
 const T = { timeout: 120_000 };
 
@@ -53,6 +59,12 @@ async function until(what, fn, ms = 60_000) {
   }
 }
 const statusOf = async (id) => (await agg('/api/parkings')).body?.find((p) => p.parkingId === id)?.status;
+async function regionalScatterCount() {
+  const metrics = await fetch(`${AGG}/metrics`).then((response) => response.text());
+  const line = metrics.split('\n').find((row) => row.startsWith('regional_scatter_requests_total{')
+    && row.includes('source_zone="bac"') && row.includes('target_zone="nam"'));
+  return Number(line?.match(/\s(\d+(?:\.\d+)?)$/)?.[1] ?? 0);
+}
 // biển số ngẫu nhiên: lần chạy trước hỏng giữa chừng để xe còn trong bãi thì lần sau không bị PLATE_ALREADY_INSIDE
 const plate = () => `30A-${String(Math.random()).slice(2, 5)}.${String(Math.random()).slice(2, 4)}`;
 const freeSlot = async (id) => (await node(id, '/api/slots/available')).body[0].slotCode;
@@ -103,6 +115,20 @@ test('PD-12 etcd gắn nhãn vùng Bắc/Nam và registry trả đủ sáu bãi'
     ['A', 'bac'], ['B', 'bac'], ['C', 'bac'],
     ['D', 'nam'], ['E', 'nam'], ['F', 'nam'],
   ]);
+});
+
+test('PD-19 availability/search scatter đúng một request liên vùng; scope=zone không scatter', { ...T, skip: !SCALE }, async () => {
+  let before = await regionalScatterCount();
+  assert.equal((await agg('/api/parkings/availability')).body.length, 6);
+  assert.equal(await regionalScatterCount(), before + 1);
+
+  before = await regionalScatterCount();
+  assert.equal((await agg('/api/parkings/search?type=CAR')).body.length, 6);
+  assert.equal(await regionalScatterCount(), before + 1);
+
+  before = await regionalScatterCount();
+  assert.equal((await agg('/api/parkings/availability?scope=zone')).body.results.length, 3);
+  assert.equal(await regionalScatterCount(), before);
 });
 
 test('TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai', T, async () => {
@@ -276,16 +302,16 @@ test('DB bãi C khởi động lại: node C không sập, DB về thì tự k�
 });
 
 test('TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật lại thì được xử lý hết', T, async () => {
-  compose('stop aggregator');
+  compose(`stop ${PRIMARY_AGGREGATOR}`);
   try {
     const slot = await freeSlot('A');
     assert.equal((await node('A', `/api/slots/${slot}/enter`, { method: 'POST', body: {} })).status, 200);
     exitLater('A', slot);   // bãi vẫn chạy
-    await until('tin vào queue', () => Number(compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(/aggregator\.slot-updates\.1\s+(\d+)/)?.[1]) > 0, 20_000);
+    await until('tin vào queue', () => Number(compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(primaryQueuePattern)?.[1]) > 0, 20_000);
   } finally {
-    compose('start aggregator');
+    compose(`start ${PRIMARY_AGGREGATOR}`);
   }
-  await until('queue rỗng', () => compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(/aggregator\.slot-updates\.1\s+(\d+)/)?.[1] === '0', 60_000);
+  await until('queue rỗng', () => compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(primaryQueuePattern)?.[1] === '0', 60_000);
   await until(`${PARKING_IDS.length} bãi ONLINE`, async () => (await Promise.all(PARKING_IDS.map(statusOf))).every((s) => s === 'ONLINE'));
 });
 
@@ -334,7 +360,7 @@ test('TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200',
   async () => {
     try {
       // Dừng Aggregator 1
-      compose('stop aggregator');
+      compose(`stop ${PRIMARY_AGGREGATOR}`);
 
       // Chờ Nginx chuyển request sang Aggregator 2
       await until('Nginx phục vụ qua Aggregator 2',
@@ -359,7 +385,7 @@ test('TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200',
 
     } finally {
       // Luôn bật lại Aggregator 1
-      compose('start aggregator');
+      compose(`start ${PRIMARY_AGGREGATOR}`);
 
       await until('Aggregator 1 phục hồi',
         async () => (await http(AGG + '/api/parkings')).status === 200,
@@ -463,7 +489,7 @@ test('TC46: Staff thao tác khi Aggregator sập', { ...T, skip: !process.env.JW
   );
 
   try {
-    compose('stop aggregator aggregator-2');
+    compose(`stop ${ALL_AGGREGATORS}`);
     // Lấy slot SAU khi dừng: kết nối keep-alive tới node A để rỗi trong lúc dừng container đã bị server đóng,
     // POST không tự thử lại nên dùng lại kết nối đó sẽ ra status 0. GET mở lại kết nối mới ngay trước enter/exit.
     slot = await freeSlot('A');
@@ -482,7 +508,7 @@ test('TC46: Staff thao tác khi Aggregator sập', { ...T, skip: !process.env.JW
 
     console.log('TC46 - Enter:', enter.status, 'Exit:', exit.status, 'Enter lại:', again.status);
   } finally {
-    compose('start aggregator aggregator-2');
+    compose(`start ${ALL_AGGREGATORS}`);
   }
 
   await until('Aggregator thấy slot OCCUPIED giống node A', async () => {

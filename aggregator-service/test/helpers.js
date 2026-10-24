@@ -58,17 +58,33 @@ async function startFlaky(failures) {
   return { server, url, state };
 }
 
-async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400 } = {}) {
+async function startAggregator(nodes, {
+  timeoutMs = 400,
+  reserveTimeoutMs = 400,
+  zone,
+  regionAggregatorUrl,
+  peerTimeoutMs,
+} = {}) {
   const pool = await pglitePool();
   await pool.query(fs.readFileSync(path.join(__dirname, '../src/schema.sql'), 'utf8'));
   await seedUsers(pool, 'pw');
   const reg = makeRegistry({ internalKey: KEY, timeoutMs, failThreshold: 3 });
-  for (const [id, url] of Object.entries(nodes)) {
-    await pool.query('INSERT INTO parking_nodes(parking_id, name, api_url) VALUES ($1,$2,$3)', [id, `Bãi ${id}`, url]);
-    reg.add({ parking_id: id, name: `Bãi ${id}`, api_url: url });
+  for (const [id, value] of Object.entries(nodes)) {
+    const node = typeof value === 'string' ? { url: value } : value;
+    if (node.zone === undefined) {
+      await pool.query('INSERT INTO parking_nodes(parking_id, name, api_url) VALUES ($1,$2,$3)', [id, `Bãi ${id}`, node.url]);
+    } else {
+      await pool.query('INSERT INTO parking_nodes(parking_id, name, api_url, zone) VALUES ($1,$2,$3,$4)', [id, `Bãi ${id}`, node.url, node.zone]);
+    }
+    reg.add({ parking_id: id, name: `Bãi ${id}`, api_url: node.url, ...(node.zone !== undefined && { zone: node.zone }) });
   }
   const cache = new Map();
-  const app = makeApp({ pool, reg, cache, auth: makeAuth('secret'), reserveTimeoutMs });
+  const app = makeApp({
+    pool, reg, cache, auth: makeAuth('secret'), reserveTimeoutMs,
+    ...(zone ? { zone } : {}),
+    ...(regionAggregatorUrl ? { regionAggregatorUrl } : {}),
+    ...(peerTimeoutMs ? { peerTimeoutMs } : {}),
+  });
   const { server, url } = await listen(app);
 
   const call = async (p, { method = 'GET', token, body, key } = {}) => {
@@ -84,7 +100,7 @@ async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400 
     return { status: r.status, body: await r.json() };
   };
   const login = async (username) => (await call('/api/auth/login', { method: 'POST', body: { username, password: 'pw' } })).body.token;
-  return { pool, reg, cache, server, call, login, app };
+  return { pool, reg, cache, server, call, login, app, url };
 }
 
 module.exports = { startNode, startStub, startFlaky, startAggregator, KEY };

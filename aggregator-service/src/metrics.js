@@ -8,6 +8,12 @@ function mountMetrics(app, { reg, instance = process.env.INSTANCE_ID ?? '1' }) {
     name: 'http_request_duration_seconds', help: 'Thời gian xử lý request',
     labelNames: ['method', 'route', 'code'], buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5], registers: [registry],
   });
+  const regionalScatter = new client.Counter({
+    name: 'regional_scatter_requests_total',
+    help: 'Số request scatter liên vùng do Aggregator gửi',
+    labelNames: ['source_zone', 'target_zone'],
+    registers: [registry],
+  });
   // Trạng thái failure detector / circuit breaker theo từng bãi.
   new client.Gauge({
     name: 'parking_node_up', help: '1 = bãi ONLINE, 0 = OFFLINE (mạch mở)', labelNames: ['node'], registers: [registry],
@@ -27,6 +33,12 @@ function mountMetrics(app, { reg, instance = process.env.INSTANCE_ID ?? '1' }) {
     res.set('content-type', registry.contentType);
     res.end(await registry.metrics());
   });
+
+  return {
+    countRegionalScatter(sourceZone, targetZone) {
+      regionalScatter.inc({ source_zone: sourceZone, target_zone: targetZone });
+    },
+  };
 }
 
 module.exports = { mountMetrics };

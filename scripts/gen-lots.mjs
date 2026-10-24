@@ -10,6 +10,36 @@ const LOTS = [
   { id: 'F', port: 8006, slots: 'CAR:1:10,MOTO:1:10' },
 ];
 
+function regionalAggregatorService({ zone, peerZone, instance, hostPort }) {
+  const networkAliases = ['aggregator', `aggregator-${zone}`];
+  return {
+    profiles: ['scale'],
+    build: './aggregator-service',
+    image: 'nhom16/aggregator',
+    environment: {
+      INSTANCE_ID: `${zone}-${instance}`,
+      PORT: 8000,
+      DATABASE_URL: 'postgres://postgres:dev@db-agg/parking',
+      RABBITMQ_URL: '${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}',
+      INTERNAL_KEY: '${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}',
+      JWT_SECRET: '${JWT_SECRET:?Thiếu JWT_SECRET (chạy cp .env.example .env)}',
+      DEMO_PASSWORD: '${DEMO_PASSWORD:-123456}',
+      JWT_PRIVATE_KEY_B64: '${JWT_PRIVATE_KEY_B64:-}',
+      JWT_PUBLIC_KEY_B64: '${JWT_PUBLIC_KEY_B64:-}',
+      ETCD_ENDPOINTS: ENDPOINTS,
+      ZONE: zone,
+      REGION_AGGREGATOR_URL: `http://aggregator-${peerZone}:8000`,
+    },
+    ...(hostPort ? { ports: [`${hostPort}:8000`] } : {}),
+    networks: { default: { aliases: networkAliases } },
+    depends_on: {
+      'db-agg': { condition: 'service_healthy' },
+      rabbitmq: { condition: 'service_healthy' },
+    },
+    mem_limit: '384m',
+  };
+}
+
 function postgresService(id) {
   return {
     profiles: ['scale'],
@@ -61,8 +91,9 @@ export function makeScaleCompose() {
     'db-b': { command: ['postgres', '-c', 'shared_buffers=32MB'], mem_limit: '192m', shm_size: '64m' },
     'db-c': { command: ['postgres', '-c', 'shared_buffers=32MB'], mem_limit: '192m', shm_size: '64m' },
     'db-agg': { command: ['postgres', '-c', 'shared_buffers=32MB'], mem_limit: '192m', shm_size: '64m' },
-    aggregator: { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
-    'aggregator-2': { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
+    aggregator: { profiles: ['legacy'], environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
+    'aggregator-2': { profiles: ['legacy'], environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
+    frontend: { profiles: ['legacy'] },
     'parking-a': { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
     'parking-b': { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
     'parking-c': { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
@@ -74,6 +105,24 @@ export function makeScaleCompose() {
     services[`parking-${id}`] = parkingService(lot);
     volumes[`db-${id}-data`] = {};
   }
+
+  for (const service of [
+    regionalAggregatorService({ zone: 'bac', peerZone: 'nam', instance: 1, hostPort: 8000 }),
+    regionalAggregatorService({ zone: 'bac', peerZone: 'nam', instance: 2, hostPort: 8010 }),
+    regionalAggregatorService({ zone: 'nam', peerZone: 'bac', instance: 1 }),
+    regionalAggregatorService({ zone: 'nam', peerZone: 'bac', instance: 2 }),
+  ]) {
+    const zone = service.environment.ZONE;
+    const instance = service.environment.INSTANCE_ID;
+    services[`aggregator-${zone}-${instance.slice(-1)}`] = service;
+  }
+
+  services['frontend-regional'] = {
+    profiles: ['scale'],
+    build: './frontend',
+    ports: ['3000:80'],
+    depends_on: ['aggregator-bac-1', 'aggregator-bac-2', 'aggregator-nam-1', 'aggregator-nam-2'],
+  };
 
   services.toxiproxy = {
     profiles: ['scale'],

@@ -1,20 +1,32 @@
 const express = require('express');
 const { slotsFromCache } = require('./events');
 const { mountSessions } = require('./sessions-routes');
-const { log, withRequestId } = require('./log');
+const { log, withRequestId, requestId } = require('./log');
 const { makeSagas } = require('./saga');
 const { mountMetrics } = require('./metrics');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
+function makeApp({
+  pool,
+  reg,
+  cache,
+  auth,
+  reserveTimeoutMs = 3000,
+  zone = process.env.ZONE,
+  regionAggregatorUrl = process.env.REGION_AGGREGATOR_URL,
+  peerTimeoutMs = 2000,
+}) {
+  if (regionAggregatorUrl && !['bac', 'nam'].includes(zone)) {
+    throw new Error('ZONE must be bac or nam when REGION_AGGREGATOR_URL is set');
+  }
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
   // PT-01: cho biết request rơi vào bản Aggregator nào (demo cân bằng tải / tắt một bản)
   const instance = `aggregator-${process.env.INSTANCE_ID ?? '1'}`;
   app.use((_req, res, next) => { res.set('x-instance', instance); next(); });
-  mountMetrics(app, { reg });   // GET /metrics; nginx không chuyển /metrics ra ngoài
+  const metrics = mountMetrics(app, { reg });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
 
@@ -66,16 +78,66 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000 }) {
 
   app.get('/api/parkings', (_req, res) => res.json(reg.all().map(info)));
 
-  // Nghiệp vụ 1: tra cứu toàn hệ thống (scatter–gather, kết quả một phần khi có bãi lỗi)
-  const availability = () => reg.gather((n) => reg.json(n, '/api/availability'));
-  app.get('/api/parkings/availability', async (_req, res) => res.json(await availability()));
+  // PD-19: gom trực tiếp bãi cùng vùng, sau đó chỉ gọi một lần tới Aggregator vùng kia.
+  const availability = async () => {
+    const localNodes = reg.all().filter((n) => !zone || n.zone === zone);
+    const results = await reg.gather((n) => reg.json(n, '/api/availability'), localNodes);
+    return results.sort((a, b) => a.parkingId.localeCompare(b.parkingId));
+  };
+  const unavailable = (results) => results
+    .filter((p) => p.status !== 'ONLINE')
+    .map((p) => p.parkingId);
+  const remoteUnavailable = () => reg.all()
+    .filter((n) => zone && n.zone && n.zone !== zone)
+    .map((n) => ({ parkingId: n.id, status: 'OFFLINE' }));
+
+  async function nationwideAvailability({ zoneOnly = false } = {}) {
+    const localResults = await availability();
+    if (zoneOnly || !regionAggregatorUrl) {
+      return { results: localResults, unavailable: unavailable(localResults) };
+    }
+
+    const targetZone = zone === 'bac' ? 'nam' : 'bac';
+    metrics.countRegionalScatter(zone ?? 'unknown', targetZone);
+    log.info('regional scatter', { sourceZone: zone, targetZone, requestId: requestId() });
+    try {
+      const peerUrl = new URL('/api/parkings/availability?scope=zone', regionAggregatorUrl);
+      const response = await fetch(peerUrl, {
+        headers: { ...(requestId() && { 'x-request-id': requestId() }) },
+        signal: AbortSignal.timeout(peerTimeoutMs),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const peer = await response.json();
+      if (!Array.isArray(peer.results) || !Array.isArray(peer.unavailable)
+        || !peer.unavailable.every((id) => typeof id === 'string')) {
+        throw new Error('invalid regional response');
+      }
+      const results = [...localResults, ...peer.results]
+        .sort((a, b) => a.parkingId.localeCompare(b.parkingId));
+      return { results, unavailable: [...new Set([...unavailable(results), ...peer.unavailable])].sort() };
+    } catch (error) {
+      log.error('regional scatter failed; returning partial availability', {
+        sourceZone: zone, targetZone, error: error.message, requestId: requestId(),
+      });
+      const results = [...localResults, ...remoteUnavailable()]
+        .sort((a, b) => a.parkingId.localeCompare(b.parkingId));
+      return { results, unavailable: unavailable(results) };
+    }
+  }
+
+  app.get('/api/parkings/availability', async (req, res) => {
+    const result = await nationwideAvailability({ zoneOnly: req.query.scope === 'zone' });
+    res.json(req.query.scope === 'zone' ? result : result.results);
+  });
   // ?type=CAR|MOTO: số chỗ tính theo loại xe đó; ?available=true: chỉ bãi đang chạy còn chỗ.
   app.get('/api/parkings/search', async (req, res) => {
     const { type } = req.query;
     if (type && !['CAR', 'MOTO'].includes(type)) return res.status(400).json({ error: 'type must be CAR or MOTO' });
-    let all = await availability();
+    const result = await nationwideAvailability({ zoneOnly: req.query.scope === 'zone' });
+    let all = result.results;
     if (type) all = all.map((p) => (p.status === 'ONLINE' ? { ...p, ...(p.byType?.[type] ?? { available: 0, total: 0 }) } : p));
-    res.json(req.query.available === 'true' ? all.filter((p) => p.status === 'ONLINE' && p.available > 0) : all);
+    if (req.query.available === 'true') all = all.filter((p) => p.status === 'ONLINE' && p.available > 0);
+    res.json(req.query.scope === 'zone' ? { results: all, unavailable: result.unavailable } : all);
   });
 
   // Chi tiết bãi. Bãi OFFLINE: trả bản cache cuối cùng, gắn stale=true (chấp nhận cũ để vẫn sẵn sàng).

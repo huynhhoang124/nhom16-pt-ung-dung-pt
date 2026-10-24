@@ -37,16 +37,27 @@
       "shm_size": "64m"
     },
     "aggregator": {
+      "profiles": [
+        "legacy"
+      ],
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
         "ZONE": "bac"
       }
     },
     "aggregator-2": {
+      "profiles": [
+        "legacy"
+      ],
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
         "ZONE": "bac"
       }
+    },
+    "frontend": {
+      "profiles": [
+        "legacy"
+      ]
     },
     "parking-a": {
       "environment": {
@@ -245,6 +256,179 @@
         }
       },
       "mem_limit": "256m"
+    },
+    "aggregator-bac-1": {
+      "profiles": [
+        "scale"
+      ],
+      "build": "./aggregator-service",
+      "image": "nhom16/aggregator",
+      "environment": {
+        "INSTANCE_ID": "bac-1",
+        "PORT": 8000,
+        "DATABASE_URL": "postgres://postgres:dev@db-agg/parking",
+        "RABBITMQ_URL": "${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}",
+        "INTERNAL_KEY": "${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}",
+        "JWT_SECRET": "${JWT_SECRET:?Thiếu JWT_SECRET (chạy cp .env.example .env)}",
+        "DEMO_PASSWORD": "${DEMO_PASSWORD:-123456}",
+        "JWT_PRIVATE_KEY_B64": "${JWT_PRIVATE_KEY_B64:-}",
+        "JWT_PUBLIC_KEY_B64": "${JWT_PUBLIC_KEY_B64:-}",
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "bac",
+        "REGION_AGGREGATOR_URL": "http://aggregator-nam:8000"
+      },
+      "ports": [
+        "8000:8000"
+      ],
+      "networks": {
+        "default": {
+          "aliases": [
+            "aggregator",
+            "aggregator-bac"
+          ]
+        }
+      },
+      "depends_on": {
+        "db-agg": {
+          "condition": "service_healthy"
+        },
+        "rabbitmq": {
+          "condition": "service_healthy"
+        }
+      },
+      "mem_limit": "384m"
+    },
+    "aggregator-bac-2": {
+      "profiles": [
+        "scale"
+      ],
+      "build": "./aggregator-service",
+      "image": "nhom16/aggregator",
+      "environment": {
+        "INSTANCE_ID": "bac-2",
+        "PORT": 8000,
+        "DATABASE_URL": "postgres://postgres:dev@db-agg/parking",
+        "RABBITMQ_URL": "${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}",
+        "INTERNAL_KEY": "${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}",
+        "JWT_SECRET": "${JWT_SECRET:?Thiếu JWT_SECRET (chạy cp .env.example .env)}",
+        "DEMO_PASSWORD": "${DEMO_PASSWORD:-123456}",
+        "JWT_PRIVATE_KEY_B64": "${JWT_PRIVATE_KEY_B64:-}",
+        "JWT_PUBLIC_KEY_B64": "${JWT_PUBLIC_KEY_B64:-}",
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "bac",
+        "REGION_AGGREGATOR_URL": "http://aggregator-nam:8000"
+      },
+      "ports": [
+        "8010:8000"
+      ],
+      "networks": {
+        "default": {
+          "aliases": [
+            "aggregator",
+            "aggregator-bac"
+          ]
+        }
+      },
+      "depends_on": {
+        "db-agg": {
+          "condition": "service_healthy"
+        },
+        "rabbitmq": {
+          "condition": "service_healthy"
+        }
+      },
+      "mem_limit": "384m"
+    },
+    "aggregator-nam-1": {
+      "profiles": [
+        "scale"
+      ],
+      "build": "./aggregator-service",
+      "image": "nhom16/aggregator",
+      "environment": {
+        "INSTANCE_ID": "nam-1",
+        "PORT": 8000,
+        "DATABASE_URL": "postgres://postgres:dev@db-agg/parking",
+        "RABBITMQ_URL": "${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}",
+        "INTERNAL_KEY": "${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}",
+        "JWT_SECRET": "${JWT_SECRET:?Thiếu JWT_SECRET (chạy cp .env.example .env)}",
+        "DEMO_PASSWORD": "${DEMO_PASSWORD:-123456}",
+        "JWT_PRIVATE_KEY_B64": "${JWT_PRIVATE_KEY_B64:-}",
+        "JWT_PUBLIC_KEY_B64": "${JWT_PUBLIC_KEY_B64:-}",
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "nam",
+        "REGION_AGGREGATOR_URL": "http://aggregator-bac:8000"
+      },
+      "networks": {
+        "default": {
+          "aliases": [
+            "aggregator",
+            "aggregator-nam"
+          ]
+        }
+      },
+      "depends_on": {
+        "db-agg": {
+          "condition": "service_healthy"
+        },
+        "rabbitmq": {
+          "condition": "service_healthy"
+        }
+      },
+      "mem_limit": "384m"
+    },
+    "aggregator-nam-2": {
+      "profiles": [
+        "scale"
+      ],
+      "build": "./aggregator-service",
+      "image": "nhom16/aggregator",
+      "environment": {
+        "INSTANCE_ID": "nam-2",
+        "PORT": 8000,
+        "DATABASE_URL": "postgres://postgres:dev@db-agg/parking",
+        "RABBITMQ_URL": "${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}",
+        "INTERNAL_KEY": "${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}",
+        "JWT_SECRET": "${JWT_SECRET:?Thiếu JWT_SECRET (chạy cp .env.example .env)}",
+        "DEMO_PASSWORD": "${DEMO_PASSWORD:-123456}",
+        "JWT_PRIVATE_KEY_B64": "${JWT_PRIVATE_KEY_B64:-}",
+        "JWT_PUBLIC_KEY_B64": "${JWT_PUBLIC_KEY_B64:-}",
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "nam",
+        "REGION_AGGREGATOR_URL": "http://aggregator-bac:8000"
+      },
+      "networks": {
+        "default": {
+          "aliases": [
+            "aggregator",
+            "aggregator-nam"
+          ]
+        }
+      },
+      "depends_on": {
+        "db-agg": {
+          "condition": "service_healthy"
+        },
+        "rabbitmq": {
+          "condition": "service_healthy"
+        }
+      },
+      "mem_limit": "384m"
+    },
+    "frontend-regional": {
+      "profiles": [
+        "scale"
+      ],
+      "build": "./frontend",
+      "ports": [
+        "3000:80"
+      ],
+      "depends_on": [
+        "aggregator-bac-1",
+        "aggregator-bac-2",
+        "aggregator-nam-1",
+        "aggregator-nam-2"
+      ]
     },
     "toxiproxy": {
       "profiles": [
