@@ -3,6 +3,7 @@ const { init, readThrough } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
 const { expireDue, activateDue, warnExpiring } = require('./slots');
+const { makeRegistryClient } = require('./registry');
 const { log } = require('./log');
 const { startCommandConsumer, makeCommandProcessor, cleanupInbox } = require('./commands');
 const { makeReplyPublisher, makeReplyRelay } = require('./command-replies');
@@ -39,16 +40,36 @@ async function main() {
     },
   });
 
+  // PD-09: Đăng ký dịch vụ lên etcd bằng lease
+  const regClient = makeRegistryClient({
+    etcdEndpoints: process.env.ETCD_ENDPOINTS,
+    parkingId,
+    port,
+    log,
+  });
+
   const app = makeApp({
     readPool, metricsExtra: [lagMetric],
     pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
     reservationMinutes: Number(env('RESERVATION_MINUTES', 15)),
+    regClient,
     ...(process.env.QR_SECRET && { qrSecret: process.env.QR_SECRET }),
     // PT-05: khoá công khai của Aggregator (PEM, base64) -> nhân viên gọi thẳng node khi trung tâm sập
     jwtPublicKey: process.env.JWT_PUBLIC_KEY_B64 ? Buffer.from(process.env.JWT_PUBLIC_KEY_B64, 'base64').toString() : undefined,
     corsOrigins: env('CORS_ORIGIN', 'http://localhost:3000').split(','),
   });
-  const server = app.listen(port, () => log.info(`Parking ${parkingId} chạy ở cổng ${port}`));
+  const server = app.listen(port, async () => {
+    log.info(`Parking ${parkingId} chạy ở cổng ${port}`);
+    // PD-09: đăng ký etcd SAU KHI cổng HTTP đã mở để Aggregator ping 200 OK ngay
+    if (regClient.active) {
+      try {
+        await regClient.register();
+      } catch (e) {
+        log.warn('Đăng ký etcd ban đầu thất bại, đang tự động thử lại trong nền...', { error: e.message });
+        regClient.scheduleRetry(1000);
+      }
+    }
+  });
 
   const url = env('RABBITMQ_URL', 'amqp://localhost/%2F');
   const publishEvents = amqpPublisher(url);
@@ -84,6 +105,7 @@ async function main() {
     shuttingDown = true;
     const deadline = setTimeout(() => process.exit(1), 10000);
     try {
+      await regClient.stop();   // PD-09: revoke lease để Aggregator biết bãi rời đi ngay
       const httpClosed = new Promise((resolve) => server.close(resolve));
       for (const job of jobs) clearInterval(job.timer);
       await consumer.stop();
