@@ -15,11 +15,16 @@ function makeMockEtcd() {
     put(k) {
       return {
         value(v) {
-          return {
+          const obj = {
             op: 'put',
             key: k,
             val: v,
+            then(resolve) {
+              store.set(k, v);
+              if (typeof resolve === 'function') resolve({ ok: true });
+            },
           };
+          return obj;
         },
       };
     },
@@ -119,6 +124,7 @@ test('PD-14b manager: phát hiện 3 lần lỗi primary -> promote replica -> C
     ],
     elector,
     pgClientFactory,
+    waitWindowMs: 10,
     log: { info: () => {}, warn: () => {}, error: () => {} },
   });
 
@@ -343,3 +349,112 @@ test('PD-14b manager: follower không thực hiện kiểm tra failover', async 
   await manager.checkOnce();
   assert.equal(pingCount, 0, 'Follower không được ping kiểm tra');
 });
+
+test('PD-14b manager: cửa sổ an toàn waitWindowMs được tuân thủ trước khi gọi pg_promote()', async () => {
+  const etcd = makeMockEtcd();
+  etcd.store.set('/nhom16/parking/A/db/epoch', '1');
+  etcd.store.set('/nhom16/parking/A/db/primary', 'postgres://primary-a');
+
+  const timeline = [];
+  const pgClientFactory = (url) => ({
+    async connect() {},
+    async query(sql) {
+      if (sql === 'SELECT pg_last_wal_replay_lsn() AS lsn') {
+        timeline.push({ event: 'check_lsn', time: Date.now() });
+        return { rows: [{ lsn: '0/100' }] };
+      }
+      if (sql === 'SELECT pg_promote()') {
+        timeline.push({ event: 'promote', time: Date.now() });
+        return { rows: [] };
+      }
+      if (sql.includes('UPDATE db_epoch')) {
+        timeline.push({ event: 'update_db_epoch', time: Date.now() });
+        return { rowCount: 1 };
+      }
+      return { rows: [] };
+    },
+    async end() {},
+  });
+
+  const elector = { isLeader: () => true };
+  const waitWindowMs = 60;
+  const manager = makeFailoverManager({
+    etcdClient: etcd,
+    parkings: [{ parkingId: 'A', primaryUrl: 'postgres://primary-a', replicaUrl: 'postgres://replica-a' }],
+    elector,
+    pgClientFactory,
+    waitWindowMs,
+    log: { info: () => {}, warn: () => {}, error: () => {} },
+  });
+
+  const start = Date.now();
+  const res = await manager.doFailover(manager.parkingStates[0]);
+  const elapsed = Date.now() - start;
+
+  assert.equal(res.ok, true);
+  assert.ok(elapsed >= waitWindowMs - 5, `Phải chờ tối thiểu ${waitWindowMs}ms (thực tế: ${elapsed}ms)`);
+
+  const lsnEv = timeline.find((e) => e.event === 'check_lsn');
+  const promoteEv = timeline.find((e) => e.event === 'promote');
+  assert.ok(lsnEv && promoteEv, 'Cả hai sự kiện phải diễn ra');
+  assert.ok(promoteEv.time - lsnEv.time >= waitWindowMs - 5, 'Khoảng cách giữa check_lsn và promote phải >= waitWindowMs');
+});
+
+test('PD-14b manager: xử lý an toàn khi CAS thành công nhưng pg_promote() thất bại (giữ epoch=N+1, log CRITICAL, không đổi primary)', async () => {
+  const etcd = makeMockEtcd();
+  etcd.store.set('/nhom16/parking/A/db/epoch', '3');
+  etcd.store.set('/nhom16/parking/A/db/primary', 'postgres://primary-a');
+
+  const errorLogs = [];
+  const log = {
+    info: () => {},
+    warn: () => {},
+    error: (msg) => errorLogs.push(msg),
+  };
+
+  const pgClientFactory = (url) => ({
+    async connect() {},
+    async query(sql) {
+      if (sql === 'SELECT pg_last_wal_replay_lsn() AS lsn') {
+        return { rows: [{ lsn: '0/200' }] };
+      }
+      if (sql === 'SELECT pg_promote()') {
+        throw new Error('promote rejected: replica split-brain');
+      }
+      return { rows: [] };
+    },
+    async end() {},
+  });
+
+  const elector = { isLeader: () => true };
+  const manager = makeFailoverManager({
+    etcdClient: etcd,
+    parkings: [{ parkingId: 'A', primaryUrl: 'postgres://primary-a', replicaUrl: 'postgres://replica-a' }],
+    elector,
+    pgClientFactory,
+    waitWindowMs: 10,
+    log,
+  });
+
+  const state = manager.parkingStates[0];
+  const res = await manager.doFailover(state);
+
+  // Kết quả thất bại do pg_promote
+  assert.equal(res.ok, false);
+  assert.equal(res.error, 'FAILOVER_PROMOTE_FAILED');
+  assert.equal(res.epoch, 4);
+
+  // Epoch trên etcd vẫn giữ nguyên N + 1 = 4 (tuyệt đối không giảm epoch)
+  assert.equal(etcd.store.get('/nhom16/parking/A/db/epoch'), '4');
+
+  // Primary trên etcd KHÔNG được trỏ sang replica lỗi
+  assert.equal(etcd.store.get('/nhom16/parking/A/db/primary'), 'postgres://primary-a');
+
+  // State bộ nhớ vẫn giữ primary cũ
+  assert.equal(state.primaryUrl, 'postgres://primary-a');
+
+  // Đã ghi log cảnh báo CRITICAL
+  const hasCriticalLog = errorLogs.some((l) => l.includes('CRITICAL: FAILOVER_PROMOTE_FAILED'));
+  assert.ok(hasCriticalLog, 'Phải có log CRITICAL: FAILOVER_PROMOTE_FAILED');
+});
+

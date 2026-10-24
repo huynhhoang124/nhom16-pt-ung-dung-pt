@@ -134,3 +134,58 @@ test('PD-14b fallback: khi không có etcd thì hoạt động như pool tĩnh t
 
   assert.equal(okRes.code, 201);
 });
+
+test('PD-14b safety window: node từ chối ghi khi mất kết nối watch etcd quá cửa sổ X giây (503 ETCD_UNREACHABLE)', async () => {
+  const basePool = await makePool('A', 5);
+
+  const dynPool = await makeDynamicPool({
+    parkingId: 'A',
+    defaultDatabaseUrl: 'postgres://db1',
+    poolFactory: () => basePool,
+    watchWindowMs: 200,
+    etcdClient: {
+      get: () => ({ string: async () => null }),
+      watch: () => ({ key: () => ({ create: async () => ({ on: () => {}, cancel: async () => {} }) }) }),
+    },
+  });
+
+  // 1. Khi vừa có liên lạc etcd (trong vòng 200ms) -> ghi thành công
+  dynPool.setLastEtcdContact(Date.now());
+  const res1 = await reserve(dynPool, 'A', {
+    requestId: 'u1:contact-fresh',
+    userId: 'u1',
+    slotCode: 'A03',
+    licensePlate: '30A-111.11',
+  }, 15);
+  assert.equal(res1.code, 201);
+  assert.equal(res1.body.status, 'ACTIVE');
+
+  // 2. Mô phỏng mất kết nối etcd quá cửa sổ 200ms (ví dụ trôi qua 500ms)
+  dynPool.setLastEtcdContact(Date.now() - 500);
+
+  // Giao dịch ghi bị chặn với mã 503 ETCD_UNREACHABLE
+  const resRejected = await reserve(dynPool, 'A', {
+    requestId: 'u1:contact-lost',
+    userId: 'u1',
+    slotCode: 'A04',
+    licensePlate: '30A-222.22',
+  }, 15);
+
+  assert.equal(resRejected.code, 503);
+  assert.equal(resRejected.body.error, 'ETCD_UNREACHABLE');
+  assert.ok(resRejected.body.message.includes('Mất kết nối etcd'));
+
+  // 3. Khi liên lạc etcd phục hồi -> ghi trở lại bình thường
+  dynPool.setLastEtcdContact(Date.now());
+  const resRecovered = await reserve(dynPool, 'A', {
+    requestId: 'u1:contact-recovered',
+    userId: 'u1',
+    slotCode: 'A04',
+    licensePlate: '30A-222.22',
+  }, 15);
+  assert.equal(resRecovered.code, 201);
+  assert.equal(resRecovered.body.status, 'ACTIVE');
+
+  await dynPool.end();
+});
+

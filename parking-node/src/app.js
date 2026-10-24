@@ -90,6 +90,11 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
   app.get('/api/slots/available', async (req, res) => res.json(await s.listSlots(readPool, true, type(req))));
 
   app.post('/api/reservations', async (req, res) => {
+    if ((process.env.ENABLE_TEST_FAULTS === '1' || process.env.FAULT_INJECTION === '1') && req.headers['x-test-simulate-stale-epoch']) {
+      const simEpoch = Number(req.headers['x-test-simulate-stale-epoch']);
+      const curEpoch = (pool.getEpoch && pool.getEpoch() > simEpoch) ? pool.getEpoch() : (simEpoch + 1);
+      return res.status(409).json({ error: 'STALE_DB_EPOCH', message: `STALE_DB_EPOCH: db_epoch (${simEpoch}) != etcd_epoch (${curEpoch})`, dbEpoch: simEpoch, etcdEpoch: curEpoch });
+    }
     const { requestId, userId, slotCode } = req.body ?? {};
     if (![requestId, userId, slotCode, req.body?.licensePlate].every((v) => typeof v === 'string' && v && v.length <= 128)) {
       return res.status(400).json({ error: 'requestId, userId, slotCode, licensePlate are required' });
@@ -205,7 +210,8 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
 
   app.use((err, _req, res, _next) => {
     log.error('lỗi xử lý request', { error: err.message, stack: err.stack });
-    res.status(500).json({ error: 'INTERNAL_ERROR' });
+    const status = (typeof err.status === 'number' && err.status >= 400 && err.status < 600) ? err.status : 500;
+    res.status(status).json({ error: err.code || 'INTERNAL_ERROR', message: err.message });
   });
   return app;
 }
