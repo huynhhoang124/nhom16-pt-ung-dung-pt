@@ -148,3 +148,57 @@ test('PD-09 discovery: khi không có ETCD_ENDPOINTS thì inactive, không lỗi
   await disc.start();
   await disc.stop();
 });
+
+test('PD-09 discovery: bãi nạp từ DB với hasLease: false giữ nguyên metadata và chuyển DEGRADED <-> ONLINE', () => {
+  const reg = makeRegistry({ internalKey: 'dev' });
+  const dbRow = {
+    parking_id: 'A',
+    name: 'Bãi Đinh Tiên Hoàng - Quận 1',
+    api_url: 'http://parking-a:8001',
+    address: '1 Đinh Tiên Hoàng, Q1, TP.HCM',
+    lat: 10.7797,
+    lng: 106.6990,
+    public_url: 'http://localhost:8001',
+    hasLease: false,
+  };
+  const nodeA = reg.add(dbRow);
+  nodeA.fails = 0; // HTTP OK
+  reg.setStatus(nodeA, reg.computeStatus(nodeA));
+  assert.equal(nodeA.status, 'DEGRADED', 'HTTP sống nhưng chưa có lease -> DEGRADED');
+  assert.equal(nodeA.name, 'Bãi Đinh Tiên Hoàng - Quận 1');
+  assert.equal(nodeA.address, '1 Đinh Tiên Hoàng, Q1, TP.HCM');
+  assert.equal(nodeA.lat, 10.7797);
+  assert.equal(nodeA.lng, 106.6990);
+  assert.equal(nodeA.publicUrl, 'http://localhost:8001');
+
+  const disc = startDiscovery({ etcdEndpoints: 'http://localhost:2379', reg });
+  const keyA = '/nhom16/parking/nodes/A/parking-a';
+
+  // Sự kiện PUT từ etcd (node đăng ký lease, chỉ gửi url, zone, không có metadata DB)
+  disc.applyPut(keyA, JSON.stringify({ url: 'http://parking-a:8001', zone: 'bac' }));
+  nodeA.fails = 0;
+  reg.setStatus(nodeA, reg.computeStatus(nodeA));
+
+  assert.equal(nodeA.hasLease, true);
+  assert.equal(nodeA.status, 'ONLINE', 'Có lease và HTTP sống -> ONLINE');
+  // Metadata DB vẫn phải giữ nguyên đầy đủ!
+  assert.equal(nodeA.name, 'Bãi Đinh Tiên Hoàng - Quận 1');
+  assert.equal(nodeA.address, '1 Đinh Tiên Hoàng, Q1, TP.HCM');
+  assert.equal(nodeA.lat, 10.7797);
+  assert.equal(nodeA.lng, 106.6990);
+  assert.equal(nodeA.publicUrl, 'http://localhost:8001');
+
+  // Sự kiện DELETE từ etcd (mất lease)
+  disc.applyDelete(keyA);
+  assert.equal(nodeA.hasLease, false);
+  assert.equal(nodeA.status, 'DEGRADED', 'Mất lease -> chuyển DEGRADED');
+  // Metadata DB vẫn nguyên vẹn
+  assert.equal(nodeA.name, 'Bãi Đinh Tiên Hoàng - Quận 1');
+  assert.equal(nodeA.address, '1 Đinh Tiên Hoàng, Q1, TP.HCM');
+  assert.equal(nodeA.lat, 10.7797);
+  assert.equal(nodeA.lng, 106.6990);
+  assert.equal(nodeA.publicUrl, 'http://localhost:8001');
+
+  disc.client.close();
+});
+

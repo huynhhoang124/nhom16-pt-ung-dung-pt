@@ -248,8 +248,9 @@ main.dense th, main.dense td { padding: var(--space-2) var(--space-3); }
 .toast { display: flex; align-items: flex-start; gap: var(--space-3); min-width: 280px; max-width: 420px; padding: var(--space-3) var(--space-4) var(--space-3) var(--space-3); background: var(--card); border: 1px solid var(--line-strong); border-radius: 0; box-shadow: var(--shadow-2); font-size: var(--fs-sm); }
 .toast .ti { width: 30px; height: 30px; display: grid; place-items: center; flex: none; background: var(--primary); color: var(--primary-ink); }
 .toast.ok .ti { background: var(--ok); color: var(--bg); }
+.toast.warn .ti { background: var(--lane); color: var(--lane-ink); }
 .toast.error .ti { background: var(--bad); color: var(--bg); }
-.toast.error, .toast.ok { color: var(--text); }
+.toast.error, .toast.ok, .toast.warn { color: var(--text); }
 /* MỚI: hộp thoại (thanh toán, xác nhận) */
 .dialog-backdrop { position: fixed; inset: 0; display: grid; place-items: center; padding: var(--space-4); background: rgb(10 12 14 / .55); z-index: 20; }
 .dialog { position: relative; width: min(440px, 100%); display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-5); background: var(--card); border: 1px solid var(--line-strong); box-shadow: var(--shadow-3); }
