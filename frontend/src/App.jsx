@@ -22,9 +22,12 @@ export default function App() {
   useEffect(() => {
     const on = () => setLive(true);
     const off = () => setLive(false);
-    // Bãi mất / có lại kết nối: báo ngay cho người đang xem (failure detector của Aggregator phát NODE_STATUS)
-    const node = (e) => toast(e.status === 'ONLINE' ? `Bãi ${e.parkingId} đã hoạt động lại.` : `Bãi ${e.parkingId} mất kết nối.`,
-      e.status === 'ONLINE' ? 'ok' : 'error');
+    const node = (e) => toast(
+      e.status === 'ONLINE' ? `Bãi ${e.parkingId} đã hoạt động lại.`
+        : e.status === 'DEGRADED' ? `Bãi ${e.parkingId} kết nối một phần (mất lease etcd).`
+        : `Bãi ${e.parkingId} mất kết nối.`,
+      e.status === 'ONLINE' ? 'ok' : e.status === 'DEGRADED' ? 'warn' : 'error'
+    );
     socket.on('connect', on);
     socket.on('disconnect', off);
     socket.on('NODE_STATUS', node);

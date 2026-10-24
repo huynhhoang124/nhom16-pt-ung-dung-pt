@@ -34,18 +34,54 @@ async function main() {
     catch (e) { if (i >= 30) throw e; log.info('DB chưa sẵn sàng, thử lại', { error: e.message }); await new Promise((r) => setTimeout(r, 2000)); }
   }
 
+  // PD-11: Cấu hình động qua etcd watch
+  const { makeConfig } = require('./config');
+  const config = makeConfig({
+    etcdEndpoints: env('ETCD_ENDPOINTS'),
+    log,
+  });
+  if (config.active) {
+    await config.start().catch((e) => log.error('Lỗi khởi động dynamic config etcd', { error: e.message }));
+  }
+
   const reg = makeRegistry({
     internalKey: env('INTERNAL_KEY', 'dev'),
-    timeoutMs: Number(env('NODE_TIMEOUT_MS', 2000)),
-    failThreshold: Number(env('FAIL_THRESHOLD', 3)),
+    config,
+    timeoutMs: config.get('timeoutMs'),
+    failThreshold: config.get('failThreshold'),
   });
-  for (const row of (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows) reg.add(row);
+  const hasEtcd = Boolean(env('ETCD_ENDPOINTS'));
+  const nodeRows = (await pool.query('SELECT * FROM parking_nodes ORDER BY parking_id')).rows;
+  for (const row of nodeRows) {
+    reg.add(hasEtcd ? { ...row, hasLease: false } : row);
+  }
+
+  // PD-09: Khám phá dịch vụ động qua etcd lease (khi có ETCD_ENDPOINTS, giữ metadata từ DB và quản lý hasLease qua etcd)
+  const { startDiscovery } = require('./discovery');
+  const discovery = startDiscovery({
+    etcdEndpoints: env('ETCD_ENDPOINTS'),
+    reg,
+    log,
+  });
+  if (discovery.active) {
+    discovery.start().catch((e) => log.error('Lỗi khởi động discovery etcd', { error: e.message }));
+  }
+
+  if (discovery.active || config.active) {
+    const cleanup = async () => {
+      if (discovery.active) await discovery.stop();
+      if (config.active) await config.stop();
+      process.exit(0);
+    };
+    process.once('SIGINT', cleanup);
+    process.once('SIGTERM', cleanup);
+  }
 
   const cache = new Map();
   const b64 = (k) => (process.env[k] ? Buffer.from(process.env[k], 'base64').toString() : undefined);
   const auth = makeAuth(env('JWT_SECRET', 'dev-secret'), { privateKey: b64('JWT_PRIVATE_KEY_B64'), publicKey: b64('JWT_PUBLIC_KEY_B64') });
   const commands = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'), { signingKey: env('INTERNAL_KEY', 'dev') });
-  const app = makeApp({ pool, reg, cache, auth, commands });
+  const app = makeApp({ pool, reg, cache, auth, commands, config, reserveTimeoutMs: config.get('reserveTimeoutMs', 3000) });
   const server = http.createServer(app);
   const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS
   // NV-08: socket có token hợp lệ thì vào phòng "user:<id>" để nhận thông báo riêng; không có vẫn nhận realtime chung.
@@ -77,15 +113,22 @@ async function main() {
         .catch((e) => log.error(`Đối soát bãi ${n.id} lỗi`, { error: e.message }));
     }
   };
-  const check = () => pool.query('SELECT * FROM parking_nodes')
-    .then(({ rows }) => reg.sync(rows).forEach((id) => log.info(`Nạp bãi mới ${id} (do bản Aggregator khác thêm)`)))
-    .then(() => reg.check(onChange))
-    .catch((e) => log.error('health check lỗi', { error: e.message }));
+  const check = () => {
+    const p = hasEtcd
+      ? Promise.resolve()
+      : pool.query('SELECT * FROM parking_nodes')
+          .then(({ rows }) => reg.sync(rows).forEach((id) => log.info(`Nạp bãi mới ${id} (do bản Aggregator khác thêm)`)));
+    return p
+      .then(() => reg.check(onChange))
+      .catch((e) => log.error('health check lỗi', { error: e.message }));
+  };
   // Lần health check đầu xong (biết bãi nào sống) thì bù trừ các saga dở dang từ lần chạy trước (PT-07).
   check().then(() => app.locals.sagas.recover())
     .then((k) => k && log.info(`Khôi phục ${k} saga dở dang`))
     .catch((e) => log.error('khôi phục saga lỗi', { error: e.message }));
-  setInterval(check, Number(env('HEALTH_INTERVAL_MS', 5000)));
+  // PD-11: mỗi vòng đọc lại healthIntervalMs (đổi qua etcd thì vòng sau áp dụng ngay, không cần restart)
+  const scheduleCheck = () => setTimeout(() => check().finally(scheduleCheck), config.get('healthIntervalMs'));
+  scheduleCheck();
 
   const port = Number(env('PORT', 8000));
   server.listen(port, () => log.info(`Aggregator chạy ở cổng ${port}`));
