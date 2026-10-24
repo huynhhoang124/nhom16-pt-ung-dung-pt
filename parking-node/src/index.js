@@ -1,4 +1,4 @@
-const { Pool } = require('pg');
+const { Pool, Client } = require('pg');
 const { init, readThrough } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
@@ -6,6 +6,7 @@ const { expireDue, activateDue, warnExpiring } = require('./slots');
 const { log } = require('./log');
 const { startCommandConsumer, makeCommandProcessor, cleanupInbox } = require('./commands');
 const { makeReplyPublisher, makeReplyRelay } = require('./command-replies');
+const { makeRelayLagMetric } = require('./metrics');
 
 const env = (k, d) => process.env[k] ?? d;
 const parkingId = env('PARKING_ID', 'A');
@@ -38,9 +39,12 @@ async function main() {
       } catch { this.set(-1); }   // -1: không đọc được bản sao
     },
   });
+  let relayLagMetric;
 
   const app = makeApp({
-    readPool, metricsExtra: [lagMetric],
+    readPool, metricsExtra: [lagMetric, (registry, client) => {
+      relayLagMetric = makeRelayLagMetric(registry, client);
+    }],
     pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
     reservationMinutes: Number(env('RESERVATION_MINUTES', 15)),
     ...(process.env.QR_SECRET && { qrSecret: process.env.QR_SECRET }),
@@ -52,7 +56,33 @@ async function main() {
 
   const url = env('RABBITMQ_URL', 'amqp://localhost/%2F');
   const publishEvents = amqpPublisher(url);
-  const relayOnce = makeRelay(pool, publishEvents);
+  const relayOnce = makeRelay(pool, publishEvents, log, (rows, confirmedAt) => {
+    relayLagMetric?.observe(rows, confirmedAt);
+  });
+
+
+  const outboxListener = new Client({
+    connectionString: env('DATABASE_URL'),
+  });
+
+  outboxListener.on('error', (e) => {
+    log.error('kết nối LISTEN outbox gặp lỗi', { error: e.message });
+  });
+
+  await outboxListener.connect();
+  await outboxListener.query('LISTEN outbox');
+  log.info('LISTEN outbox đã sẵn sàng');
+
+  outboxListener.on('notification', (message) => {
+    if (message.channel !== 'outbox') return;
+
+    log.info('nhận NOTIFY outbox', { payload: message.payload });
+    relayOnce().catch((e) => {
+      log.error('relay được gọi bởi NOTIFY thất bại', { error: e.message });
+    });
+  });
+
+
   const replyPublisher = makeReplyPublisher(url);
   const replyOnce = makeReplyRelay(pool, replyPublisher.publish);
   const consumer = startCommandConsumer({ url, pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'), log,
@@ -88,7 +118,12 @@ async function main() {
       for (const job of jobs) clearInterval(job.timer);
       await consumer.stop();
       await Promise.allSettled(jobs.map((job) => job.running));
-      await Promise.all([replyPublisher.close(), publishEvents.close(), httpClosed]);
+      await Promise.all([
+        replyPublisher.close(),
+        publishEvents.close(),
+        outboxListener.end(),
+        httpClosed,
+      ]);
       await Promise.all([pool.end(), replica?.end()]);
       clearTimeout(deadline);
       process.exit(0);
