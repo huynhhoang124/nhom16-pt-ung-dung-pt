@@ -4,7 +4,12 @@ const path = require('node:path');
 const { Pool } = require('pg');
 const { Server } = require('socket.io');
 const { makeRegistry } = require('./nodes');
-const { applyEvent, reconcile, startConsumer } = require('./events');
+const {
+  applyEvent,
+  startConsumer,
+  createReconcileQueue,
+  replayRecentEvents,
+} = require('./events');
 const { makeAuth, seedUsers } = require('./auth');
 const { makeUserShards } = require('./ring');
 const { makeApp } = require('./routes');
@@ -195,92 +200,4 @@ async function main() {
   }, log, { exchange: 'user.notifications', queue: `aggregator.notifications.${instance}`, pattern: '#' });
 
   const push = (e, parent) => emitSocket(io, 'SLOT_UPDATED', e, parent);
-  // PT-01: mỗi bản Aggregator một queue riêng -> bản nào cũng nhận đủ sự kiện, đẩy cho client đang nối với nó
-  // (không cần Redis adapter). Queue durable: bản này tắt thì tin chờ, bật lại xử lý tiếp.
-  const eventTracer = trace.getTracer('aggregator/events');
-  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e, parent) => {
-    eventTracer.startActiveSpan('event.process', { kind: SpanKind.CONSUMER,
-      attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': 'parking.events' },
-    }, parent, (span) => {
-      try {
-    const fresh = applyEvent(cache, e);
-    log.info('nhận sự kiện', { requestId: e.requestId, type: e.type, parkingId: e.parkingId, slot: e.slot, version: e.version, fresh });
-        if (fresh) push(e);
-      } catch (error) {
-        span.recordException(error);
-        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
-        throw error;
-      } finally { span.end(); }
-    });
-  }, log, { queue: `aggregator.slot-updates.${instance}` });
-
-  const onChange = (n, prev) => {
-    log.info(`Bãi ${n.id}: ${prev} -> ${n.status}`);
-    emitSocket(io, 'NODE_STATUS', { parkingId: n.id, status: n.status });
-    // PD-10: Chỉ Leader mới chạy đối soát (reconcile)
-    if (n.status === 'ONLINE' && leader.isLeader()) {
-      reconcile(reg, cache, n, push)
-        .then((k) => log.info(`Đối soát bãi ${n.id}: cập nhật ${k} slot`))
-        .catch((e) => {
-          if (e.message?.includes('STALE_LEADER')) leader.demote();
-          log.error(`Đối soát bãi ${n.id} lỗi`, { error: e.message });
-        });
-    }
-  };
-  const check = () => {
-    const p = hasEtcd
-      ? Promise.resolve()
-      : pool.query('SELECT * FROM parking_nodes')
-          .then(({ rows }) => reg.sync(rows).forEach((id) => log.info(`Nạp bãi mới ${id} (do bản Aggregator khác thêm)`)));
-    return p
-      .then(() => reg.check(onChange))
-      .catch((e) => log.error('health check lỗi', { error: e.message }));
-  };
-
-  // PD-10: Quản lý các việc định kỳ chỉ chạy khi là Leader
-  let leaderInterval = null;
-  leader.onLeaderStart(async (token) => {
-    log.info(`[leader-jobs] Instance ${instance} đảm nhận Leader (token: ${token}), bắt đầu các việc định kỳ`);
-    try {
-      // Bù trừ saga dở dang sau khi health check biết bãi nào sống (PT-07)
-      await check();
-      const k = await app.locals.sagas.recover(commandMode === 'broker' ? 0 : undefined, {
-        fencingToken: token,
-        isActive: () => leader.isLeader() && leader.getToken() === token,
-      });
-      if (k) log.info(`Khôi phục ${k} saga dở dang`);
-    } catch (e) {
-      log.error('Khôi phục saga lỗi', { error: e.message });
-    }
-
-    if (leaderInterval) clearInterval(leaderInterval);
-    leaderInterval = setInterval(async () => {
-      if (!leader.isLeader()) return;
-      if (commandMode === 'broker') {
-        app.locals.sagas.recover(5000, {
-          fencingToken: leader.getToken(), isActive: () => leader.isLeader(),
-        }).catch((e) => log.error('Khôi phục saga lỗi', { error: e.message }));
-      }
-      // PD-21: chỉ leader dọn bucket đăng nhập đã nạp đầy ở mọi phân mảnh users
-      for (const p of users.all()) auth.loginBuckets.cleanup(p).catch((e) => log.error('Dọn login_buckets lỗi', { error: e.message }));
-      // Hook chuẩn bị sẵn cho PD-06 (dọn DLQ, lệnh hết hạn, tổng hợp thống kê)
-    }, 30000);
-  });
-
-  leader.onLeaderStop(() => {
-    if (leaderInterval) {
-      clearInterval(leaderInterval);
-      leaderInterval = null;
-    }
-    log.info(`[leader-jobs] Instance ${instance} thôi làm Leader, đã dừng toàn bộ việc định kỳ`);
-  });
-
-  // PD-11: mỗi vòng đọc lại healthIntervalMs (đổi qua etcd thì vòng sau áp dụng ngay, không cần restart)
-  const scheduleCheck = () => setTimeout(() => check().finally(scheduleCheck), config.get('healthIntervalMs'));
-  scheduleCheck();
-
-  const port = Number(env('PORT', 8000));
-  server.listen(port, () => log.info(`Aggregator chạy ở cổng ${port}`));
-}
-
-main().catch((e) => { log.error('khởi động thất bại', { error: e.message, stack: e.stack }); process.exit(1); });
+  const reconcileQueue = createReconcileQueue(reg, cache, push, log, 500, leader);

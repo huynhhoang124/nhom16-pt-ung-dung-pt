@@ -41,6 +41,15 @@
       "auto_delete": false,
       "internal": false,
       "arguments": {}
+    },
+    {
+      "name": "parking.events",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
     }
   ],
   "queues": [
@@ -112,172 +121,13 @@
       "auto_delete": false,
       "vhost": "/",
       "name": "cmd.retry.10s"
-    }
-  ],
-  "bindings": [
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.D.admin", "destination_type": "queue", "routing_key": "cmd.zone-nam.#", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.D.admin", "destination_type": "queue", "routing_key": "cmd.all.#", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.E.admin", "destination_type": "queue", "routing_key": "cmd.zone-nam.#", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.E.admin", "destination_type": "queue", "routing_key": "cmd.all.#", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.F.admin", "destination_type": "queue", "routing_key": "cmd.zone-nam.#", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.F.admin", "destination_type": "queue", "routing_key": "cmd.all.#", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.A.admin", "destination_type": "queue", "routing_key": "cmd.A.*.admin", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.B.admin", "destination_type": "queue", "routing_key": "cmd.B.*.admin", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.C.admin", "destination_type": "queue", "routing_key": "cmd.C.*.admin", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.D", "destination_type": "queue", "routing_key": "cmd.D.*", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.D.admin", "destination_type": "queue", "routing_key": "cmd.D.*.admin", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.E", "destination_type": "queue", "routing_key": "cmd.E.*", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.E.admin", "destination_type": "queue", "routing_key": "cmd.E.*.admin", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.F", "destination_type": "queue", "routing_key": "cmd.F.*", "arguments": {} },
-    { "source": "parking.commands", "vhost": "/", "destination": "cmd.F.admin", "destination_type": "queue", "routing_key": "cmd.F.*.admin", "arguments": {} },
-    {
-      "source": "parking.commands",
-      "vhost": "/",
-      "destination": "cmd.A",
-      "destination_type": "queue",
-      "routing_key": "cmd.A.*",
-      "arguments": {}
     },
     {
-      "source": "parking.commands",
+      "name": "events.stream",
       "vhost": "/",
-      "destination": "cmd.B",
-      "destination_type": "queue",
-      "routing_key": "cmd.B.*",
-      "arguments": {}
-    },
-    {
-      "source": "parking.commands",
-      "vhost": "/",
-      "destination": "cmd.C",
-      "destination_type": "queue",
-      "routing_key": "cmd.C.*",
-      "arguments": {}
-    },
-    {
-      "source": "parking.dlx",
-      "vhost": "/",
-      "destination": "cmd.expired",
-      "destination_type": "queue",
-      "routing_key": "expired",
-      "arguments": {}
-    },
-    {
-      "arguments": {},
-      "destination": "cmd.retry.2s",
-      "destination_type": "queue",
-      "vhost": "/",
-      "source": "parking.dlx",
-      "routing_key": "retry.1"
-    },
-    {
-      "arguments": {},
-      "destination": "cmd.retry.10s",
-      "destination_type": "queue",
-      "vhost": "/",
-      "source": "parking.dlx",
-      "routing_key": "retry.2"
-    },
-    {
-      "arguments": {},
-      "destination": "cmd.dead",
-      "destination_type": "queue",
-      "vhost": "/",
-      "source": "parking.dlx",
-      "routing_key": "dead"
-    },
-    {
-      "source": "parking.commands",
-      "vhost": "/",
-      "destination": "cmd.A.admin",
-      "destination_type": "queue",
-      "routing_key": "cmd.zone-bac.#",
-      "arguments": {}
-    },
-    {
-      "source": "parking.commands",
-      "vhost": "/",
-      "destination": "cmd.A.admin",
-      "destination_type": "queue",
-      "routing_key": "cmd.all.#",
-      "arguments": {}
-    },
-    {
-      "source": "parking.commands",
-      "vhost": "/",
-      "destination": "cmd.B.admin",
-      "destination_type": "queue",
-      "routing_key": "cmd.zone-bac.#",
-      "arguments": {}
-    },
-    {
-      "source": "parking.commands",
-      "vhost": "/",
-      "destination": "cmd.B.admin",
-      "destination_type": "queue",
-      "routing_key": "cmd.all.#",
-      "arguments": {}
-    },
-    {
-      "source": "parking.commands",
-      "vhost": "/",
-      "destination": "cmd.C.admin",
-      "destination_type": "queue",
-      "routing_key": "cmd.zone-bac.#",
-      "arguments": {}
-    },
-    {
-      "source": "parking.commands",
-      "vhost": "/",
-      "destination": "cmd.C.admin",
-      "destination_type": "queue",
-      "routing_key": "cmd.all.#",
-      "arguments": {}
-    }
-  ],
-  "policies": [
-    {
-      "vhost": "/",
-      "name": "command-delivery",
-      "pattern": "^cmd\\.[A-F](\\.admin)?$",
-      "apply-to": "quorum_queues",
-      "priority": 10,
-      "definition": {
-        "dead-letter-exchange": "parking.dlx",
-        "dead-letter-routing-key": "expired",
-        "dead-letter-strategy": "at-least-once",
-        "overflow": "reject-publish",
-        "max-length": 10000,
-        "delivery-limit": 5
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "stream",
+        "x-max-age": "1D"
       }
-    },
-    {
-      "apply-to": "quorum_queues",
-      "definition": {
-        "dead-letter-strategy": "at-least-once",
-        "dead-letter-exchange": "parking.commands",
-        "overflow": "reject-publish"
-      },
-      "vhost": "/",
-      "name": "command-retry",
-      "pattern": "^cmd\\.retry\\.(2s|10s)$",
-      "priority": 10
-    },
-    {
-      "vhost": "/",
-      "name": "admin-command-delivery",
-      "pattern": "^cmd\\.[A-F]\\.admin$",
-      "apply-to": "quorum_queues",
-      "priority": 20,
-      "definition": {
-        "dead-letter-exchange": "parking.dlx",
-        "dead-letter-routing-key": "expired",
-        "dead-letter-strategy": "at-least-once",
-        "overflow": "reject-publish",
-        "max-length": 10000,
-        "delivery-limit": 5,
-        "message-ttl": 600000
-      }
-    }
-  ]
-}

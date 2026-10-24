@@ -148,7 +148,8 @@ function makeRegistry({
     body,
     ms,
     job,
-    fencingToken,\n    minLSN,
+    fencingToken,
+    minLSN,
     signal,
     baseUrl,
   } = {}) => {
