@@ -41,6 +41,15 @@
       "auto_delete": false,
       "internal": false,
       "arguments": {}
+    },
+    {
+      "name": "parking.events",
+      "vhost": "/",
+      "type": "topic",
+      "durable": true,
+      "auto_delete": false,
+      "internal": false,
+      "arguments": {}
     }
   ],
   "queues": [
@@ -82,6 +91,16 @@
       "arguments": {
         "x-queue-type": "quorum"
       }
+    },
+    {
+      "name": "events.stream",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "stream",
+        "x-max-age": "1D"
+      }
     }
   ],
   "bindings": [
@@ -115,6 +134,14 @@
       "destination": "cmd.expired",
       "destination_type": "queue",
       "routing_key": "expired",
+      "arguments": {}
+    },
+    {
+      "source": "parking.events",
+      "vhost": "/",
+      "destination": "events.stream",
+      "destination_type": "queue",
+      "routing_key": "#",
       "arguments": {}
     }
   ],

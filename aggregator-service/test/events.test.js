@@ -1,6 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { applyEvent, reconcile, slotsFromCache } = require('../src/events');
+const {
+  applyEvent,
+  reconcile,
+  slotsFromCache,
+  createReconcileQueue,
+  replayRecentEvents,
+} = require('../src/events');
 const { startNode, startAggregator } = require('./helpers');
 
 const ev = (slot, version, status = 'RESERVED', parkingId = 'A') => ({ parkingId, slot, version, status });
@@ -41,4 +47,99 @@ test('TC13 đối soát: cache cũ được cập nhật theo DB bãi; chạy l�
   assert.deepEqual(agg.cache.get('A:A01'), { status: 'OCCUPIED', version: 5 });
   assert.deepEqual(pushed, ['A01', 'A02', 'A03']);
   assert.equal(await reconcile(agg.reg, agg.cache, n), 0);
+});
+
+test('PD-22: hàng đợi đối soát tuần tự, giãn cách và bỏ bãi trùng', async () => {
+  const calls = [];
+  const reg = {
+    async json(n, path) {
+      calls.push({ id: n.id, time: Date.now() });
+      return [];
+    },
+  };
+
+  const cache = new Map();
+  const queue = createReconcileQueue(reg, cache, undefined, console, 30);
+
+  queue.enqueue({ id: 'A' });
+  queue.enqueue({ id: 'B' });
+  queue.enqueue({ id: 'A' }); // Không xếp trùng A khi A đang chờ.
+
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  assert.deepEqual(calls.map((c) => c.id), ['A', 'B']);
+  assert.ok(calls[1].time - calls[0].time >= 25);
+});
+
+test('PD-22 replay: áp dụng sự kiện mới và kết thúc khi nhận marker', async () => {
+  const cache = new Map();
+  const applied = [];
+  let consumeCallback;
+  let ackCount = 0;
+  let cancelled = false;
+
+  const conn = {
+    on() {},
+    async createChannel() {
+      return {
+        async prefetch() {},
+        async consume(_queue, callback) {
+          consumeCallback = callback;
+          return { consumerTag: 'test-consumer' };
+        },
+        ack() {
+          ackCount++;
+        },
+        async cancel() {
+          cancelled = true;
+        },
+        async close() {},
+      };
+    },
+    async createConfirmChannel() {
+      return {
+        publish(_exchange, _routingKey, content) {
+          const marker = JSON.parse(content.toString());
+
+          queueMicrotask(() => {
+            consumeCallback({
+              content: Buffer.from(JSON.stringify({
+                parkingId: 'A',
+                slot: 'A01',
+                status: 'OCCUPIED',
+                version: 5,
+              })),
+            });
+
+            consumeCallback({
+              content: Buffer.from(JSON.stringify(marker)),
+            });
+          });
+
+          return true;
+        },
+        async waitForConfirms() {},
+        async close() {},
+      };
+    },
+    async close() {},
+  };
+
+  const log = { info() {}, error() {} };
+
+  await replayRecentEvents(
+    'amqp://unused',
+    cache,
+    (event) => applied.push(event),
+    log,
+    async () => conn,
+  );
+
+  assert.deepEqual(cache.get('A:A01'), {
+    status: 'OCCUPIED',
+    version: 5,
+  });
+  assert.equal(applied.length, 1);
+  assert.equal(ackCount, 2);
+  assert.equal(cancelled, true);
 });

@@ -62,4 +62,170 @@ function startConsumer(url, onEvent, log = console, { exchange = EXCHANGE, queue
   run();
 }
 
-module.exports = { applyEvent, reconcile, slotsFromCache, startConsumer, EXCHANGE, QUEUE };
+async function replayRecentEvents(
+  url,
+  cache,
+  onApplied,
+  log = console,
+  connectAny = makeConnector(url),
+) {
+  let conn;
+  let ch;
+  let pub;
+  let consumerTag;
+  let settled = false;
+
+  const markerId = `${process.pid}-${Date.now()}`;
+
+  return new Promise((resolve, reject) => {
+    const finish = async (err) => {
+      if (settled) return;
+      settled = true;
+
+      try {
+        if (ch && consumerTag) {
+          await ch.cancel(consumerTag).catch(() => {});
+        }
+        if (ch) await ch.close().catch(() => {});
+        if (pub) await pub.close().catch(() => {});
+        if (conn) await conn.close().catch(() => {});
+      } finally {
+        if (err) reject(err);
+        else resolve();
+      }
+    };
+
+    void (async () => {
+      try {
+        conn = await connectAny();
+        conn.on('error', () => {});
+
+        ch = await conn.createChannel();
+        pub = await conn.createConfirmChannel();
+
+        await ch.prefetch(100);
+
+        const offset = '10m';
+
+        const result = await ch.consume(
+          'events.stream',
+          (msg) => {
+            if (!msg || settled) return;
+
+            try {
+              const event = JSON.parse(msg.content.toString());
+
+              if (event._pd22ReplayMarker === true) {
+                ch.ack(msg);
+
+                if (event.markerId === markerId) {
+                  void finish();
+                }
+                return;
+              }
+
+              if (
+                event.parkingId &&
+                event.slot &&
+                Number.isFinite(event.version) &&
+                applyEvent(cache, event)
+              ) {
+                onApplied?.(event);
+              }
+
+              ch.ack(msg);
+            } catch (e) {
+              log.error('Lỗi khi replay sự kiện', {
+                error: e.message,
+              });
+              ch.ack(msg);
+            }
+          },
+          {
+            noAck: false,
+            arguments: {
+              'x-stream-offset': offset,
+            },
+          },
+        );
+
+        consumerTag = result.consumerTag;
+
+        pub.publish(
+          'parking.events',
+          'pd22.replay.marker',
+          Buffer.from(JSON.stringify({
+            _pd22ReplayMarker: true,
+            markerId,
+          })),
+          { persistent: true, contentType: 'application/json' },
+        );
+
+        await pub.waitForConfirms();
+
+        log.info('Bắt đầu replay events.stream', {
+          lookbackSeconds: 600,
+          offset,
+        });
+      } catch (e) {
+        await finish(e);
+      }
+    })();
+  });
+}
+
+
+
+function createReconcileQueue(reg, cache, onApplied, log = console, delayMs = 500) {
+  const pending = [];
+  const queued = new Set();
+  let running = false;
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  async function drain() {
+    if (running) return;
+    running = true;
+
+    try {
+      while (pending.length > 0) {
+        const n = pending.shift();
+
+        try {
+          const count = await reconcile(reg, cache, n, onApplied);
+          log.info?.(`Đối soát bãi ${n.id}: cập nhật ${count} slot`);
+        } catch (e) {
+          log.error?.(`Đối soát bãi ${n.id} lỗi`, { error: e.message });
+        } finally {
+          queued.delete(n.id);
+        }
+
+        // Giãn cách các lượt đối soát, không gọi nhiều bãi cùng lúc.
+        if (pending.length > 0) await sleep(delayMs);
+      }
+    } finally {
+      running = false;
+      if (pending.length > 0) void drain();
+    }
+  }
+
+  function enqueue(n) {
+    if (queued.has(n.id)) return;
+    queued.add(n.id);
+    pending.push(n);
+    void drain();
+  }
+
+  return { enqueue };
+}
+
+module.exports = {
+  applyEvent,
+  reconcile,
+  slotsFromCache,
+  startConsumer,
+  createReconcileQueue,
+  replayRecentEvents,
+  EXCHANGE,
+  QUEUE,
+};

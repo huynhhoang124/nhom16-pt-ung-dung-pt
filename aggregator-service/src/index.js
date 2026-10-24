@@ -4,7 +4,12 @@ const path = require('node:path');
 const { Pool } = require('pg');
 const { Server } = require('socket.io');
 const { makeRegistry } = require('./nodes');
-const { applyEvent, reconcile, startConsumer } = require('./events');
+const {
+  applyEvent,
+  startConsumer,
+  createReconcileQueue,
+  replayRecentEvents,
+} = require('./events');
 const { makeAuth, seedUsers } = require('./auth');
 const { makeApp } = require('./routes');
 const { makeCommands } = require('./commands');
@@ -60,6 +65,7 @@ async function main() {
   }, log, { exchange: 'user.notifications', queue: `aggregator.notifications.${instance}`, pattern: '#' });
 
   const push = (e) => io.emit('SLOT_UPDATED', e);
+  const reconcileQueue = createReconcileQueue(reg, cache, push, log, 500);
   // PT-01: mỗi bản Aggregator một queue riêng -> bản nào cũng nhận đủ sự kiện, đẩy cho client đang nối với nó
   // (không cần Redis adapter). Queue durable: bản này tắt thì tin chờ, bật lại xử lý tiếp.
   startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e) => {
@@ -72,9 +78,7 @@ async function main() {
     log.info(`Bãi ${n.id}: ${prev} -> ${n.status}`);
     io.emit('NODE_STATUS', { parkingId: n.id, status: n.status });
     if (n.status === 'ONLINE') {
-      reconcile(reg, cache, n, push)
-        .then((k) => log.info(`Đối soát bãi ${n.id}: cập nhật ${k} slot`))
-        .catch((e) => log.error(`Đối soát bãi ${n.id} lỗi`, { error: e.message }));
+      reconcileQueue.enqueue(n);
     }
   };
   const check = () => pool.query('SELECT * FROM parking_nodes')
@@ -82,9 +86,33 @@ async function main() {
     .then(() => reg.check(onChange))
     .catch((e) => log.error('health check lỗi', { error: e.message }));
   // Lần health check đầu xong (biết bãi nào sống) thì bù trừ các saga dở dang từ lần chạy trước (PT-07).
-  check().then(() => app.locals.sagas.recover())
+    replayRecentEvents(
+    env('RABBITMQ_URL', 'amqp://localhost'),
+    cache,
+    (e) => {
+      log.info('Replay sự kiện', {
+        parkingId: e.parkingId,
+        slot: e.slot,
+        version: e.version,
+      });
+      io.emit('SLOT_UPDATED', e);
+    },
+    log,
+  )
+    .then(() => {
+      log.info('Replay sự kiện 10 phút gần nhất hoàn tất');
+    })
+    .catch((e) => {
+      log.error('Replay sự kiện lỗi, tiếp tục khởi tạo', {
+        error: e.message,
+      });
+    })
+    .then(() => check())
+    .then(() => app.locals.sagas.recover())
     .then((k) => k && log.info(`Khôi phục ${k} saga dở dang`))
-    .catch((e) => log.error('khôi phục saga lỗi', { error: e.message }));
+    .catch((e) => log.error('khởi tạo health check/saga lỗi', {
+      error: e.message,
+    }));
   setInterval(check, Number(env('HEALTH_INTERVAL_MS', 5000)));
 
   const port = Number(env('PORT', 8000));
