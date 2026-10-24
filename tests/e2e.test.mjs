@@ -21,7 +21,7 @@ const KEY = process.env.INTERNAL_KEY ?? 'dev';
 const T = { timeout: 120_000 };
 
 const sh = (cmd) => execSync(cmd, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-const compose = (args) => sh(`docker compose ${args}`);
+const compose = (args) => sh(`${COMPOSE} ${args}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sql = (db, q) => compose(`exec -T ${db} psql -U postgres -d parking -tAc "${q}"`);
 
@@ -62,7 +62,19 @@ const statusOf = async (id) => (await agg('/api/parkings')).body?.find((p) => p.
 // biển số ngẫu nhiên: lần chạy trước hỏng giữa chừng để xe còn trong bãi thì lần sau không bị PLATE_ALREADY_INSIDE
 const plate = () => `30A-${String(Math.random()).slice(2, 5)}.${String(Math.random()).slice(2, 4)}`;
 const freeSlot = async (id) => (await node(id, '/api/slots/available')).body[0].slotCode;
-const login = async (u) => (await agg('/api/auth/login', { method: 'POST', body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' } })).body.token;
+async function login(u) {
+  const request = () => agg('/api/auth/login', {
+    method: 'POST',
+    body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' },
+  });
+  let response = await request();
+  if (response.status === 0) {
+    await sleep(300);
+    response = await request();
+  }
+  if (!response.body?.token) throw new Error(`Đăng nhập e2e ${u} thất bại: HTTP ${response.status}`);
+  return response.body.token;
+}
 
 // Dọn sau test (huỷ đặt chỗ, cho xe ra) để chạy lặp lại được nhiều lần.
 const undo = [];
@@ -72,7 +84,7 @@ test.after(async () => { for (const f of undo) await f(); });
 
 let tok;
 test.before(async () => {
-  await until('3 bãi ONLINE', async () => (await Promise.all(['A', 'B', 'C'].map(statusOf))).every((s) => s === 'ONLINE'), 120_000);
+  await until(`${PARKING_IDS.length} bãi ONLINE`, async () => (await Promise.all(PARKING_IDS.map(statusOf))).every((s) => s === 'ONLINE'), 120_000);
   tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a') };
 });
 
@@ -82,9 +94,21 @@ test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bã
   assert.doesNotMatch(env, /db-b|db-c/);
 });
 
-test('TC01 tra cứu tổng hợp 3 bãi', T, async () => {
+test('TC01 tra cứu tổng hợp các bãi theo cấu hình', T, async () => {
   const r = await agg('/api/parkings/availability');
-  assert.deepEqual(r.body.map((p) => [p.parkingId, p.status, p.total]), [['A', 'ONLINE', 40], ['B', 'ONLINE', 60], ['C', 'ONLINE', 30]]);
+  const totals = { A: 40, B: 60, C: 30, D: 20, E: 20, F: 20 };
+  const availability = r.body.map((p) => [p.parkingId, p.status, p.total]).sort(([a], [b]) => a.localeCompare(b));
+  assert.deepEqual(availability, PARKING_IDS.map((id) => [id, 'ONLINE', totals[id]]).sort(([a], [b]) => a.localeCompare(b)));
+});
+
+test('PD-12 etcd gắn nhãn vùng Bắc/Nam và registry trả đủ sáu bãi', { ...T, skip: !SCALE }, async () => {
+  const admin = await login('admin');
+  const r = await agg('/api/admin/nodes', { token: admin });
+  const zones = r.body.map((n) => [n.parkingId, n.zone]).sort(([a], [b]) => a.localeCompare(b));
+  assert.deepEqual(zones, [
+    ['A', 'bac'], ['B', 'bac'], ['C', 'bac'],
+    ['D', 'nam'], ['E', 'nam'], ['F', 'nam'],
+  ]);
 });
 
 test('TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh', T, async () => {
@@ -242,7 +266,9 @@ test('TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B 
   try {
     await until('B OFFLINE', async () => (await statusOf('B')) === 'OFFLINE');
     const avail = await agg('/api/parkings/availability');
-    assert.deepEqual(avail.body.map((p) => [p.parkingId, p.status]), [['A', 'ONLINE'], ['B', 'OFFLINE'], ['C', 'ONLINE']]);
+    const statuses = avail.body.map((p) => [p.parkingId, p.status]).sort(([a], [b]) => a.localeCompare(b));
+    const expected = PARKING_IDS.map((id) => [id, id === 'B' ? 'OFFLINE' : 'ONLINE']).sort(([a], [b]) => a.localeCompare(b));
+    assert.deepEqual(statuses, expected);
     const r = await agg('/api/parkings/B/reservations', { method: 'POST', token: tok.user1, key: randomUUID(), body: { slotCode: 'B02', licensePlate: '30A-555.55' } });
     assert.deepEqual([r.status, r.body.error], [503, 'PARKING_OFFLINE']);
     const detail = await agg('/api/parkings/B');
@@ -277,7 +303,7 @@ test('TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật
     compose('start aggregator');
   }
   await until('queue rỗng', () => compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(/aggregator\.slot-updates\.1\s+(\d+)/)?.[1] === '0', 60_000);
-  await until('3 bãi ONLINE', async () => (await Promise.all(['A', 'B', 'C'].map(statusOf))).every((s) => s === 'ONLINE'));
+  await until(`${PARKING_IDS.length} bãi ONLINE`, async () => (await Promise.all(PARKING_IDS.map(statusOf))).every((s) => s === 'ONLINE'));
 });
 
 test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết', T, async () => {
