@@ -1,0 +1,17 @@
+TC51 response ms: 531
+▶ PD03 broker request-reply on the composed dependency candidate
+  ✔ TC51 201 <=3s, correlation/trace preserved, owner/admin only, immediate slot version (580.7085ms)
+  ✔ TC52 ten HTTP requests same key -> same command/result and one reservation (926.1062ms)
+  ✔ TC54 node stopped 5s -> 202 then Socket.IO terminal (7706.5049ms)
+  ✔ cancel and pay use broker and preserve old response payloads (2917.919ms)
+TC62 terminal on surviving aggregator: DONE
+  ✔ TC62 sender SIGKILL before reply -> aggregator-2 persists terminal result (17942.0567ms)
+✔ PD03 broker request-reply on the composed dependency candidate (34167.0967ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 34392.7329

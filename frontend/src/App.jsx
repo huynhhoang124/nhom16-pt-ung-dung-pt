@@ -11,6 +11,7 @@ import History from './pages/History.jsx';
 import Account from './pages/Account.jsx';
 import Stats from './pages/Stats.jsx';
 import Gate from './pages/Gate.jsx';
+import CommandStatus from './CommandStatus.jsx';
 
 const ROLE_LABEL = { USER: 'Người dùng', STAFF: 'Nhân viên', ADMIN: 'Quản trị' };
 
@@ -70,6 +71,7 @@ export default function App() {
         </span>
       </header>
       <main className={user.role === 'USER' ? undefined : 'dense'}>
+        <CommandStatus userId={user.id} />
         {view.page === 'dashboard' && <Dashboard onOpen={(parkingId) => setView({ page: 'parking', parkingId })} />}
         {view.page === 'parking' && <ParkingDetail key={view.parkingId} parkingId={view.parkingId} user={user} onBack={() => go('dashboard')} />}
         {view.page === 'mine' && <MyReservations />}

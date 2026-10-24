@@ -6,6 +6,7 @@ import { Icon, Plate, ResStatus } from '../ui.jsx';
 
 const dt = (t) => new Date(t).toLocaleString('vi-VN');
 const tm = (t) => new Date(t).toLocaleTimeString('vi-VN');
+import { commandRequest } from '../api.js';
 
 export default function MyReservations() {
   const [data, setData] = useState(null);
@@ -19,7 +20,7 @@ export default function MyReservations() {
   useLive(['SLOT_UPDATED', 'NODE_STATUS'], load);
 
   async function cancel(r) {
-    const res = await api(`/api/parkings/${r.parkingId}/reservations/${r.id}`, { method: 'DELETE' });
+    const res = await commandRequest(`/api/parkings/${r.parkingId}/reservations/${r.id}`, { method: 'DELETE' }, () => setNote({ kind: 'ok', text: 'Đang xử lý yêu cầu huỷ…' }));
     setNote(res.ok ? { kind: 'ok', text: 'Đã huỷ.' } : { kind: 'error', text: message(res.data) });
     load();
   }
