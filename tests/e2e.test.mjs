@@ -53,7 +53,7 @@ const statusOf = async (id) => (await agg('/api/parkings')).body?.find((p) => p.
 // biển số ngẫu nhiên: lần chạy trước hỏng giữa chừng để xe còn trong bãi thì lần sau không bị PLATE_ALREADY_INSIDE
 const plate = () => `30A-${String(Math.random()).slice(2, 5)}.${String(Math.random()).slice(2, 4)}`;
 const freeSlot = async (id) => (await node(id, '/api/slots/available')).body[0].slotCode;
-const login = async (u) => (await agg('/api/auth/login', { method: 'POST', body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' } })).body.token;
+const login = async (u) => (await until(`đăng nhập ${u}`, async () => (await agg('/api/auth/login', { method: 'POST', body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' } })).body?.token, 10_000));
 
 // Dọn sau test (huỷ đặt chỗ, cho xe ra) để chạy lặp lại được nhiều lần.
 const undo = [];
@@ -64,7 +64,7 @@ test.after(async () => { for (const f of undo) await f(); });
 let tok;
 test.before(async () => {
   await until('3 bãi ONLINE', async () => (await Promise.all(['A', 'B', 'C'].map(statusOf))).every((s) => s === 'ONLINE'), 120_000);
-  tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a') };
+  tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a'), admin: await login('admin') };
 });
 
 test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bãi khác', T, () => {
@@ -642,4 +642,41 @@ test('TC64 phân hoạch mạng node <-> etcd: mất lease nhưng HTTP còn số
     }
   }
 );
+
+// --- PD-11: Cấu hình động qua etcd watch (COORD=1 node --test tests/e2e.test.mjs) ---
+test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> Aggregator nhận ngay không cần restart',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put "${k}" "${v}"`);
+    const adminToken = tok?.admin ?? await login('admin');
+
+    try {
+      // 1. Cập nhật cấu hình timeoutMs trên etcd thành 500
+      etcdPut('/nhom16/config/aggregator/timeoutMs', '500');
+
+      // 2. Chờ Aggregator nhận cấu hình mới qua watch trong <= 2s mà không cần restart container
+      await until('Aggregator nhận timeoutMs = 500', async () => {
+        const r = await agg('/api/config/timeoutMs', { token: adminToken });
+        return r.status === 200 && r.body?.value === 500;
+      }, 5000);
+
+      // 3. Kiểm tra log của Aggregator có chứa sự kiện cập nhật cấu hình kèm revision
+      const logs = compose('logs --tail 50 aggregator');
+      assert.match(logs, /\[etcd-config\] Cập nhật \/nhom16\/config\/aggregator\/timeoutMs|timeoutMs.*500/);
+      assert.match(logs, /revision/);
+
+      console.log('TC67 - PASS: Aggregator cập nhật timeoutMs = 500ms qua etcd watch tức thì và ghi log kèm revision');
+    } finally {
+      // Khôi phục giá trị mặc định 2000
+      try {
+        etcdPut('/nhom16/config/aggregator/timeoutMs', '2000');
+        await until('Aggregator khôi phục timeoutMs = 2000', async () => {
+          const r = await agg('/api/config/timeoutMs', { token: adminToken });
+          return r.status === 200 && r.body?.value === 2000;
+        }, 5000);
+      } catch { /* bỏ qua */ }
+    }
+  }
+);
+
 

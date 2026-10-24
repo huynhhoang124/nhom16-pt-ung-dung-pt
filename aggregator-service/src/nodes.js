@@ -25,11 +25,14 @@ async function resolveUrl(url) {
   return u.href.replace(/\/$/, '');
 }
 
-function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
+function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config }) {
   const nodes = new Map();
 
+  const getTimeout = () => (config ? config.get('timeoutMs', timeoutMs) : (typeof timeoutMs === 'function' ? timeoutMs() : timeoutMs));
+  const getThreshold = () => (config ? config.get('failThreshold', failThreshold) : (typeof failThreshold === 'function' ? failThreshold() : failThreshold));
+
   function computeStatus(n) {
-    const httpOk = n.fails < failThreshold;
+    const httpOk = n.fails < getThreshold();
     if (!httpOk) return 'OFFLINE';
     if (n.hasLease === false) return 'DEGRADED';
     return 'ONLINE';
@@ -72,7 +75,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
       lng: row.lng ?? null,
       publicUrl: row.public_url ?? null,
       status: 'OFFLINE',
-      fails: failThreshold,
+      fails: getThreshold(),
       lastSeen: null,
       zone: row.zone ?? null,
       hasLease: row.hasLease,
@@ -83,17 +86,19 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
   };
 
   // Timeout dùng AbortSignal.timeout: bộ đếm của runtime, không phụ thuộc giờ hệ thống bị chỉnh.
-  const raw = (n, path, { method = 'GET', body, ms = timeoutMs } = {}) =>
-    fetch((n.target ?? n.url) + path, {
+  const raw = (n, path, { method = 'GET', body, ms } = {}) => {
+    const effectiveMs = ms ?? getTimeout();
+    return fetch((n.target ?? n.url) + path, {
       method,
       // gửi tiếp mã truy vết sang node (GS-03)
       headers: { 'content-type': 'application/json', 'x-internal-key': internalKey, ...(requestId() && { 'x-request-id': requestId() }) },
       body: body && JSON.stringify(body),
-      signal: AbortSignal.timeout(ms),
+      signal: AbortSignal.timeout(effectiveMs),
     });
+  };
 
   const failed = (n) => {
-    if (++n.fails >= failThreshold) {
+    if (++n.fails >= getThreshold()) {
       setStatus(n, computeStatus(n));
     }
   };
@@ -102,8 +107,9 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3 }) {
   // nhiều client không dồn vào cùng lúc), và CHỈ khi thao tác idempotent: GET (mặc định) hoặc ghi có
   // Idempotency-Key (người gọi truyền retry: true). Xe vào/ra không idempotent nên không bao giờ tự retry.
   // Cả 2 lần thử nằm trong CÙNG ngân sách `ms`: retry không kéo dài thời gian chờ của người dùng.
-  async function call(n, path, { method = 'GET', body, ms = timeoutMs, retry = method === 'GET' } = {}) {
-    const deadline = Date.now() + ms;
+  async function call(n, path, { method = 'GET', body, ms, retry = method === 'GET' } = {}) {
+    const effectiveMs = ms ?? getTimeout();
+    const deadline = Date.now() + effectiveMs;
     for (let attempt = 0; ; attempt++) {
       let res;
       try {
