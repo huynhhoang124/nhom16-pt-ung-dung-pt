@@ -182,12 +182,18 @@ function makeConfig({
     const rangeRes = await client.getAll().prefix(PREFIX).exec();
     const revision = Number(rangeRes.header?.revision || 0);
 
+    const seen = new Set();
     if (rangeRes.kvs) {
       for (const kv of rangeRes.kvs) {
         const k = kv.key.toString();
         const v = kv.value.toString();
+        seen.add(getProp(k));
         applyPut(k, v, revision, { isInitial: true });
       }
+    }
+    // Khoá bị xoá trong lúc watch mất kết nối: không còn trong snapshot -> về giá trị mặc định
+    for (const prop of Object.keys(VALIDATORS)) {
+      if (!seen.has(prop) && store.get(prop) !== defaults[prop]) applyDelete(PREFIX + prop, revision);
     }
 
     // 2. Khởi tạo watcher bắt đầu từ revision + 1 để không sót sự kiện nào

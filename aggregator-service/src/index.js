@@ -126,7 +126,9 @@ async function main() {
   check().then(() => app.locals.sagas.recover())
     .then((k) => k && log.info(`Khôi phục ${k} saga dở dang`))
     .catch((e) => log.error('khôi phục saga lỗi', { error: e.message }));
-  setInterval(check, Number(env('HEALTH_INTERVAL_MS', 5000)));
+  // PD-11: mỗi vòng đọc lại healthIntervalMs (đổi qua etcd thì vòng sau áp dụng ngay, không cần restart)
+  const scheduleCheck = () => setTimeout(() => check().finally(scheduleCheck), config.get('healthIntervalMs'));
+  scheduleCheck();
 
   const port = Number(env('PORT', 8000));
   server.listen(port, () => log.info(`Aggregator chạy ở cổng ${port}`));

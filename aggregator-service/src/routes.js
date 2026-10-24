@@ -18,6 +18,8 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, co
   mountMetrics(app, { reg });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
+  // PD-11: timeout ghi đọc lại mỗi lần gọi (đổi qua etcd là áp dụng ngay cho đặt chỗ, saga, trả tiền)
+  const reserveMs = () => (config ? config.get('reserveTimeoutMs', reserveTimeoutMs) : reserveTimeoutMs);
 
   // Chuyển tiếp tới đúng node (định tuyến theo parking_id). Node OFFLINE: từ chối ngay, không xếp hàng ngầm.
   // Timeout khi GHI: không biết node đã làm hay chưa (bài toán hai tướng quân) -> 504, client retry cùng key.
@@ -126,9 +128,8 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, co
     const key = req.get('idempotency-key');
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
     const { slotCode, licensePlate, startTime, durationMinutes } = req.body ?? {};
-    const effectiveTimeout = config ? config.get('reserveTimeoutMs', reserveTimeoutMs) : reserveTimeoutMs;
     await forward(res, reg.get(req.params.id), '/api/reservations', {
-      method: 'POST', ms: effectiveTimeout, retry: true,   // an toàn vì requestId idempotent
+      method: 'POST', ms: reserveMs(), retry: true,   // an toàn vì requestId idempotent
       body: { requestId: `${req.user.sub}:${key}`, userId: req.user.sub, slotCode, licensePlate, startTime, durationMinutes },
     });
   });
@@ -140,7 +141,7 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, co
   });
 
   // PT-07: đặt chỗ cho nhiều xe ở nhiều bãi (Saga). Cùng Idempotency-Key -> trả lại saga cũ.
-  const sagas = makeSagas({ pool, reg, timeoutMs: reserveTimeoutMs });
+  const sagas = makeSagas({ pool, reg, timeoutMs: reserveMs });
   app.locals.sagas = sagas;
   app.post('/api/group-reservations', need('USER'), async (req, res) => {
     const key = req.get('idempotency-key');
@@ -213,7 +214,7 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, co
     await forward(res, reg.get(req.params.id), '/api/reservations');
   });
 
-  mountSessions(app, { reg, need, forward, reserveTimeoutMs });
+  mountSessions(app, { reg, need, forward, reserveTimeoutMs: reserveMs });
 
   // Quản trị: trạng thái các node; thêm bãi mới không cần sửa code (tính mở rộng).
   app.get('/api/admin/nodes', need('ADMIN'), (_req, res) =>

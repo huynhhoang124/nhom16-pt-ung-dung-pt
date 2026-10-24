@@ -249,6 +249,25 @@ test('PD-11 config: khởi tạo watch với startRevision(revision + 1) từ sn
   await config.stop();
 });
 
+test('PD-11 config: resync sau khi mất watch đưa khoá đã bị xoá về giá trị mặc định', async () => {
+  let kvs = [{ key: Buffer.from('/nhom16/config/aggregator/timeoutMs'), value: Buffer.from('1200') }];
+  const mockClient = {
+    getAll: () => ({ prefix: () => ({ exec: async () => ({ header: { revision: '10' }, kvs }) }) }),
+    watch: () => ({ prefix: () => ({ startRevision: () => ({ create: async () => ({ on: () => {}, cancel: async () => {} }) }) }) }),
+    close: () => {},
+  };
+  const config = makeConfig({ client: mockClient, log: { info() {}, warn() {}, error() {} } });
+
+  await config.syncAndWatch();
+  assert.equal(config.get('timeoutMs'), 1200);
+
+  kvs = [];   // khoá bị xoá trong lúc watch đứt
+  await config.syncAndWatch();
+  assert.equal(config.get('timeoutMs'), DEFAULTS.timeoutMs);
+
+  await config.stop();
+});
+
 test('PD-11 config routes: GET /api/config yêu cầu quyền ADMIN, không có token nhận 401', async () => {
   const jwt = require('jsonwebtoken');
   const config = makeConfig({ defaults: { timeoutMs: 2000 } });
