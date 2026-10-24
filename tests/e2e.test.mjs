@@ -40,7 +40,7 @@ const agg = (path, { token, key, ...o } = {}) => http(AGG + path, {
 const agg2 = (path, { token, key, ...o } = {}) => http(AGG2 + path, {
   ...o, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { 'idempotency-key': key } : {}) },
 });
-const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { 'x-internal-key': KEY } });
+const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { 'x-internal-key': KEY, ...(o.headers || {}) } });
 const FM1 = process.env.FAILOVER_MANAGER_1_URL ?? 'http://localhost:8051';
 const FM2 = process.env.FAILOVER_MANAGER_2_URL ?? 'http://localhost:8052';
 const fm1 = (path, o = {}) => http(FM1 + path, o);
@@ -812,10 +812,12 @@ test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng
 
       // 4. Chờ failover-manager phát hiện lỗi liên tiếp và promote db-a-replica, cập nhật etcd
       await until('Failover hoàn tất trên etcd (epoch >= 2)', async () => {
-        const st = (await fm1('/status')).body;
-        const pA = st?.parkings?.find((p) => p.parkingId === 'A');
-        return pA && pA.primaryUrl.includes('replica');
-      }, 25_000);
+        const st1 = (await fm1('/status')).body;
+        const st2 = (await fm2('/status')).body;
+        const pA1 = st1?.parkings?.find((p) => p.parkingId === 'A');
+        const pA2 = st2?.parkings?.find((p) => p.parkingId === 'A');
+        return (pA1 && pA1.primaryUrl.includes('replica')) || (pA2 && pA2.primaryUrl.includes('replica'));
+      }, 45_000);
 
       // 5. Node A tự nhận primary mới qua etcd watch mà không cần khởi động lại, đặt chỗ thành công
       await sleep(1500);
@@ -834,6 +836,11 @@ test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng
     } finally {
       compose('start db-a');
       compose('--profile coord stop failover-manager-1 failover-manager-2');
+      try {
+        sql('db-a', 'UPDATE db_epoch SET epoch = 1');
+        compose('exec -T etcd-1 etcdctl put /nhom16/parking/A/db/epoch 1');
+        compose('exec -T etcd-1 etcdctl put /nhom16/parking/A/db/primary postgres://postgres:dev@db-a/parking');
+      } catch {}
     }
   }
 );
@@ -854,6 +861,8 @@ test('TC69 zombie primary fencing: DB primary cũ sống lại (mang epoch cũ) 
         },
         headers: { 'x-test-simulate-stale-epoch': '1' },
       });
+      assert.equal(checkRes.status, 409);
+      assert.equal(checkRes.body?.error, 'STALE_DB_EPOCH');
       // Kiểm tra cơ chế zombie primary fencing
       console.log('TC69 - PASS: Zombie primary bị chặn ghi, bảo vệ tính nhất quán dữ liệu');
     } finally {

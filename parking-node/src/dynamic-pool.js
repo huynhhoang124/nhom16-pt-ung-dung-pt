@@ -14,6 +14,7 @@ async function makeDynamicPool({
   log = console,
   poolFactory = (opts) => new Pool(opts),
   etcdClient = null,
+  watchWindowMs = Number(process.env.ETCD_WATCH_WINDOW_MS || 3000),
 } = {}) {
   // Tương thích ngược 100% khi không có etcd
   if (!etcdEndpoints && !etcdClient) {
@@ -23,6 +24,7 @@ async function makeDynamicPool({
 
   let currentUrl = defaultDatabaseUrl;
   let currentEpoch = 1;
+  let lastEtcdContact = Date.now();
   const listeners = [];
 
   const client = etcdClient || new Etcd3({
@@ -40,6 +42,7 @@ async function makeDynamicPool({
       client.get(primaryKey).string(),
       client.get(epochKey).string(),
     ]);
+    lastEtcdContact = Date.now();
     if (etcdPrimary && etcdPrimary !== currentUrl) {
       log.info?.(`[dynamic-pool] Khởi tạo primary từ etcd: ${etcdPrimary}`);
       currentUrl = etcdPrimary;
@@ -57,10 +60,12 @@ async function makeDynamicPool({
 
   let primaryWatcher = null;
   let epochWatcher = null;
+  let heartbeatTimer = null;
 
   try {
     primaryWatcher = await client.watch().key(primaryKey).create();
     primaryWatcher.on('put', (res) => {
+      lastEtcdContact = Date.now();
       const val = res.value?.toString();
       if (val && val !== currentUrl) {
         log.info?.(`[dynamic-pool] DB primary thay đổi trên etcd: ${currentUrl} -> ${val}`);
@@ -71,6 +76,7 @@ async function makeDynamicPool({
 
     epochWatcher = await client.watch().key(epochKey).create();
     epochWatcher.on('put', (res) => {
+      lastEtcdContact = Date.now();
       const val = res.value?.toString();
       if (val) {
         const newEp = Number(val);
@@ -79,6 +85,18 @@ async function makeDynamicPool({
       }
     });
     epochWatcher.on('error', (err) => log.error?.('[dynamic-pool] Watcher epoch lỗi', { error: err.message }));
+
+    if (!etcdClient) {
+      const pingInterval = Math.min(1000, Math.max(500, Math.floor(watchWindowMs / 2)));
+      heartbeatTimer = setInterval(async () => {
+        try {
+          await client.get(epochKey).string();
+          lastEtcdContact = Date.now();
+        } catch (err) {
+          log.warn?.('[dynamic-pool] Heartbeat etcd thất bại', { error: err.message });
+        }
+      }, pingInterval);
+    }
   } catch (e) {
     log.warn?.('[dynamic-pool] Không thể tạo etcd watcher', { error: e.message });
   }
@@ -106,6 +124,18 @@ async function makeDynamicPool({
       currentEpoch = Number(n);
     },
 
+    setLastEtcdContact(ts) {
+      lastEtcdContact = ts;
+    },
+
+    setWatchWindow(ms) {
+      watchWindowMs = ms;
+    },
+
+    getLastEtcdContact() {
+      return lastEtcdContact;
+    },
+
     switchPrimary(newUrl) {
       if (!newUrl || newUrl === currentUrl) return;
       log.info?.(`[dynamic-pool] Đổi kết nối Pool: ${currentUrl} -> ${newUrl}`);
@@ -124,6 +154,17 @@ async function makeDynamicPool({
 
     async checkEpoch(clientConn) {
       if (currentEpoch == null) return;
+
+      // Điểm 1: Kiểm tra cửa sổ an toàn Lease/Watch X giây chống đọc cache etcd_epoch cũ
+      const elapsed = Date.now() - lastEtcdContact;
+      if (elapsed > watchWindowMs) {
+        const err = new Error(`ETCD_UNREACHABLE: Mất kết nối etcd quá ${elapsed}ms (> ${watchWindowMs}ms), từ chối ghi vì etcd_epoch có thể đã cũ`);
+        err.code = 'ETCD_UNREACHABLE';
+        err.status = 503;
+        err.details = { elapsed, watchWindowMs, etcdEpoch: currentEpoch };
+        throw err;
+      }
+
       const res = await clientConn.query('SELECT epoch FROM db_epoch LIMIT 1');
       const dbEpoch = res.rows.length ? Number(res.rows[0].epoch) : 1;
       if (dbEpoch !== currentEpoch) {
@@ -150,6 +191,10 @@ async function makeDynamicPool({
     },
 
     async end() {
+      if (heartbeatTimer) {
+        clearInterval(heartbeatTimer);
+        heartbeatTimer = null;
+      }
       if (primaryWatcher) {
         try { await primaryWatcher.cancel(); } catch { /* ignore */ }
         primaryWatcher = null;

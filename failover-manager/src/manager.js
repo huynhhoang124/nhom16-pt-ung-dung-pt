@@ -6,11 +6,10 @@
 
 const { Client } = require('pg');
 
-function defaultPgClientFactory(url, timeoutMs = 1000) {
+function defaultPgClientFactory(url, timeoutMs = 10000) {
   const client = new Client({
     connectionString: url,
-    connectionTimeoutMillis: timeoutMs,
-    query_timeout: timeoutMs,
+    connectionTimeoutMillis: Math.max(10000, timeoutMs),
   });
   return {
     async connect() {
@@ -31,11 +30,15 @@ function makeFailoverManager({
   parkings = [],
   elector,
   checkIntervalMs = 1000,
+  waitWindowMs = process.env.FAILOVER_WAIT_WINDOW_MS !== undefined
+    ? Number(process.env.FAILOVER_WAIT_WINDOW_MS)
+    : (process.env.NODE_ENV === 'test' ? 10 : 3500),
   log = console,
   pgClientFactory = defaultPgClientFactory,
 } = {}) {
   let timer = null;
   let running = false;
+  let isChecking = false;
 
   // Khởi tạo trạng thái cho từng bãi
   const parkingStates = parkings.map((p) => ({
@@ -50,10 +53,30 @@ function makeFailoverManager({
     isFailingOver: false,
   }));
 
+  // Đồng bộ primary/epoch từ etcd để follower instance cũng luôn biết primary hiện tại
+  if (etcdClient) {
+    for (const state of parkingStates) {
+      const primaryKey = `/nhom16/parking/${state.parkingId}/db/primary`;
+      const updateFromEtcd = (val) => {
+        if (val && val !== state.primaryUrl) {
+          log.info?.(`[failover-manager] Cập nhật primary bãi ${state.parkingId} từ etcd: ${state.primaryUrl} -> ${val}`);
+          state.primaryUrl = val;
+        }
+      };
+
+      etcdClient.get(primaryKey).string().then(updateFromEtcd).catch(() => {});
+      if (typeof etcdClient.watch === 'function') {
+        etcdClient.watch().key(primaryKey).create().then((w) => {
+          w.on('put', (res) => updateFromEtcd(res.value?.toString()));
+        }).catch(() => {});
+      }
+    }
+  }
+
   async function checkPrimary(state) {
     let client = null;
     try {
-      client = await pgClientFactory(state.primaryUrl, 500);
+      client = await pgClientFactory(state.primaryUrl, 3000);
       await client.connect();
       await client.query('SELECT 1');
       state.primaryFailures = 0;
@@ -71,7 +94,7 @@ function makeFailoverManager({
     if (!state.replicaUrl) return true;
     let client = null;
     try {
-      client = await pgClientFactory(state.replicaUrl, 500);
+      client = await pgClientFactory(state.replicaUrl, 3000);
       await client.connect();
       await client.query('SELECT 1');
       state.replicaFailures = 0;
@@ -98,7 +121,7 @@ function makeFailoverManager({
   async function degradeToAsync(state) {
     let client = null;
     try {
-      log.warn?.(`WARN: degraded sync replication to async for parking ${state.parkingId}`);
+      log.warn?.(`WARN: degraded sync replication to async for parking ${state.parkingId}. Trade-off: Consistency -> Availability after 3s down. RPO > 0: transactions committed during async window may be lost if primary crashes`);
       client = await pgClientFactory(state.primaryUrl, 2000);
       await client.connect();
       await client.query("ALTER SYSTEM SET synchronous_standby_names = ''");
@@ -116,26 +139,28 @@ function makeFailoverManager({
     if (state.isFailingOver) return { ok: false, reason: 'ALREADY_FAILING_OVER' };
     if (!state.replicaUrl) return { ok: false, reason: 'NO_REPLICA' };
 
+    const targetReplicaUrl = state.replicaUrl;
     state.isFailingOver = true;
     log.info?.(`[failover-manager] === BẮT ĐẦU FAILOVER CHO BÃI ${state.parkingId} ===`);
 
     try {
       let replicaClient = null;
+      let nextEpoch = 2;
       try {
         // Bước 1: Kết nối sang replica, đọc SELECT pg_last_wal_replay_lsn() để kiểm tra replica còn sống
         log.info?.(`[failover-manager] Bước 1: Kiểm tra replica còn sống (SELECT pg_last_wal_replay_lsn)...`);
-        replicaClient = await pgClientFactory(state.replicaUrl, 2000);
+        replicaClient = await pgClientFactory(targetReplicaUrl, 5000);
         await replicaClient.connect();
         const lsnRes = await replicaClient.query('SELECT pg_last_wal_replay_lsn() AS lsn');
         const lsn = lsnRes.rows?.[0]?.lsn;
         log.info?.(`[failover-manager] Replica bãi ${state.parkingId} còn sống, last replay LSN: ${lsn}`);
 
-        // Bước 2 (Giao dịch CAS nguyên tử trên etcd TRƯỚC KHI promote):
+        // Bước A (Giao dịch CAS nguyên tử trên etcd TRƯỚC KHI promote):
         // Gộp cả 2 điều kiện:
         // 1) Khoá bầu leader /nhom16/election/failover vẫn đang thuộc về bản failover-manager hiện tại
         // 2) Khoá /nhom16/parking/<bãi>/db/epoch hiện tại bằng N
         // Nếu giao dịch CAS thất bại -> dừng ngay lập tức, tuyệt đối KHÔNG gọi pg_promote()
-        log.info?.(`[failover-manager] Bước 2: Giao dịch CAS trên etcd TRƯỚC KHI promote cho bãi ${state.parkingId}...`);
+        log.info?.(`[failover-manager] Bước A: Giao dịch CAS trên etcd tăng epoch cho bãi ${state.parkingId}...`);
         if (elector && !elector.isLeader()) {
           log.warn?.(`[failover-manager] Bản thân không còn là Leader -> huỷ failover bãi ${state.parkingId}`);
           return { ok: false, reason: 'NOT_LEADER' };
@@ -148,7 +173,7 @@ function makeFailoverManager({
 
         const currentEpochStr = await etcdClient.get(epochKey).string();
         const N = currentEpochStr ? Number(currentEpochStr) : 1;
-        const nextEpoch = N + 1;
+        nextEpoch = N + 1;
 
         let casCondition = currentEpochStr
           ? etcdClient.if(epochKey, 'Value', '==', String(N))
@@ -159,10 +184,7 @@ function makeFailoverManager({
         }
 
         const casRes = await casCondition
-          .then(
-            etcdClient.put(epochKey).value(String(nextEpoch)),
-            etcdClient.put(primaryKey).value(state.replicaUrl)
-          )
+          .then(etcdClient.put(epochKey).value(String(nextEpoch)))
           .else(etcdClient.get(epochKey))
           .commit();
 
@@ -170,45 +192,67 @@ function makeFailoverManager({
           log.warn?.(`[failover-manager] Giao dịch CAS trên etcd thất bại cho bãi ${state.parkingId} (mất quyền leader hoặc epoch đã đổi) -> Dừng ngay, KHÔNG promote replica.`);
           return { ok: false, reason: 'CAS_FAILED' };
         }
-        log.info?.(`[failover-manager] Bước 2: CAS etcd thành công: epoch=${nextEpoch}, primary=${state.replicaUrl}`);
+        log.info?.(`[failover-manager] Bước A: CAS etcd thành công: epoch=${nextEpoch} cho bãi ${state.parkingId}`);
 
-        // Bước 3: Thăng cấp replica thành primary (SELECT pg_promote) SAU KHI CAS thành công
-        log.info?.(`[failover-manager] Bước 3: Thăng cấp replica thành primary (SELECT pg_promote)...`);
-        await replicaClient.query('SELECT pg_promote()');
-        log.info?.(`[failover-manager] Đã gọi pg_promote() thành công trên replica bãi ${state.parkingId}`);
+        // Bước B: Chờ một khoảng waitWindowMs (> X giây) nhằm đảm bảo mọi kết nối ở Node đang giữ epoch = N cũ hoặc đã nhận được watch epoch = N + 1, hoặc đã hết hạn cửa sổ X giây và ngừng ghi vào Primary cũ.
+        if (waitWindowMs > 0) {
+          log.info?.(`[failover-manager] Bước B: Chờ cửa sổ an toàn ${waitWindowMs}ms trước khi promote replica...`);
+          await new Promise((resolve) => setTimeout(resolve, waitWindowMs));
+        }
+
+        // Bước C: Gọi SELECT pg_promote() trên Replica
+        log.info?.(`[failover-manager] Bước C: Thăng cấp replica thành primary (SELECT pg_promote)...`);
+        try {
+          await replicaClient.query('SELECT pg_promote()');
+          log.info?.(`[failover-manager] Đã gọi pg_promote() thành công trên replica bãi ${state.parkingId}`);
+        } catch (promoteErr) {
+          // Bước D (Xử lý khi pg_promote() thất bại): Nếu pg_promote() ném lỗi, giữ nguyên epoch = N + 1 (không bao giờ giảm epoch), ghi log cảnh báo CRITICAL: FAILOVER_PROMOTE_FAILED và không trỏ primary sang replica lỗi.
+          log.error?.(`CRITICAL: FAILOVER_PROMOTE_FAILED cho bãi ${state.parkingId}: ${promoteErr.message}`);
+          return { ok: false, error: 'FAILOVER_PROMOTE_FAILED', epoch: nextEpoch, message: promoteErr.message };
+        }
+
+        // Cập nhật primary trên etcd sau khi promote thành công
+        await etcdClient.put(primaryKey).value(targetReplicaUrl);
       } finally {
-        if (replicaClient) await replicaClient.end();
+        if (replicaClient) await replicaClient.end().catch(() => {});
       }
 
-      const epochKey = `/nhom16/parking/${state.parkingId}/db/epoch`;
-      const currentEpochStr = await etcdClient.get(epochKey).string();
-      const nextEpoch = currentEpochStr ? Number(currentEpochStr) : 2;
-
-      // Bước 4: Ghi epoch mới (N + 1) vào bảng db_epoch trên primary mới (replica vừa thăng cấp)
+      // Bước 4: Ghi epoch mới (nextEpoch) vào bảng db_epoch trên primary mới (replica vừa thăng cấp)
       log.info?.(`[failover-manager] Bước 4: Ghi epoch ${nextEpoch} vào bảng db_epoch trên primary mới...`);
-      let newPrimaryClient = null;
-      try {
-        newPrimaryClient = await pgClientFactory(state.replicaUrl, 5000);
-        await newPrimaryClient.connect();
-        const updateRes = await newPrimaryClient.query('UPDATE db_epoch SET epoch = $1', [nextEpoch]);
-        if ((updateRes.rowCount ?? 0) === 0) {
-          await newPrimaryClient.query('INSERT INTO db_epoch(epoch) VALUES ($1)', [nextEpoch]);
+      let updateOk = false;
+      for (let attempt = 1; attempt <= 10; attempt++) {
+        let newPrimaryClient = null;
+        try {
+          newPrimaryClient = await pgClientFactory(targetReplicaUrl, 5000);
+          await newPrimaryClient.connect();
+          const updateRes = await newPrimaryClient.query('UPDATE db_epoch SET epoch = $1', [nextEpoch]);
+          if ((updateRes.rowCount ?? 0) === 0) {
+            await newPrimaryClient.query('INSERT INTO db_epoch(epoch) VALUES ($1)', [nextEpoch]);
+          }
+          log.info?.(`[failover-manager] Cập nhật db_epoch thành công với epoch ${nextEpoch}`);
+          updateOk = true;
+          break;
+        } catch (upErr) {
+          log.warn?.(`[failover-manager] Thử cập nhật db_epoch lần ${attempt}/10: ${upErr.message}`);
+          await new Promise((r) => setTimeout(r, 500));
+        } finally {
+          if (newPrimaryClient) await newPrimaryClient.end().catch(() => {});
         }
-        log.info?.(`[failover-manager] Cập nhật db_epoch thành công với epoch ${nextEpoch}`);
-      } finally {
-        if (newPrimaryClient) await newPrimaryClient.end();
+      }
+      if (!updateOk) {
+        throw new Error(`Không thể cập nhật db_epoch lên primary mới sau 10 lần thử`);
       }
 
       // Cập nhật cấu hình bãi trong bộ nhớ
       const oldPrimary = state.primaryUrl;
-      state.primaryUrl = state.replicaUrl;
+      state.primaryUrl = targetReplicaUrl;
       state.replicaUrl = null;
       state.primaryFailures = 0;
       log.info?.(`[failover-manager] === HOÀN TẤT FAILOVER BÃI ${state.parkingId}! ${oldPrimary} -> ${state.primaryUrl} (epoch ${nextEpoch}) ===`);
       return { ok: true, newPrimary: state.primaryUrl, epoch: nextEpoch };
     } catch (err) {
-      log.error?.(`[failover-manager] Lỗi trong lúc thực hiện failover bãi ${state.parkingId}: ${err.message}`);
-      return { ok: false, error: err.message };
+      log.error?.(`[failover-manager] Lỗi trong lúc thực hiện failover bãi ${state.parkingId}: ${err?.message || err}`);
+      return { ok: false, error: err?.message || String(err) };
     } finally {
       state.isFailingOver = false;
     }
@@ -230,13 +274,19 @@ function makeFailoverManager({
   }
 
   async function checkOnce() {
-    if (!elector || !elector.isLeader()) return;
-    for (const state of parkingStates) {
-      try {
-        await checkParking(state);
-      } catch (err) {
-        log.error?.(`[failover-manager] Lỗi khi kiểm tra bãi ${state.parkingId}`, { error: err.message });
+    if (isChecking) return;
+    isChecking = true;
+    try {
+      if (!elector || !elector.isLeader()) return;
+      for (const state of parkingStates) {
+        try {
+          await checkParking(state);
+        } catch (err) {
+          log.error?.(`[failover-manager] Lỗi khi kiểm tra bãi ${state.parkingId}`, { error: err.message });
+        }
       }
+    } finally {
+      isChecking = false;
     }
   }
 

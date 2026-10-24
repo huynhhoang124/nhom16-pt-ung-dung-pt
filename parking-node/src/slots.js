@@ -22,6 +22,9 @@ async function tx(pool, fn) {
   } catch (e) {
     await c.query('ROLLBACK');
     if (e instanceof Abort) return { code: e.code, body: e.body };
+    if (e.code === 'ETCD_UNREACHABLE' || e.status === 503) {
+      return { code: 503, body: { error: 'ETCD_UNREACHABLE', message: e.message, ...e.details } };
+    }
     if (e.code === 'STALE_DB_EPOCH' || e.status === 409) {
       return { code: 409, body: { error: 'STALE_DB_EPOCH', message: e.message, ...e.details } };
     }
