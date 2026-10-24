@@ -13,7 +13,7 @@ x-pg: &pg
 # PT-03: danh sách nút RabbitMQ; client tự chuyển nút khi nút đang nối chết. Mặc định 1 nút; bật profile ha thì đặt
 # danh sách 3 nút trong .env. KHÔNG để sẵn tên rabbitmq-2/3 khi chúng không chạy: tra DNS tên không tồn tại mất ~3,6 s
 # và chặn luôn các lần tra tên khác trong tiến trình (vd parking-a) -> Aggregator thấy cả 3 bãi timeout cùng lúc.
-x-amqp: &amqp ${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}
+x-amqp: &amqp ${RABBITMQ_URL:-amqp://parking:parking@rabbitmq/%2F}
 
 x-rabbit: &rabbit
   image: rabbitmq:3.13-management-alpine
@@ -38,6 +38,8 @@ services:
     ports: ["5672:5672", "15672:15672"]          # 15672 = giao diện quản lý (parking/parking)
     volumes:
       - rabbitmq-data:/var/lib/rabbitmq
+      - ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro
+      - "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"
       - ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro   # bật rabbitmq_prometheus (:15692) cho GS-04
       - ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro
   # --- PT-03: thêm 2 nút thành cụm 3 nút (docker compose --profile ha up -d). Demo: docker compose stop rabbitmq ---
@@ -47,14 +49,14 @@ services:
     hostname: rabbitmq-2
     entrypoint: ["/bin/sh", "/join-wait.sh"]      # lần đầu chờ nút gốc rồi mới vào cụm (xem rabbitmq/join-wait.sh)
     command: ["rabbitmq-server"]
-    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro]
+    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro, ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro, "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"]
   rabbitmq-3:
     <<: *rabbit
     profiles: [ha]
     hostname: rabbitmq-3
     entrypoint: ["/bin/sh", "/join-wait.sh"]      # lần đầu chờ nút gốc rồi mới vào cụm (xem rabbitmq/join-wait.sh)
     command: ["rabbitmq-server"]
-    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro]
+    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro, ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro, "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"]
 
   db-a:                                           # PT-02: bản chính của bãi A, có user 'replicator' cho bản sao
     <<: *pg
@@ -108,6 +110,7 @@ services:
       JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}
       ETCD_ENDPOINTS: ${ETCD_ENDPOINTS:-}
       ZONE: ${ZONE:-bac}
+      ENABLE_TEST_FAULTS: ${ENABLE_TEST_FAULTS:-0}
       NODES: >-
         [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875,"publicUrl":"http://localhost:8001"},
          {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002"},

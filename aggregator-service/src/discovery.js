@@ -78,6 +78,9 @@ function startDiscovery({
     } else {
       n.url = url;
       if (zone) n.zone = zone;
+      if (data.name && (!n.name || data.name !== `Bãi ${parkingId}`)) {
+        n.name = data.name;
+      }
       reg.setLease(parkingId, true);
     }
 

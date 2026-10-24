@@ -113,6 +113,7 @@ function makeLeaderElector({
     let lease = null;
     try {
       lease = client.lease(leaseTtlS);
+      const leaseId = await lease.grant();
       lease.on('lost', (err) => {
         log.error?.('[leader-election] Lease etcd bị mất', { error: err?.message, instanceId });
         if (activeLease === lease) {
@@ -123,7 +124,7 @@ function makeLeaderElector({
       // CAS transaction: Nếu ELECTION_KEY chưa tồn tại (Version == 0) thì ghi đè với lease
       const tx = client.if(ELECTION_KEY, 'Version', '==', 0);
       const res = await tx
-        .then(client.put(ELECTION_KEY).value(payload).lease(lease))
+        .then(client.put(ELECTION_KEY).value(payload).lease(leaseId))
         .else(client.get(ELECTION_KEY))
         .commit();
 

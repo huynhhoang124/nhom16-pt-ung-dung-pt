@@ -70,14 +70,25 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
 
   const send = (res, r) => res.status(r.code).json(r.body);
 
-  // PD-10: Endpoint nhận việc định kỳ có Fencing Token
+  // PD-10: Endpoint nhận việc định kỳ có Fencing Token (nằm trong cùng một giao dịch DB BEGIN ... COMMIT)
   app.post('/api/internal/fenced-job', async (req, res) => {
     const { job = 'default', token } = req.body ?? {};
-    const check = await checkFencing(pool, job, token);
-    if (!check.ok) {
-      return res.status(check.code || 409).json({ error: check.error, job, token });
+    const c = await pool.connect();
+    try {
+      await c.query('BEGIN');
+      const check = await checkFencing(c, job, token);
+      if (!check.ok) {
+        await c.query('ROLLBACK');
+        return res.status(check.code || 409).json({ error: check.error, job, token });
+      }
+      await c.query('COMMIT');
+      res.json({ ok: true, job, maxToken: check.maxToken });
+    } catch (e) {
+      await c.query('ROLLBACK').catch(() => {});
+      throw e;
+    } finally {
+      c.release();
     }
-    res.json({ ok: true, job, maxToken: check.maxToken });
   });
 
   // PD-09 / TC64: Giả lập lỗi đứt kết nối etcd (chỉ cho phép khi bật cờ test ENABLE_TEST_FAULTS=1 hoặc FAULT_INJECTION=1)

@@ -7,7 +7,7 @@ const { mountMetrics } = require('./metrics');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000, config, leader }) {
+function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, config, leader }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
@@ -32,6 +32,22 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000, config, lead
   const info = (n) => ({ parkingId: n.id, name: n.name, address: n.address, lat: n.lat, lng: n.lng, publicUrl: n.publicUrl, status: n.status, lastSeen: n.lastSeen });
 
   app.get('/health', (_req, res) => res.json({ status: 'UP' }));
+
+  // PD-01: administrative publish surface; 202 means broker confirm, not node completion.
+  // No registry lookup: a 404 here must come from RabbitMQ mandatory basic.return.
+  app.post('/api/admin/parkings/:id/commands', need('ADMIN'), async (req, res) => {
+    if (!commands) return res.status(503).json({ error: 'BROKER_UNAVAILABLE' });
+    try {
+      const result = await commands.send(req.params.id, req.body?.type, req.body?.payload, {
+        messageId: req.body?.messageId,
+        correlationId: req.body?.correlationId,
+        actor: { userId: req.user.sub, role: req.user.role },
+      });
+      res.status(202).json({ ...result, processed: false });
+    } catch (e) {
+      res.status(e.status ?? 500).json({ error: e.code ?? 'INTERNAL_ERROR' });
+    }
+  });
 
   // Sai mật khẩu 5 lần / 15 phút theo username + IP thì khoá tạm (chống dò mật khẩu).
   app.post('/api/auth/login', async (req, res) => {
@@ -65,16 +81,16 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000, config, lead
   });
 
   app.get('/api/parkings', (_req, res) => res.json(reg.all().map(info)));
-  // PD-11: Tra cứu cấu hình động hiện tại
-  app.get('/api/config', (_req, res) => res.json(config ? config.all() : {}));
-  app.get('/api/config/:key', (req, res) => {
+  // PD-11: Tra cứu cấu hình động hiện tại (chỉ ADMIN)
+  app.get('/api/config', need('ADMIN'), (_req, res) => res.json(config ? config.all() : {}));
+  app.get('/api/config/:key', need('ADMIN'), (req, res) => {
     if (!config) return res.status(404).json({ error: 'CONFIG_NOT_AVAILABLE' });
     const val = config.get(req.params.key);
     res.json({ key: req.params.key, value: val });
   });
 
-  // PD-10: Tra cứu trạng thái leader hiện tại
-  app.get('/api/leader', (_req, res) => {
+  // PD-10: Tra cứu trạng thái leader hiện tại (chỉ ADMIN)
+  app.get('/api/leader', need('ADMIN'), (_req, res) => {
     res.json({
       isLeader: leader ? leader.isLeader() : true,
       fencingToken: leader ? leader.getToken() : null,
@@ -82,9 +98,10 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000, config, lead
     });
   });
 
-  // PD-10 / TC66: Giả lập lỗi pause leader (chỉ bật khi ENABLE_TEST_FAULTS=1)
+  // PD-10 / TC66: Giả lập lỗi pause leader (chỉ bật khi ENABLE_TEST_FAULTS=1 hoặc FAULT_INJECTION=1)
   app.post('/api/test/fault/leader-pause', async (req, res) => {
-    if (process.env.ENABLE_TEST_FAULTS !== '1') {
+    const enabled = process.env.ENABLE_TEST_FAULTS === '1' || process.env.FAULT_INJECTION === '1';
+    if (!enabled) {
       return res.status(403).json({ error: 'FAULT_INJECTION_DISABLED' });
     }
     const ms = Number(req.body?.ms || 15000);
@@ -120,8 +137,9 @@ function makeApp({ pool, reg, cache, auth, reserveTimeoutMs = 3000, config, lead
     const key = req.get('idempotency-key');
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
     const { slotCode, licensePlate, startTime, durationMinutes } = req.body ?? {};
+    const effectiveTimeout = config ? config.get('reserveTimeoutMs', reserveTimeoutMs) : reserveTimeoutMs;
     await forward(res, reg.get(req.params.id), '/api/reservations', {
-      method: 'POST', ms: reserveTimeoutMs, retry: true,   // an toàn vì requestId idempotent
+      method: 'POST', ms: effectiveTimeout, retry: true,   // an toàn vì requestId idempotent
       body: { requestId: `${req.user.sub}:${key}`, userId: req.user.sub, slotCode, licensePlate, startTime, durationMinutes },
     });
   });

@@ -60,7 +60,7 @@ const statusOf = async (id) => (await agg('/api/parkings')).body?.find((p) => p.
 // biển số ngẫu nhiên: lần chạy trước hỏng giữa chừng để xe còn trong bãi thì lần sau không bị PLATE_ALREADY_INSIDE
 const plate = () => `30A-${String(Math.random()).slice(2, 5)}.${String(Math.random()).slice(2, 4)}`;
 const freeSlot = async (id) => (await node(id, '/api/slots/available')).body[0].slotCode;
-const login = async (u) => (await agg('/api/auth/login', { method: 'POST', body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' } })).body.token;
+const login = async (u) => (await until(`đăng nhập ${u}`, async () => (await agg('/api/auth/login', { method: 'POST', body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' } })).body?.token, 10_000));
 
 // Dọn sau test (huỷ đặt chỗ, cho xe ra) để chạy lặp lại được nhiều lần.
 const undo = [];
@@ -71,7 +71,7 @@ test.after(async () => { for (const f of undo) await f(); });
 let tok;
 test.before(async () => {
   await until('3 bãi ONLINE', async () => (await Promise.all(['A', 'B', 'C'].map(statusOf))).every((s) => s === 'ONLINE'), 120_000);
-  tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a') };
+  tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a'), admin: await login('admin') };
 });
 
 test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bãi khác', T, () => {
@@ -83,6 +83,17 @@ test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bã
 test('TC01 tra cứu tổng hợp 3 bãi', T, async () => {
   const r = await agg('/api/parkings/availability');
   assert.deepEqual(r.body.map((p) => [p.parkingId, p.status, p.total]), [['A', 'ONLINE', 40], ['B', 'ONLINE', 60], ['C', 'ONLINE', 30]]);
+});
+
+test('TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh', T, async () => {
+  const admin = await login('admin');
+  const started = performance.now();
+  const r = await agg(`/api/admin/parkings/MISSING-${randomUUID()}/commands`, {
+    method: 'POST', token: admin, body: { type: 'reserve', payload: { slotCode: 'UNKNOWN' } },
+  });
+  assert.equal(r.status, 404);
+  assert.equal(r.body.error, 'PARKING_NOT_FOUND');
+  assert(performance.now() - started < 2500, 'mandatory return phải tới trước timeout publish 3s');
 });
 
 test('TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai', T, async () => {
@@ -572,6 +583,10 @@ test('TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd
   async () => {
     try {
       compose('--profile extra up -d db-d parking-d');
+      await until('parking-d sẵn sàng', async () => {
+        const r = await node('D', '/health');
+        return r.status === 200;
+      }, 30_000);
       const start = Date.now();
       await until('bãi D xuất hiện trong danh sách bãi của Aggregator <= 2s', async () => {
         const r = await agg('/api/parkings');
@@ -638,6 +653,7 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
   { ...T, skip: !process.env.COORD },
   async () => {
     const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put "${k}" "${v}"`);
+    const adminToken = tok?.admin ?? await login('admin');
 
     try {
       // 1. Cập nhật cấu hình timeoutMs trên etcd thành 500
@@ -645,7 +661,7 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
 
       // 2. Chờ Aggregator nhận cấu hình mới qua watch trong <= 2s mà không cần restart container
       await until('Aggregator nhận timeoutMs = 500', async () => {
-        const r = await agg('/api/config/timeoutMs');
+        const r = await agg('/api/config/timeoutMs', { token: adminToken });
         return r.status === 200 && r.body?.value === 500;
       }, 5000);
 
@@ -660,7 +676,7 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
       try {
         etcdPut('/nhom16/config/aggregator/timeoutMs', '2000');
         await until('Aggregator khôi phục timeoutMs = 2000', async () => {
-          const r = await agg('/api/config/timeoutMs');
+          const r = await agg('/api/config/timeoutMs', { token: adminToken });
           return r.status === 200 && r.body?.value === 2000;
         }, 5000);
       } catch { /* bỏ qua */ }
@@ -672,6 +688,7 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
 test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm leader mới trong <= 7s, metric = 1',
   { ...T, skip: !process.env.COORD },
   async () => {
+    const adminToken = tok?.admin ?? await login('admin');
     try {
       // 1. Khởi động bản Aggregator thứ 2
       compose('--profile ha up -d aggregator-2');
@@ -679,12 +696,12 @@ test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm l
 
       // 2. Xác định bản nào đang là Leader
       await until('Có ít nhất một bản là Leader', async () => {
-        const l1 = (await agg('/api/leader')).body?.isLeader;
-        const l2 = (await agg2('/api/leader')).body?.isLeader;
+        const l1 = (await agg('/api/leader', { token: adminToken })).body?.isLeader;
+        const l2 = (await agg2('/api/leader', { token: adminToken })).body?.isLeader;
         return l1 || l2;
       }, 10_000);
 
-      const r1 = (await agg('/api/leader')).body;
+      const r1 = (await agg('/api/leader', { token: adminToken })).body;
       const [leaderName, followerName, followerUrl] = r1?.isLeader
         ? ['aggregator', 'aggregator-2', agg2]
         : ['aggregator-2', 'aggregator', agg];
@@ -697,7 +714,7 @@ test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm l
       // 4. Chờ bản follower lên làm leader mới trong <= 7s (lease TTL 5s hết hạn trên etcd)
       const start = Date.now();
       await until('Bản follower trở thành Leader mới <= 7s', async () => {
-        const r = await followerUrl('/api/leader');
+        const r = await followerUrl('/api/leader', { token: adminToken });
         return r.status === 200 && r.body?.isLeader === true;
       }, 10_000);
       const elapsed = Date.now() - start;
@@ -719,17 +736,18 @@ test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm l
 test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token cũ -> bị node từ chối STALE_LEADER, metric tăng',
   { ...T, skip: !process.env.COORD },
   async () => {
+    const adminToken = tok?.admin ?? await login('admin');
     try {
       // 1. Khởi động bản Aggregator thứ 2
       compose('--profile ha up -d aggregator-2');
       await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
 
       // Đảm bảo aggregator (bản 1) là leader
-      let l1 = (await agg('/api/leader')).body;
+      let l1 = (await agg('/api/leader', { token: adminToken })).body;
       if (!l1?.isLeader) {
         await agg2('/api/test/fault/leader-pause', { method: 'POST', body: { ms: 5000 } });
-        await until('Aggregator 1 trở thành Leader', async () => (await agg('/api/leader')).body?.isLeader, 10_000);
-        l1 = (await agg('/api/leader')).body;
+        await until('Aggregator 1 trở thành Leader', async () => (await agg('/api/leader', { token: adminToken })).body?.isLeader, 10_000);
+        l1 = (await agg('/api/leader', { token: adminToken })).body;
       }
       assert.ok(l1?.isLeader, 'Aggregator 1 phải là leader');
       const token1 = l1.fencingToken;
@@ -741,11 +759,11 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
 
       // 3. Trong thời gian 5s lease của leader 1 hết hạn, Aggregator 2 lên làm leader với token mới (token2 > token1)
       await until('Aggregator 2 nhận quyền Leader với token lớn hơn', async () => {
-        const r2 = (await agg2('/api/leader')).body;
+        const r2 = (await agg2('/api/leader', { token: adminToken })).body;
         return r2?.isLeader && r2.fencingToken > token1;
       }, 10_000);
 
-      const token2 = (await agg2('/api/leader')).body.fencingToken;
+      const token2 = (await agg2('/api/leader', { token: adminToken })).body.fencingToken;
       console.log(`TC66 - Aggregator 2 đã trở thành Leader mới với token2: ${token2} > ${token1}`);
 
       // 4. Aggregator 2 thực thi công việc định kỳ trên Node A với token2 -> Node A cập nhật max_token = token2
