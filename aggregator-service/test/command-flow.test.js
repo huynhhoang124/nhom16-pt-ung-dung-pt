@@ -6,6 +6,16 @@ const {signature}=require('../src/command-signature');
 const {applyEvent}=require('../src/events');
 const user={sub:'user',role:'USER'},request={parkingId:'A',type:'reserve',user,payload:{slotCode:'A01'},key:'key',traceparent:'00-11111111111111111111111111111111-2222222222222222-01'};
 test('instance ID cannot collide with the durable recovery queue',()=>assert.throws(()=>makeCommandFlow({instanceId:'recovery'}),{code:'INVALID_AGGREGATOR_ID'}));
+test('command readiness requires both reply and publisher connections',()=>{
+  const flow=makeCommandFlow({instanceId:'1'});
+  flow.setPublisherReady(false);
+  flow.setReady(true);
+  assert.equal(flow.isReady(),false);
+  flow.setPublisherReady(true);
+  assert.equal(flow.isReady(),true);
+  flow.setPublisherReady(false);
+  assert.equal(flow.isReady(),false);
+});
 async function completed(flow){const end=Date.now()+3000;while(Date.now()<end){const row=await flow.get('user:key');if(row.status==='DONE')return row;await new Promise(r=>setTimeout(r,20));}throw new Error('command did not complete');}
 function reply(opts,result={id:'reservation'},code=201){
   const b={schemaVersion:1,type:'COMMAND_RESULT',commandType:'reserve',commandId:opts.messageId,parkingId:'A',actor:opts.actor,

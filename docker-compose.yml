@@ -15,6 +15,13 @@ x-pg: &pg
 # và chặn luôn các lần tra tên khác trong tiến trình (vd parking-a) -> Aggregator thấy cả 3 bãi timeout cùng lúc.
 x-amqp: &amqp ${RABBITMQ_URL:-amqp://parking:parking@rabbitmq/%2F}
 
+x-otel-env: &otel-env
+  OTEL_SDK_DISABLED: "true"
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_METRICS_EXPORTER: none
+  OTEL_LOGS_EXPORTER: none
+
 x-rabbit: &rabbit
   image: rabbitmq:3.13-management-alpine
   environment: { RABBITMQ_DEFAULT_USER: parking, RABBITMQ_DEFAULT_PASS: parking, RABBITMQ_ERLANG_COOKIE: nhom16-cookie }
@@ -23,6 +30,8 @@ x-rabbit: &rabbit
 x-node-env: &node-env
   INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
   RABBITMQ_URL: *amqp
+  <<: *otel-env
+  OTEL_SERVICE_NAME: parking-node
   RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
   COMMAND_MODE: ${COMMAND_MODE:-broker}
   JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}          # PT-05: nhân viên gọi thẳng node khi Aggregator sập
@@ -92,6 +101,8 @@ services:
     build: ./aggregator-service
     image: nhom16/aggregator
     environment: &agg-env
+      <<: *otel-env
+      OTEL_SERVICE_NAME: aggregator
       INSTANCE_ID: "1"
       AGGREGATOR_ID: ${AGGREGATOR_ID:-1}
       COMMAND_MODE: ${COMMAND_MODE:-broker}
@@ -124,7 +135,10 @@ services:
   # NV-08: dịch vụ thông báo (nghe parking.events, gửi user.notifications); tắt thì hệ thống vẫn chạy
   notification:
     build: ./notification-service
-    environment: { RABBITMQ_URL: *amqp }
+    environment:
+      <<: *otel-env
+      OTEL_SERVICE_NAME: notification-service
+      RABBITMQ_URL: *amqp
     depends_on: { rabbitmq: { condition: service_healthy } }
 
   frontend:
@@ -143,6 +157,19 @@ services:
     depends_on: { db-d: { condition: service_healthy } }
 
   # --- GS-04: giám sát (docker compose --profile obs up -d) ---
+  otel-collector:
+    profiles: [obs]
+    image: otel/opentelemetry-collector-contrib:0.120.0
+    command: ["--config=/etc/otelcol-contrib/config.yml"]
+    volumes: [./observability/otel-collector.yml:/etc/otelcol-contrib/config.yml:ro]
+    ports: ["4317:4317", "4318:4318"]
+    depends_on: [jaeger]
+  jaeger:
+    profiles: [obs]
+    image: jaegertracing/all-in-one:1.62.0
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports: ["16686:16686"]
   prometheus:
     profiles: [obs]
     image: prom/prometheus:v2.55.1

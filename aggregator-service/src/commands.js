@@ -2,6 +2,7 @@ const { randomUUID } = require('node:crypto');
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
 const { signature } = require('./command-signature');
+const { context, propagation } = require('@opentelemetry/api');
 
 const EXCHANGE = 'parking.commands';
 const ATTEMPT_HEADER = 'x-command-publish-id';
@@ -15,7 +16,12 @@ function routingKey(parkingId, type) {
   return `cmd.${parkingId}.${type}`;
 }
 
-function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey } = {}) {
+function makeCommands(url, {
+  connect = (u) => amqp.connect(u, { timeout: 5000 }),
+  timeoutMs = 5000,
+  signingKey,
+  onStatus = () => {},
+} = {}) {
   const connectAny = makeConnector(url, connect);
   let current;
   let opening;
@@ -24,7 +30,10 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
   function discard(state, cause) {
     if (state.dead) return;
     state.dead = true;
-    if (current === state) current = undefined;
+    if (current === state) {
+      current = undefined;
+      onStatus(false);
+    }
     for (const p of state.pending.values()) p.finish(failure('PUBLISH_UNKNOWN_RESULT', 504, cause));
     state.conn.close().catch(() => {});
   }
@@ -57,6 +66,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
           await ch.assertExchange(EXCHANGE, 'topic', { durable: true });
           if (state.dead || stopped || attempt.expired) throw failure('BROKER_UNAVAILABLE', 503);
           current = state;
+          onStatus(true);
           return state;
         } catch (e) {
           discard(state, e);
@@ -84,10 +94,14 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       throw failure('INVALID_COMMAND', 400);
     }
     const headers = { ...opts.headers };
+    const carrier = {};
+    propagation.inject(context.active(), carrier);
     const envelope = { type, parkingId, schemaVersion: opts.schemaVersion ?? headers.schemaVersion ?? 1, payload: body };
     for (const k of ['issuedAt','deadlineAt']) if (opts[k] !== undefined) envelope[k]=opts[k];
     for (const field of ['causationId', 'fencingToken', 'hlc', 'traceparent', 'actor']) {
-      const value = opts[field] ?? headers[field];
+      const value = field === 'traceparent'
+        ? carrier.traceparent ?? opts.traceparent ?? headers.traceparent
+        : opts[field] ?? headers[field];
       if (value !== undefined) envelope[field] = headers[field] = value;
     }
     headers.schemaVersion = envelope.schemaVersion;
@@ -145,7 +159,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
     // A concurrent connection attempt is closed by channel() when it completes.
     await opening?.catch(() => {});
   }
-  return { send, close };
+  return { send, connect: channel, close };
 }
 
 module.exports = { makeCommands, routingKey, EXCHANGE, ATTEMPT_HEADER };

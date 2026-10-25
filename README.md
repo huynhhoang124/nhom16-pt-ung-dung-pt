@@ -21,8 +21,9 @@ docker compose up -d --build
 - Chịu lỗi nâng cao: bỏ dấu `#` ở 2 dòng `A_READ_DATABASE_URL` và `RABBITMQ_URL` trong `.env` (xem `.env.example`), rồi `docker compose --profile ha up -d` thêm bản sao DB bãi A, aggregator-2 và 2 nút RabbitMQ (cụm 3 nút, quorum queue). Thử `docker compose stop aggregator` hoặc `docker compose stop rabbitmq`: hệ thống vẫn chạy
 - Nâng cấp RabbitMQ: giữ volume, đối chiếu tham số queue trước khi nạp definitions; xem [PD-01: topology, kiểm thử và chuyển đổi bảo toàn dữ liệu](tai-lieu/pd-01-command-topology.md).
 - Mạng xấu: `docker compose -f docker-compose.yml -f docker-compose.chaos.yml --profile chaos up -d`, rồi `node scripts/net.mjs B latency 3500` / `down` / `loss 30` / `reset`
-- Giám sát: `docker compose --profile obs up -d` → Grafana http://localhost:3001 (dashboard nạp sẵn), Prometheus :9090
-- Lần theo một request qua mọi dịch vụ (log JSON, mã ở header `X-Request-Id` của response): `docker compose logs | grep <mã>`
+- Giám sát và tracing: `docker compose -f docker-compose.yml -f docker-compose.tracing.yml --profile obs up -d` → Grafana http://localhost:3001 (dashboard nạp sẵn), Prometheus :9090, Jaeger http://localhost:16686. Chi tiết PD-24: [distributed tracing](tai-lieu/pd-24-tracing.md).
+- Tracing chỉ bật với overlay trên để không gửi OTLP tới Collector khi profile `obs` chưa chạy. Các dịch vụ Node gửi trace qua Collector; xem trace HTTP/DB/RabbitMQ/outbox/Socket.IO tại Jaeger. Trace ID được ghi cùng `requestId` trong log JSON; tra một request bằng `docker compose logs | grep <mã>`
+- Kiểm tra PD-24 trên stack đã ghép PD-03/PD-07: `node tests/pd24-tracing.e2e.mjs` (in URL Jaeger cho TC77 và Saga; chụp hai ảnh để nộp).
 - Dừng: `docker compose down` (giữ dữ liệu) · `docker compose down -v` (xoá sạch)
 
 ## Làm giao diện không cần Docker

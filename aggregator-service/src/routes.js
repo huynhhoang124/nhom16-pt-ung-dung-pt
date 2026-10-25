@@ -4,6 +4,7 @@ const { mountSessions } = require('./sessions-routes');
 const { log, withRequestId } = require('./log');
 const { makeSagas } = require('./saga');
 const { mountMetrics } = require('./metrics');
+const { context, propagation } = require('@opentelemetry/api');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
@@ -21,8 +22,11 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
   async function broker(req,res,type,payload,key=req.get('idempotency-key')){
     if(!commandFlow)return res.status(503).json({error:'COMMAND_SERVICE_UNAVAILABLE'});
     try{
-      const traceparent=req.get('traceparent');
-      if(traceparent&&!/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/.test(traceparent))return res.status(400).json({error:'INVALID_TRACEPARENT'});
+      const incomingTraceparent=req.get('traceparent');
+      if(incomingTraceparent&&!/^00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}$/.test(incomingTraceparent))return res.status(400).json({error:'INVALID_TRACEPARENT'});
+      const carrier={};
+      propagation.inject(context.active(),carrier);
+      const traceparent=carrier.traceparent??incomingTraceparent;
       const out=await commandFlow.execute({parkingId:req.params.id,type,user:req.user,payload,key,traceparent});
       if(out.code===202)res.set('location',`/api/commands/${encodeURIComponent(out.body.commandId)}`);
       res.status(out.code).json(out.body);
@@ -50,7 +54,10 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
 
   const info = (n) => ({ parkingId: n.id, name: n.name, address: n.address, lat: n.lat, lng: n.lng, publicUrl: n.publicUrl, status: n.status, lastSeen: n.lastSeen });
 
-  app.get('/health', (_req, res) => res.json({ status: 'UP' }));
+  app.get('/health', (_req, res) => res.json({
+    status: 'UP',
+    commandsReady: commandMode !== 'broker' || commandFlow?.isReady() === true,
+  }));
 
   // PD-01: administrative publish surface; 202 means broker confirm, not node completion.
   // No registry lookup: a 404 here must come from RabbitMQ mandatory basic.return.

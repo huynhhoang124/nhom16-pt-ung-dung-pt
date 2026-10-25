@@ -1,9 +1,12 @@
+const { shutdown: shutdownTracing } = require('./tracing');
 const { Pool } = require('pg');
 const { init, readThrough } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
 const { expireDue, activateDue, warnExpiring } = require('./slots');
 const { log } = require('./log');
+const { startCommandConsumer, makeCommandProcessor, cleanupInbox } = require('./commands');
+const { makeReplyPublisher, makeReplyRelay } = require('./command-replies');
 
 const env = (k, d) => process.env[k] ?? d;
 const parkingId = env('PARKING_ID', 'A');
@@ -46,16 +49,54 @@ async function main() {
     jwtPublicKey: process.env.JWT_PUBLIC_KEY_B64 ? Buffer.from(process.env.JWT_PUBLIC_KEY_B64, 'base64').toString() : undefined,
     corsOrigins: env('CORS_ORIGIN', 'http://localhost:3000').split(','),
   });
-  app.listen(port, () => log.info(`Parking ${parkingId} chạy ở cổng ${port}`));
+  const server = app.listen(port, () => log.info(`Parking ${parkingId} chạy ở cổng ${port}`));
 
-  const relayOnce = makeRelay(pool, amqpPublisher(env('RABBITMQ_URL', 'amqp://localhost')));
-  setInterval(() => relayOnce().catch((e) => log.error('relay lỗi', { error: e.message })), 500);
+  const url = env('RABBITMQ_URL', 'amqp://localhost');
+  const publish = amqpPublisher(url);
+  const relayOnce = makeRelay(pool, publish);
+  const relayTimer = setInterval(() => relayOnce().catch((e) => log.error('relay lỗi', { error: e.message })), 500);
+  const internalKey = env('INTERNAL_KEY', 'dev');
+  const replyPublisher = makeReplyPublisher(url);
+  const replyOnce = makeReplyRelay(pool, replyPublisher.publish);
+  const replyTimer = setInterval(() => replyOnce().catch((e) => log.error('reply relay lỗi', { error: e.message })), 500);
+  const cleanupTimer = setInterval(() => cleanupInbox(pool).catch((e) =>
+    log.error('inbox cleanup lỗi', { error: e.message })), 30000);
+  const consumer = startCommandConsumer({
+    url, pool, parkingId, internalKey, log,
+    processCommand: makeCommandProcessor({
+      pool, parkingId, internalKey,
+      reservationMinutes: Number(env('RESERVATION_MINUTES', 15)),
+      qrSecret: env('QR_SECRET', `${internalKey}:qr:${parkingId}`),
+    }),
+  });
   // Hết hạn giữ chỗ + giữ chỗ cho lượt đặt trước sắp đến giờ (NV-01), theo đồng hồ DB của bãi.
   const minutes = Number(env('RESERVATION_MINUTES', 15));
-  setInterval(() => expireDue(pool, parkingId)
+  const jobsTimer = setInterval(() => expireDue(pool, parkingId)
     .then(() => activateDue(pool, parkingId, minutes))
     .then(() => warnExpiring(pool, parkingId))
     .catch((e) => log.error('expire/activate lỗi', { error: e.message })), 30000);
+
+  let stopping = false;
+  const stop = async () => {
+    if (stopping) return;
+    stopping = true;
+    clearInterval(relayTimer);
+    clearInterval(replyTimer);
+    clearInterval(cleanupTimer);
+    clearInterval(jobsTimer);
+    const timeout = setTimeout(() => process.exit(1), 10000);
+    await consumer.stop();
+    await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    await Promise.all([pool.end(), replica?.end(), publish.close(), replyPublisher.close()]);
+    await shutdownTracing();
+    clearTimeout(timeout);
+  };
+  for (const signal of ['SIGTERM', 'SIGINT']) process.once(signal, () => {
+    stop().catch((error) => {
+      log.error('shutdown thất bại', { error: error.message });
+      process.exitCode = 1;
+    });
+  });
 }
 
 main().catch((e) => { log.error('khởi động thất bại', { error: e.message, stack: e.stack }); process.exit(1); });

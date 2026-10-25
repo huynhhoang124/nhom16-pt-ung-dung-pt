@@ -2,9 +2,11 @@ const amqp=require('amqplib');
 const {randomUUID,createHash}=require('node:crypto');
 const {makeConnector}=require('./amqp-connect');
 const {canonical,verifySignature}=require('./command-signature');
+const {context,propagation,ROOT_CONTEXT,SpanKind,SpanStatusCode,trace}=require('@opentelemetry/api');
 const {applyEvent}=require('./events');
 const INSTANCE_QUEUE_ARGS={'x-queue-type':'quorum','x-message-ttl':60000};
 const RECOVERY='agg.replies.recovery';
+const replyTracer=trace.getTracer('aggregator/command-replies');
 
 function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{}}){
   return async m=>{
@@ -58,7 +60,11 @@ async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onR
         try{const row=await flow.get(n.payload);if(row&&row.status!=='PENDING')onResult?.(row);}catch{log.error('command notification failed');}
       });
       await c.query('LISTEN command_results');
-    }catch{if(listener){listener.release(true);listener=undefined;}reconnectListener();}
+    }catch(error){
+      if(listener){listener.release(true);listener=undefined;}
+      log.error('command notification listener reconnect',{error:error.message});
+      reconnectListener();
+    }
   }
   listen();
   function end(s){if(s.dead)return;s.dead=true;flow.setReady(false);s.closed();s.conn.close().catch(()=>{});}
@@ -78,11 +84,26 @@ async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onR
         await ch.prefetch(50);
         for(const queue of [own,RECOVERY])await ch.consume(queue,m=>{
           if(!m){end(s);return;}
-          s.tail=s.tail.then(async()=>{if(s.dead||stopped)return;await handle(m);if(!s.dead)ch.ack(m);}).catch(()=>{log.error('reply persistence failed');end(s);});
+          s.tail=s.tail.then(async()=>{
+            if(s.dead||stopped)return;
+            const parent=propagation.extract(ROOT_CONTEXT,m.properties?.headers??{});
+            await context.with(parent,()=>replyTracer.startActiveSpan('command.reply.process',{
+              kind:SpanKind.CONSUMER,
+              attributes:{'messaging.system':'rabbitmq','messaging.destination.name':'parking.replies',
+                'messaging.message.id':m.properties?.messageId},
+            },async span=>{
+              try{await handle(m);if(!s.dead)ch.ack(m);}
+              catch(error){span.recordException(error);span.setStatus({code:SpanStatusCode.ERROR,message:error.message});throw error;}
+              finally{span.end();}
+            }));
+          }).catch(()=>{log.error('reply persistence failed');end(s);});
         },{noAck:false});
         if(s.dead)throw new Error('reply setup closed');
         flow.setReady(true);await closed;
-      }catch{if(s)end(s);log.error('reply consumer reconnect');}
+      }catch(error){
+        if(s)end(s);
+        log.error('reply consumer reconnect',{error:error.message});
+      }
       if(s)await s.tail;
       if(!stopped)await new Promise(r=>{wake=r;retryTimer=setTimeout(r,retryMs);});wake=undefined;
     }

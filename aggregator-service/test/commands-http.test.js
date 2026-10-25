@@ -22,7 +22,9 @@ test('administrative endpoint publishes unknown parking, preserves old routes, a
   const call = (role = 'ADMIN', payload = { type: 'reserve', payload: { slotCode: 'A07' } }) => fetch(base + '/api/admin/parkings/UNKNOWN/commands', {
     method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${jwt.sign({ sub: 'admin1', role }, 'test')}` }, body: JSON.stringify(payload),
   });
-  assert.equal((await fetch(base + '/health')).status, 200);
+  const health=await fetch(base + '/health');
+  assert.equal(health.status, 200);
+  assert.deepEqual(await health.json(),{status:'UP',commandsReady:true});
   assert.deepEqual(await (await fetch(base + '/api/parkings')).json(), []);
   assert.equal((await call('USER')).status, 403); assert.equal(sent.length, 0);
   const accepted = await call(); assert.equal(accepted.status, 202);

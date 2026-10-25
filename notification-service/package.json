@@ -8,6 +8,10 @@
     "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/auto-instrumentations-node": "^0.81.2",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.223.0",
+    "@opentelemetry/sdk-node": "^0.223.0",
     "amqplib": "^2.2.0"
   }
 }

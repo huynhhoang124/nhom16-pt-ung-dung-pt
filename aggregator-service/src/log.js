@@ -3,6 +3,7 @@
 // -> lần theo một request qua mọi dịch vụ:  docker compose logs | grep <requestId>
 const { AsyncLocalStorage } = require('node:async_hooks');
 const { randomUUID } = require('node:crypto');
+const { context, trace } = require('@opentelemetry/api');
 
 const als = new AsyncLocalStorage();
 const service = process.env.SERVICE_NAME ?? `aggregator-${process.env.INSTANCE_ID ?? '1'}`;
@@ -12,7 +13,8 @@ const requestId = () => als.getStore()?.requestId;
 
 function write(level, msg, fields) {
   if (silent) return;
-  console.log(JSON.stringify({ ts: new Date().toISOString(), level, service, requestId: requestId(), msg, ...fields }));
+  const traceId = trace.getSpan(context.active())?.spanContext().traceId;
+  console.log(JSON.stringify({ ts: new Date().toISOString(), level, service, requestId: requestId(), traceId, msg, ...fields }));
 }
 const log = { info: (msg, f) => write('info', msg, f), error: (msg, f) => write('error', msg, f) };
 log.log = log.info;   // tương thích chỗ nhận đối tượng kiểu console

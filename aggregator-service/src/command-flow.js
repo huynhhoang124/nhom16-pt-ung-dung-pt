@@ -1,16 +1,19 @@
 const {createHash,randomUUID}=require('node:crypto');
 const {canonical}=require('./command-signature');
+const { propagation, ROOT_CONTEXT, SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
 const terminal=row=>row && row.status!=='PENDING';
 const fail=(code,status)=>Object.assign(new Error(code),{code,status});
 const response=row=>({code:row.status_code??202,body:row.status==='PENDING'
   ?{commandId:row.id,status:'PENDING',publishState:row.publish_state}
   :{...row.result,commandId:row.id}});
+const tracer=trace.getTracer('aggregator/commands');
 
 function makeCommandFlow({pool,publisher,instanceId,waitMs=3000,ttlMs=10000,leaseMs=5000,
   now=Date.now,onResult=()=>{},afterClaim=async()=>{},afterPublish=async()=>{}}) {
   if(!/^[A-Za-z0-9_-]{1,64}$/.test(instanceId??'')||instanceId==='recovery')throw fail('INVALID_AGGREGATOR_ID',500);
   if(!Number.isInteger(waitMs)||waitMs<1||waitMs>30000||!Number.isInteger(ttlMs)||ttlMs<1||ttlMs>3600000)throw fail('INVALID_COMMAND_TIMING',500);
-  const pending=new Map();let stopped=false,publishing=false,scanning=false,timer,replyReady=false;
+  const pending=new Map();let stopped=false,publishing=false,scanning=false,timer,replyReady=false,publisherReady=true;
+  const isReady=()=>replyReady&&publisherReady;
   function wait(id){
     let resolve;const promise=new Promise(r=>{resolve=r;});
     const entry={resolve,until:now()+waitMs};
@@ -45,7 +48,7 @@ function makeCommandFlow({pool,publisher,instanceId,waitMs=3000,ttlMs=10000,leas
         row=await get(id);
       }
       if(terminal(row))return response(row);
-      if(!replyReady&&row.publish_state==='QUEUED'&&row.attempts===0){
+      if(!isReady()&&row.publish_state==='QUEUED'&&row.attempts===0){
         await pool.query(`UPDATE commands SET status='FAILED',status_code=503,result=$2,failure_phase='SEND',last_error='BROKER_UNAVAILABLE',
           publish_state='REJECTED',updated_at=now() WHERE id=$1 AND status='PENDING' AND publish_state='QUEUED' AND attempts=0`,[id,{error:'BROKER_UNAVAILABLE',sendStatus:'FAILED_TO_SEND'}]);
         row=await get(id);if(terminal(row))return response(row);
@@ -58,14 +61,14 @@ function makeCommandFlow({pool,publisher,instanceId,waitMs=3000,ttlMs=10000,leas
     } finally {waiter.remove();}
   }
   async function pump(){
-    if(stopped||publishing||!replyReady)return;publishing=true;
+    if(stopped||publishing||!isReady())return;publishing=true;
     try {
       const expired=await pool.query(`UPDATE commands SET status='FAILED',publish_state='REJECTED',failure_phase='SEND',status_code=410,
         result=$2,last_error='COMMAND_DEADLINE_BEFORE_SEND',updated_at=now() WHERE status='PENDING' AND publish_state='QUEUED'
         AND uncertain=false AND (envelope->>'deadlineAt')::bigint<=$1 RETURNING *`,[now(),{error:'COMMAND_DEADLINE_BEFORE_SEND',sendStatus:'FAILED_TO_SEND'}]);
       for(const row of expired.rows)await signal(row);
       // Bounded batch avoids monopolising the event loop under a long backlog.
-      for(let n=0;n<20&&!stopped&&replyReady;n++){
+      for(let n=0;n<20&&!stopped&&isReady();n++){
         const c=await pool.connect();let row,owner=randomUUID();
         try {
           await c.query('BEGIN');
@@ -80,8 +83,24 @@ function makeCommandFlow({pool,publisher,instanceId,waitMs=3000,ttlMs=10000,leas
         const uncertain=row.uncertain||['SENDING','UNKNOWN'].includes(row.publish_state);
         await afterClaim(row);
         try {
-          await publisher.send(row.parking_id,row.type,row.payload,{...row.envelope,actor:row.actor,messageId:row.id,
-            correlationId:row.correlation_id,replyTo:row.reply_to});
+          const parent=propagation.extract(ROOT_CONTEXT,{traceparent:row.envelope?.traceparent});
+          await tracer.startActiveSpan('command.publish',{
+            kind:SpanKind.PRODUCER,
+            attributes:{'messaging.system':'rabbitmq','messaging.destination.name':'parking.commands','messaging.operation.type':'publish',
+              'messaging.message.id':row.id,'parking.id':row.parking_id},
+          },parent,async span=>{
+            try {
+              await publisher.send(row.parking_id,row.type,row.payload,{...row.envelope,actor:row.actor,messageId:row.id,
+                correlationId:row.correlation_id,replyTo:row.reply_to});
+            } catch(error) {
+              span.recordException(error);
+              if (error.cause) span.recordException(error.cause);
+              span.setStatus({code:SpanStatusCode.ERROR,message:error.message});
+              throw error;
+            } finally {
+              span.end();
+            }
+          });
           await afterPublish(row);
           await pool.query(`UPDATE commands SET publish_state='CONFIRMED',publish_lease_until=NULL,updated_at=now()
             WHERE id=$1 AND publish_owner=$2 AND status='PENDING'`,[row.id,owner]);
@@ -110,6 +129,10 @@ function makeCommandFlow({pool,publisher,instanceId,waitMs=3000,ttlMs=10000,leas
   }
   function start(){timer=setInterval(()=>{scan().catch(()=>{});pump().catch(()=>{});},100);}
   async function stop(){stopped=true;clearInterval(timer);for(const id of pending.keys())settle(id,{id,status:'PENDING',publish_state:'AWAITING_RESULT'});while(publishing||scanning)await new Promise(r=>setTimeout(r,10));}
-  return {execute,get,pump,scan,start,stop,signal,pending,setReady(v){replyReady=v;}};
+  return {
+    execute,get,pump,scan,start,stop,signal,pending,isReady,
+    setReady(v){replyReady=v;},
+    setPublisherReady(v){publisherReady=v;},
+  };
 }
 module.exports={makeCommandFlow,response,terminal};

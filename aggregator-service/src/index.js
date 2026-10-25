@@ -1,3 +1,4 @@
+const { shutdown: shutdownTracing } = require('./tracing');
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -11,8 +12,25 @@ const { makeCommands } = require('./commands');
 const { makeCommandFlow } = require('./command-flow');
 const { startReplyService } = require('./command-replies');
 const { log } = require('./log');
+const { SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
 
 const env = (k, d) => process.env[k] ?? d;
+const socketTracer = trace.getTracer('aggregator/socket.io');
+
+function emitSocket(target, event, payload, parentContext) {
+  return socketTracer.startActiveSpan('socket.emit', {
+    kind: SpanKind.PRODUCER,
+    attributes: { 'socket.io.event': event },
+  }, parentContext, (span) => {
+    try { target.emit(event, payload); }
+    catch (error) {
+      span.recordException(error);
+      span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+      throw error;
+    }
+    finally { span.end(); }
+  });
+}
 
 // NODES='[{"parkingId":"A","name":"Bãi A","apiUrl":"http://parking-a:8001","address":"..."}]'
 async function init(pool) {
@@ -48,18 +66,37 @@ async function main() {
   const auth = makeAuth(env('JWT_SECRET', 'dev-secret'), { privateKey: b64('JWT_PRIVATE_KEY_B64'), publicKey: b64('JWT_PUBLIC_KEY_B64') });
   const instanceId=env('AGGREGATOR_ID',env('INSTANCE_ID','1'));
   const commandMode=env('COMMAND_MODE','broker');
-  const commands = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'),{signingKey:env('INTERNAL_KEY','dev')});
-  const commandFlow=makeCommandFlow({pool,publisher:commands,instanceId,waitMs:Number(env('REPLY_WAIT_MS',3000)),ttlMs:Number(env('COMMAND_TTL_MS',10000))});
+  let commandFlow;
+  const commands = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'),{
+    signingKey:env('INTERNAL_KEY','dev'),
+    onStatus:(ready)=>commandFlow?.setPublisherReady(ready),
+  });
+  commandFlow=makeCommandFlow({pool,publisher:commands,instanceId,waitMs:Number(env('REPLY_WAIT_MS',3000)),ttlMs:Number(env('COMMAND_TTL_MS',10000))});
+  commandFlow.setPublisherReady(false);
   const app = makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode });
   const server = http.createServer(app);
   const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS
   let replies;
+  let publisherTimer;
+  let connectingPublisher=false;
+  const connectPublisher=async()=>{
+    if(connectingPublisher)return;
+    connectingPublisher=true;
+    try{await commands.connect();}
+    catch(error){
+      commandFlow.setPublisherReady(false);
+      log.error('command publisher reconnect',{error:error.cause?.message??error.message});
+    }finally{connectingPublisher=false;}
+  };
   if(commandMode==='broker'){
+    publisherTimer=setInterval(()=>connectPublisher().catch(error=>
+      log.error('command publisher reconnect failed',{error:error.message})),1000);
+    connectPublisher().catch(error=>log.error('command publisher reconnect failed',{error:error.message}));
     for(let attempt=0;;attempt++){
       try{replies=await startReplyService({pool,url:env('RABBITMQ_URL','amqp://localhost/%2F'),instanceId,internalKey:env('INTERNAL_KEY','dev'),flow:commandFlow,cache,
         onResult:row=>{
           if(row.slot)applyEvent(cache,{parkingId:row.parking_id,slot:row.slot.slotCode,status:row.slot.status,version:row.slot.version});
-          io.to(`user:${row.user_id}`).emit('COMMAND_RESULT',{commandId:row.id,status:row.status,statusCode:row.status_code,result:row.result,parkingId:row.parking_id,slot:row.slot});
+          emitSocket(io.to(`user:${row.user_id}`),'COMMAND_RESULT',{commandId:row.id,status:row.status,statusCode:row.status_code,result:row.result,parkingId:row.parking_id,slot:row.slot});
         },log});break;}
       catch(e){if(e.message!=='DUPLICATE_AGGREGATOR_ID'||attempt>=20)throw e;await new Promise(r=>setTimeout(r,1000));}
     }
@@ -67,7 +104,8 @@ async function main() {
   }
   for(const signal of ['SIGTERM','SIGINT'])process.once(signal,async()=>{
     const timeout=setTimeout(()=>process.exit(1),10000);
-    await commandFlow.stop();await replies?.stop();await commands.close();clearTimeout(timeout);process.exit(0);
+    clearInterval(publisherTimer);
+    await commandFlow.stop();await replies?.stop();await commands.close();await shutdownTracing();clearTimeout(timeout);process.exit(0);
   });
   // NV-08: socket có token hợp lệ thì vào phòng "user:<id>" để nhận thông báo riêng; không có vẫn nhận realtime chung.
   io.use((socket, next) => {
@@ -76,22 +114,39 @@ async function main() {
     next();
   });
   const instance = instanceId; // One canonical ID for replies, events and diagnostics.
-  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (n) => {
-    (n.to === '*' ? io : io.to(`user:${n.to}`)).emit('NOTIFICATION', n);
+  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (n, parent) => {
+    emitSocket(n.to === '*' ? io : io.to(`user:${n.to}`), 'NOTIFICATION', n, parent);
   }, log, { exchange: 'user.notifications', queue: `aggregator.notifications.${instance}`, pattern: '#' });
 
-  const push = (e) => io.emit('SLOT_UPDATED', e);
+  const push = (e, parent) => emitSocket(io, 'SLOT_UPDATED', e, parent);
   // PT-01: mỗi bản Aggregator một queue riêng -> bản nào cũng nhận đủ sự kiện, đẩy cho client đang nối với nó
   // (không cần Redis adapter). Queue durable: bản này tắt thì tin chờ, bật lại xử lý tiếp.
-  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e) => {
-    const fresh = applyEvent(cache, e);
-    log.info('nhận sự kiện', { requestId: e.requestId, type: e.type, parkingId: e.parkingId, slot: e.slot, version: e.version, fresh });
-    if (fresh) push(e);
+  const eventTracer = trace.getTracer('aggregator/events');
+  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e, parent) => {
+    eventTracer.startActiveSpan('event.process', {
+      kind: SpanKind.CONSUMER,
+      attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': 'parking.events' },
+    }, parent, (span) => {
+      try {
+        const fresh = applyEvent(cache, e);
+        log.info('nhận sự kiện', {
+          requestId: e.requestId, traceId: span.spanContext().traceId, type: e.type,
+          parkingId: e.parkingId, slot: e.slot, version: e.version, fresh,
+        });
+        if (fresh) push(e);
+      } catch (error) {
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+        throw error;
+      } finally {
+        span.end();
+      }
+    });
   }, log, { queue: `aggregator.slot-updates.${instance}` });
 
   const onChange = (n, prev) => {
     log.info(`Bãi ${n.id}: ${prev} -> ${n.status}`);
-    io.emit('NODE_STATUS', { parkingId: n.id, status: n.status });
+    emitSocket(io, 'NODE_STATUS', { parkingId: n.id, status: n.status });
     if (n.status === 'ONLINE') {
       reconcile(reg, cache, n, push)
         .then((k) => log.info(`Đối soát bãi ${n.id}: cập nhật ${k} slot`))
