@@ -87,7 +87,7 @@ const MESSAGES = {
 };
 export const message = (data) => MESSAGES[data?.error] ?? data?.error ?? 'Có lỗi xảy ra.';
 
-export const STATUS_LABEL = { AVAILABLE: 'Trống', RESERVED: 'Đã đặt', OCCUPIED: 'Có xe', MAINTENANCE: 'Bảo trì' };
+export const STATUS_LABEL = { AVAILABLE: 'Trống', RESERVED: 'Đã đặt', OCCUPIED: 'Có xe', MAINTENANCE: 'Bảo trì', DEGRADED: 'Suy giảm', ONLINE: 'Hoạt động', OFFLINE: 'Ngoại tuyến' };
 export const RESERVATION_LABEL = { ACTIVE: 'Đang hiệu lực', USED: 'Đã vào bãi', DONE: 'Hoàn tất', CANCELLED: 'Đã huỷ', EXPIRED: 'Hết hạn' };
 
 // Biển số lưu dạng chuẩn "30A12345" -> hiển thị "30A-123.45" (đuôi 5 số) / "30A-1234" (đuôi 4 số).

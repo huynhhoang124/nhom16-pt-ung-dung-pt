@@ -8,7 +8,7 @@ const { mountMetrics } = require('./metrics');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) {
+function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, config }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
@@ -18,6 +18,8 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
   mountMetrics(app, { reg });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
+  // PD-11: timeout ghi đọc lại mỗi lần gọi (đổi qua etcd là áp dụng ngay cho đặt chỗ, saga, trả tiền)
+  const reserveMs = () => (config ? config.get('reserveTimeoutMs', reserveTimeoutMs) : reserveTimeoutMs);
 
   // Chuyển tiếp tới đúng node (định tuyến theo parking_id). Node OFFLINE: từ chối ngay, không xếp hàng ngầm.
   // Timeout khi GHI: không biết node đã làm hay chưa (bài toán hai tướng quân) -> 504, client retry cùng key.
@@ -90,6 +92,13 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
   });
 
   app.get('/api/parkings', (_req, res) => res.json(reg.all().map(info)));
+  // PD-11: Tra cứu cấu hình động hiện tại (chỉ ADMIN)
+  app.get('/api/config', need('ADMIN'), (_req, res) => res.json(config ? config.all() : {}));
+  app.get('/api/config/:key', need('ADMIN'), (req, res) => {
+    if (!config) return res.status(404).json({ error: 'CONFIG_NOT_AVAILABLE' });
+    const val = config.get(req.params.key);
+    res.json({ key: req.params.key, value: val });
+  });
 
   // Nghiệp vụ 1: tra cứu toàn hệ thống (scatter–gather, kết quả một phần khi có bãi lỗi)
   const availability = () => reg.gather((n) => reg.json(n, '/api/availability'));
@@ -99,19 +108,19 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
     const { type } = req.query;
     if (type && !['CAR', 'MOTO'].includes(type)) return res.status(400).json({ error: 'type must be CAR or MOTO' });
     let all = await availability();
-    if (type) all = all.map((p) => (p.status === 'ONLINE' ? { ...p, ...(p.byType?.[type] ?? { available: 0, total: 0 }) } : p));
-    res.json(req.query.available === 'true' ? all.filter((p) => p.status === 'ONLINE' && p.available > 0) : all);
+    if (type) all = all.map((p) => (p.status !== 'OFFLINE' ? { ...p, ...(p.byType?.[type] ?? { available: 0, total: 0 }) } : p));
+    res.json(req.query.available === 'true' ? all.filter((p) => p.status !== 'OFFLINE' && p.available > 0) : all);
   });
 
   // Chi tiết bãi. Bãi OFFLINE: trả bản cache cuối cùng, gắn stale=true (chấp nhận cũ để vẫn sẵn sàng).
   app.get('/api/parkings/:id', async (req, res) => {
     const n = reg.get(req.params.id);
     if (!n) return res.status(404).json({ error: 'PARKING_NOT_FOUND' });
-    if (n.status === 'ONLINE') {
+    if (n.status !== 'OFFLINE') {
       try { return res.json({ ...info(n), stale: false, slots: await reg.json(n, '/api/slots') }); }
       catch { /* rơi xuống bản cache */ }
     }
-    res.json({ ...info(n), status: 'OFFLINE', stale: true, slots: slotsFromCache(cache, n.id) });
+    res.json({ ...info(n), status: n.status, stale: true, slots: slotsFromCache(cache, n.id) });
   });
 
   // Nghiệp vụ 2: đặt chỗ. Idempotency-Key bắt buộc; ghép với userId để key của người này không đụng người khác.
@@ -120,7 +129,7 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
     const { slotCode, licensePlate, startTime, durationMinutes } = req.body ?? {};
     await forward(res, reg.get(req.params.id), '/api/reservations', {
-      method: 'POST', ms: reserveTimeoutMs, retry: true,   // an toàn vì requestId idempotent
+      method: 'POST', ms: reserveMs(), retry: true,   // an toàn vì requestId idempotent
       body: { requestId: `${req.user.sub}:${key}`, userId: req.user.sub, slotCode, licensePlate, startTime, durationMinutes },
     });
   });
@@ -132,7 +141,7 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
   });
 
   // PT-07: đặt chỗ cho nhiều xe ở nhiều bãi (Saga). Cùng Idempotency-Key -> trả lại saga cũ.
-  const sagas = makeSagas({ pool, reg, timeoutMs: reserveTimeoutMs });
+  const sagas = makeSagas({ pool, reg, timeoutMs: reserveMs });
   app.locals.sagas = sagas;
   app.post('/api/group-reservations', need('USER'), async (req, res) => {
     const key = req.get('idempotency-key');
@@ -205,7 +214,7 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000 }) 
     await forward(res, reg.get(req.params.id), '/api/reservations');
   });
 
-  mountSessions(app, { reg, need, forward, reserveTimeoutMs });
+  mountSessions(app, { reg, need, forward, reserveTimeoutMs: reserveMs });
 
   // Quản trị: trạng thái các node; thêm bãi mới không cần sửa code (tính mở rộng).
   app.get('/api/admin/nodes', need('ADMIN'), (_req, res) =>

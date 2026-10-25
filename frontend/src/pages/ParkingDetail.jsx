@@ -303,7 +303,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
               </div>
             )}
             {noteBox}
-            {isStaff && p.status === 'ONLINE' && !p.direct && (
+            {isStaff && p.status !== 'OFFLINE' && !p.direct && (
               <form className="card stack" style={{ gap: 'var(--space-2)' }} onSubmit={(e) => {
                 e.preventDefault();
                 const f = new FormData(e.target);
@@ -324,7 +324,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
       {p.stale && noteBox}
 
       <div className={isStaff ? 'duo' : undefined} style={{ marginTop: 'var(--space-6)' }}>
-        {p.status === 'ONLINE' && !p.direct && <Pricing parkingId={parkingId} canEdit={isStaff} />}
+        {p.status !== 'OFFLINE' && !p.direct && <Pricing parkingId={parkingId} canEdit={isStaff} />}
         {isStaff && (
           <div>
             <h3>Đặt chỗ tại bãi</h3>

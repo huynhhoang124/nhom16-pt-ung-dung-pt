@@ -25,7 +25,7 @@ export default function Admin() {
   }
 
   const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
-  const down = nodes.filter((n) => n.status !== 'ONLINE');
+  const down = nodes.filter((n) => n.status === 'OFFLINE');
   return (
     <>
       <div className="page-head">
