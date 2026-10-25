@@ -77,7 +77,7 @@ Mỗi lỗi dưới đây có link tới đúng dòng code trên GitHub, ghim th
 
 Hai điểm "làm tiếp" của PD-11 (`reserveTimeoutMs`, `healthIntervalMs` chưa đổi động) đã được sửa ở commit `72c9d70` theo review Codex trên PR #59.
 
-**Tuần tới:** sửa lỗi 1, 2 của PD-10 rồi mở PR; PD-14b mở PR sau khi PD-14a của Loan sẵn.
+**Tuần tới:** sửa lỗi 1, 2 của PD-10 rồi mở PR; sửa lỗi 4 rồi mở PR PD-14b.
 
 ---
 
@@ -97,7 +97,7 @@ Hai điểm "làm tiếp" của PD-11 (`reserveTimeoutMs`, `healthIntervalMs` ch
 2. **PD-18:** [`index.js:100`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/72c9d70a929d7de33263f2f18710d281ae81b3e0/parking-node/src/index.js#L100) ghi log info cho mỗi NOTIFY — quá ồn khi tải cao, bỏ hoặc đổi sang debug.
 3. **PD-22: channel đọc stream không bắt lỗi.** [`aggregator-service/src/events.js:103`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/events.js#L103) tạo channel mà không có `ch.on('error')` (chỉ có `conn.on('error')` ở dòng 101). Server đóng channel (queue thiếu, đổi leader stream) sẽ phát `error` không ai bắt.
 4. **PD-22: replay có thể treo mãi.** [`events.js:80`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/events.js#L80) Promise chỉ xong khi gặp marker ([`:121`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/events.js#L121)). Mất marker thì [`index.js:110-111`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/index.js#L110-L111) không chạy → **`sagas.recover()` không bao giờ được gọi**. Thêm timeout (ví dụ 10 s) rồi tiếp tục khởi động.
-5. **PD-22:** chưa có số đo trước/sau theo "Xong khi" (thời gian khởi động, số request tới bãi). [`index.js:89`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/index.js#L89) thụt lề lệch. Sửa `rabbitmq/definitions.json` (file Hùng giữ) cần báo Hùng.
+5. **PD-22:** chưa có số đo trước/sau theo "Xong khi" (thời gian khởi động, số request tới bãi). [`index.js:89`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/index.js#L89) thụt lề lệch.
 6. **Tiến độ:** tới 24/10 mới có commit đầu tiên; còn 5 việc chưa bắt đầu.
 
 **Tuần tới:** sửa lỗi 3, 4 của PD-22 để merge; sửa lỗi 1 của PD-18; bắt đầu PD-23.
@@ -121,7 +121,7 @@ Hai điểm "làm tiếp" của PD-11 (`reserveTimeoutMs`, `healthIntervalMs` ch
 2. **PD-17: lịch sử quét cả bảng sự kiện.** [`parking-node/src/slots.js:272-275`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/55ea917b9fef7f46011dd4aaaead27e1602b4f6e/parking-node/src/slots.js#L272-L275) `LEFT JOIN LATERAL … WHERE pe.payload->>'sessionId' = …` không có index → mỗi phiên quét toàn bộ `parking_events`. Lưu `hlc` vào `parking_sessions` lúc xe vào (cùng transaction) rồi sắp theo cột đó.
 3. **PD-17: PR #55** tên là "Feature/pd 17 hlc" (tên nhánh tự sinh), mô tả chưa theo mẫu (`Đã làm`, `Cách kiểm tra`). 7 test aggregator lỗi trên máy Loan trong khi CI xanh → chạy lại sau `npm ci` để biết do môi trường.
 4. **PD-13: chưa chạy được 2 bản node.** [`parking-node/src/index.js:23`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/99e4b9a32fbfc63bbdac3bec2f76da93fb625c14/parking-node/src/index.js#L23) advisory lock viết cẩn thận nhưng 180 dòng nằm thẳng trong `index.js` (tới dòng 196) → tách `scheduled-lock.js` có unit test. Chưa có compose cho 2 bản sau 1 alias DNS, chưa có test TC60.
-5. **PD-14a:** còn thiếu script `pg_rewind` + runbook, metric độ trễ theo bãi, bãi D/E/F (sau PD-12), hướng dẫn dùng `docker-compose.ha.yml`. Chưa mở PR.
+5. **PD-14a:** còn thiếu script `pg_rewind` + runbook, metric độ trễ theo bãi, bãi D/E/F, hướng dẫn dùng `docker-compose.ha.yml`. Chưa mở PR.
 
 **Tuần tới:** sửa lỗi 1, 2 của PD-17 để merge; mở PR PD-14a (bãi A–C trước, ghi rõ phần còn thiếu).
 
@@ -147,7 +147,6 @@ Hai điểm "làm tiếp" của PD-11 (`reserveTimeoutMs`, `healthIntervalMs` ch
    ```
    Khi rebase bỏ commit `043a071` và phần sửa `discovery.js` cũ, dùng PD-09 mới đã có trên `dev`; chạy lại e2e trên 6 bãi theo "Xong khi".
 2. **PD-19 làm trước việc bắt buộc.** Issue #37 ghi "Nếu kịp" và cần PD-12; nhánh xây chồng lên PD-12 chưa rebase. Trong khi PD-24, PD-26, PD-27 (bắt buộc) chưa bắt đầu.
-3. **Ảnh hưởng người khác:** Loan cần PD-12 cho PD-13 và PD-14a (bãi D/E/F).
 
 **Tuần tới:** rebase PD-12 (ưu tiên số 1), rồi PD-24.
 
@@ -155,6 +154,5 @@ Hai điểm "làm tiếp" của PD-11 (`reserveTimeoutMs`, `healthIntervalMs` ch
 
 ## Việc chung
 
-- Thứ tự review tiếp theo: PD-08 (Hùng) → PD-22 (Trang) → PD-17 (Loan) → PD-12 sau rebase (Hiệp) → PD-03 (Hùng).
 - Test UX-02 `byHour` trên `dev` phụ thuộc giờ chạy, đôi khi làm CI đỏ — cần một người sửa.
 - TC43 viết cứng `localhost:3000`; máy bị chiếm cổng 3000 sẽ lỗi giả — nên đọc từ biến môi trường.
