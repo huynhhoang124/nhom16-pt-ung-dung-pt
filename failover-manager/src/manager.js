@@ -1,7 +1,8 @@
 // PD-14b: Failover Manager Core Logic (Issue #32)
 //   - Giám sát primary mỗi 1 giây (SELECT 1 timeout 500ms).
-//   - 3 lần lỗi liên tiếp -> Step 1 (pg_last_wal_replay_lsn) -> Step 2 (pg_promote) -> Step 3 (CAS epoch etcd) -> Step 4 (cập nhật db_epoch).
-//   - Xử lý CAS thất bại -> dừng ngay.
+//   - 3 lần lỗi liên tiếp -> đọc replay LSN của replica -> Bước A (CAS tăng epoch trên etcd) -> Bước B (chờ cửa sổ an toàn
+//     để node ngừng ghi vào primary cũ) -> Bước C (pg_promote trên replica) -> Bước 4 (ghi db_epoch vào primary mới).
+//   - CAS thất bại -> dừng ngay, KHÔNG promote. Promote lỗi -> giữ epoch N+1 (không giảm), báo FAILOVER_PROMOTE_FAILED.
 //   - Giám sát replica của bãi đồng bộ (sync=true): chết quá 3s -> hạ cấp synchronous_standby_names = '' trên primary.
 
 const { Client } = require('pg');
