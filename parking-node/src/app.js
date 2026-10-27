@@ -1,5 +1,6 @@
 const express = require('express');
 const s = require('./slots');
+const { checkFencing, withFencing, parseToken } = require('./fencing');
 const { normalizePlate, isPlate } = require('./plate');
 const { invalidRule } = require('./pricing');
 const { savePricing } = require('./db');
@@ -53,32 +54,24 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     next();
   });
 
-  const { checkFencing } = require('./fencing');
-
-  // PD-10: Kiểm tra Fencing Token chống split-brain từ Leader cũ
+  // PD-10: fencing token chống leader cũ (split-brain). Chỉ tin header khi có khoá nội bộ (Aggregator gửi):
+  // nhân viên có JWT không được tự đặt token, nếu không gửi token rất lớn là chặn được leader thật.
+  // Lệnh ghi: token được kiểm trong CÙNG giao dịch với lệnh ghi (tx ở slots.js gọi fenceIn).
+  // Lệnh đọc: không có gì để bảo vệ, chỉ kiểm để leader cũ sớm biết mình đã mất quyền.
   app.use('/api', async (req, res, next) => {
-    const fencingToken = req.get('x-fencing-token');
-    if (fencingToken !== undefined && fencingToken !== '') {
-      const job = req.get('x-fencing-job') || 'default';
-      const check = await checkFencing(pool, job, fencingToken);
-      if (!check.ok) {
-        return res.status(check.code || 409).json({ error: check.error, job, token: fencingToken });
-      }
+    const token = req.get('x-fencing-token');
+    if (req.get('x-internal-key') !== internalKey || token === undefined || token === '') return next();
+    if (parseToken(token) === null) return res.status(400).json({ error: 'INVALID_FENCING_TOKEN' });
+    const job = req.get('x-fencing-job') || 'default';
+    if (req.method === 'GET') {
+      const check = await checkFencing(pool, job, token);
+      if (!check.ok) return res.status(check.code).json({ error: check.error, job, token });
+      return next();
     }
-    next();
+    withFencing({ job, token }, next);
   });
 
   const send = (res, r) => res.status(r.code).json(r.body);
-
-  // PD-10: Endpoint nhận việc định kỳ có Fencing Token
-  app.post('/api/internal/fenced-job', async (req, res) => {
-    const { job = 'default', token } = req.body ?? {};
-    const check = await checkFencing(pool, job, token);
-    if (!check.ok) {
-      return res.status(check.code || 409).json({ error: check.error, job, token });
-    }
-    res.json({ ok: true, job, maxToken: check.maxToken });
-  });
 
   // PD-09 / TC64: Giả lập lỗi đứt kết nối etcd (chỉ cho phép khi bật cờ test ENABLE_TEST_FAULTS=1 hoặc FAULT_INJECTION=1)
   app.post('/api/test/fault/etcd-partition', async (req, res) => {

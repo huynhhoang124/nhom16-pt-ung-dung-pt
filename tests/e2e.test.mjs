@@ -42,7 +42,7 @@ const agg = (path, { token, key, ...o } = {}) => http(AGG + path, {
 const agg2 = (path, { token, key, ...o } = {}) => http(AGG2 + path, {
   ...o, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { 'idempotency-key': key } : {}) },
 });
-const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { 'x-internal-key': KEY } });
+const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { ...o.headers, 'x-internal-key': KEY } });
 
 async function until(what, fn, ms = 60_000) {
   const end = Date.now() + ms;
@@ -763,22 +763,19 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
       const token2 = (await agg2('/api/leader')).body.fencingToken;
       console.log(`TC66 - Aggregator 2 đã trở thành Leader mới với token2: ${token2} > ${token1}`);
 
-      // 4. Aggregator 2 thực thi công việc định kỳ trên Node A với token2 -> Node A cập nhật max_token = token2
-      const jobRes = await node('A', '/api/internal/fenced-job', {
-        method: 'POST',
-        body: { job: 'reconcile', token: token2 },
-      });
+      // 4. Leader mới (token2) ghi thật vào Node A: đưa một slot trống vào bảo trì -> Node A nâng max_token = token2
+      const fenced = (token) => ({ method: 'POST', body: {}, headers: { 'x-fencing-token': String(token), 'x-fencing-job': 'reconcile' } });
+      const { slotCode } = (await node('A', '/api/slots/available')).body[0];
+      const jobRes = await node('A', `/api/slots/${slotCode}/maintenance`, fenced(token2));
       assert.equal(jobRes.status, 200);
-      assert.equal(jobRes.body?.maxToken, token2);
 
-      // 5. Leader 1 cũ gửi lệnh với token cũ (token1) sang Node A
-      // Node A phát hiện token1 < token2 -> từ chối 409 STALE_LEADER và tăng metric fencing_rejected_total
-      const staleRes = await node('A', '/api/internal/fenced-job', {
-        method: 'POST',
-        body: { job: 'reconcile', token: token1 },
-      });
+      // 5. Leader 1 cũ ghi với token cũ (token1): Node A kiểm token trong cùng giao dịch -> 409 STALE_LEADER, không ghi gì
+      const staleRes = await node('A', `/api/slots/${slotCode}/unmaintenance`, fenced(token1));
       assert.equal(staleRes.status, 409);
       assert.equal(staleRes.body?.error, 'STALE_LEADER');
+      const after = (await node('A', '/api/slots')).body.find((x) => x.slotCode === slotCode);
+      assert.equal(after.status, 'MAINTENANCE', 'lệnh của leader cũ không được ghi');
+      assert.equal((await node('A', `/api/slots/${slotCode}/unmaintenance`, fenced(token2))).status, 200);   // trả slot lại
 
       // 6. Kiểm tra metric fencing_rejected_total trên Node A
       const nodeMetrics = await (await fetch(NODE.A + '/metrics')).text();
