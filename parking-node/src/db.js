@@ -60,4 +60,7 @@ function readThrough(replica, primary, { backoffMs = 10_000, onFallback } = {}) 
   };
 }
 
-module.exports = { init, slotPlan, savePricing, readThrough };
+const { checkFencing } = require('./fencing');
+
+module.exports = { init, slotPlan, savePricing, readThrough, checkFencing };
+
