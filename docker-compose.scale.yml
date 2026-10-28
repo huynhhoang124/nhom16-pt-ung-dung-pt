@@ -110,6 +110,8 @@
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
         "ZONE": "nam",
         "LEASE_TTL_S": "${LEASE_TTL_S:-5}",
+        "ENABLE_TEST_FAULTS": "${ENABLE_TEST_FAULTS:-0}",
+        "CLOCK_SKEW_MS": "${CLOCK_SKEW_MS:-0}",
         "PARKING_ID": "D",
         "PORT": 8004,
         "NODE_URL": "http://toxiproxy:18004",
@@ -170,6 +172,8 @@
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
         "ZONE": "nam",
         "LEASE_TTL_S": "${LEASE_TTL_S:-5}",
+        "ENABLE_TEST_FAULTS": "${ENABLE_TEST_FAULTS:-0}",
+        "CLOCK_SKEW_MS": "${CLOCK_SKEW_MS:-0}",
         "PARKING_ID": "E",
         "PORT": 8005,
         "NODE_URL": "http://toxiproxy:18005",
@@ -230,6 +234,8 @@
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
         "ZONE": "nam",
         "LEASE_TTL_S": "${LEASE_TTL_S:-5}",
+        "ENABLE_TEST_FAULTS": "${ENABLE_TEST_FAULTS:-0}",
+        "CLOCK_SKEW_MS": "${CLOCK_SKEW_MS:-0}",
         "PARKING_ID": "F",
         "PORT": 8006,
         "NODE_URL": "http://toxiproxy:18006",
@@ -256,7 +262,7 @@
         "-config=/config/scale.json"
       ],
       "ports": [
-        "8474:8474"
+        "${TOXIPROXY_PORT:-8474}:8474"
       ],
       "volumes": [
         "./toxiproxy/scale.json:/config/scale.json:ro"

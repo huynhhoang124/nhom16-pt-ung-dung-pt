@@ -45,7 +45,9 @@ node --test tests/e2e.test.mjs                      # test trên Docker; tự d�
 docker run --rm -i --network nhom16-parking_default -e BASE=http://aggregator:8000 grafana/k6 run - < tests/load/k6.js   # GS-05 test tải
 node tests/load/check-invariants.mjs                # GS-05/06 kiểm bất biến (không đặt trùng, outbox về 0...)
 node tests/chaos.mjs                                # GS-06 vừa tải vừa tắt/bật ngẫu nhiên (cần --profile ha)
+node tests/jepsen/run.mjs --seed 42 --nemesis partition --time 120  # PD-26: tải + lỗi thật trên 6 bãi; lưu history và kiểm 6 bất biến
 ```
+Runner PD-26 tự dựng topology sáu bãi với RabbitMQ HA, etcd và failover trong Compose project riêng `nhom16-pd26` (volume dữ liệu riêng). Generator mặc định chạy bốn worker đồng thời với luồng ngẫu nhiên tách biệt, tái lập được từ seed. Trước tiên cấu hình `.env` theo `.env.example`; Docker cần đủ tài nguyên cho topology. Runner mặc định dùng cổng toxiproxy `18474` và etcd-1 `12379` để tránh Windows port exclusions; có thể đổi bằng `TOXIPROXY_PORT`, `ETCD_1_PORT` (và `TOXIPROXY` nếu endpoint đặt riêng). Chọn nemesis `partition`, `rabbitmq`, `db`, `leader`, `clock-skew`, `loss`, `random` hoặc `none`; xem [báo cáo PD-26](tai-lieu/ket-qua-jepsen.md). Kết quả từng request được ghi vào `tests/jepsen/history.jsonl` (không commit file này).
 
 ## Kiến trúc
 ```

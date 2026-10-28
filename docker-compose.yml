@@ -31,6 +31,7 @@ x-node-env: &node-env
   ZONE: ${ZONE:-bac}
   LEASE_TTL_S: ${LEASE_TTL_S:-5}
   ENABLE_TEST_FAULTS: ${ENABLE_TEST_FAULTS:-0}
+  CLOCK_SKEW_MS: ${CLOCK_SKEW_MS:-0}
 
 services:
   rabbitmq:
@@ -192,7 +193,7 @@ services:
       ETCD_INITIAL_CLUSTER_STATE: new
       ETCD_AUTO_COMPACTION_MODE: revision
       ETCD_AUTO_COMPACTION_RETENTION: "100"
-    ports: ["2379:2379"]
+    ports: ["${ETCD_1_PORT:-2379}:2379"]
     volumes:
       - etcd-1-data:/etcd-data
     deploy:

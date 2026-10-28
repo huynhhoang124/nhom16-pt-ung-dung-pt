@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { makePool, one } = require('./helpers');
 const slots = require('../src/slots');
-const { signature } = require('../src/command-signature');
+const { signature, verifySignature } = require('../src/command-signature');
 const { signature: producerSignature } = require('../../aggregator-service/src/command-signature');
 const { decodeCommand, makeCommandProcessor, startCommandConsumer, cleanupInbox, InvalidCommand } = require('../src/commands');
 const { makeReplyPublisher, makeReplyRelay } = require('../src/command-replies');
@@ -57,7 +57,16 @@ test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, re
     assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM parking_events')).n, 1);
     const replies = (await pool.query('SELECT payload, properties FROM command_reply_outbox ORDER BY id')).rows;
     assert.equal(replies.length, 2); assert.deepEqual(replies[0].payload.result, replies[1].payload.result);
-    for (const r of replies) { assert.equal(r.properties.correlationId, 'corr-one'); assert.equal(r.properties.headers.hlc, '123.1'); assert.equal(r.payload.fencingToken, 42); }
+    for (const r of replies) {
+      assert.equal(r.properties.correlationId, 'corr-one');
+      assert.equal(r.properties.headers.hlc, '123.1');
+      assert.equal(r.payload.fencingToken, 42);
+      assert.equal(r.payload.slot.slotCode, 'A01');
+      assert.ok(verifySignature(KEY, r.payload, {
+        ...r.properties,
+        headers: { ...r.properties.headers, 'x-command-signature': r.properties.headers['x-reply-signature'] },
+      }));
+    }
   });
   await t.test('same key with changed payload/type is rejected without changing the original inbox', async () => {
     const changed = await processCommand(message('one', 'reserve', { slotCode: 'A02', licensePlate: '30A-123.45' }));

@@ -29,7 +29,7 @@ async function init(pool) {
 }
 
 async function main() {
-  const pool = new Pool({ connectionString: env('DATABASE_URL') });
+  const pool = new Pool({ connectionString: env('DATABASE_URL'), max: Number(env('PGPOOL_MAX', 10)) });
   pool.on('error', (e) => log.error('mất kết nối DB điều phối', { error: e.message }));   // không bắt thì DB khởi động lại làm sập Aggregator
   for (let i = 1; ; i++) {
     try { await init(pool); break; }

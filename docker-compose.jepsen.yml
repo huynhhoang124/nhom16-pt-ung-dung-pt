@@ -1,0 +1,24 @@
+services:
+  rabbitmq:
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 15s
+      retries: 30
+      start_period: 120s
+
+  rabbitmq-2:
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 15s
+      retries: 30
+      start_period: 120s
+
+  rabbitmq-3:
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+      interval: 5s
+      timeout: 15s
+      retries: 30
+      start_period: 120s

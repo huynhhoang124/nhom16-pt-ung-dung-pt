@@ -3,3 +3,4 @@ dist/
 .env
 .claude/
 .playwright-mcp/
+tests/jepsen/history.jsonl

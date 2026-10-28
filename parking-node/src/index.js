@@ -11,6 +11,15 @@ const { makeReplyPublisher, makeReplyRelay } = require('./command-replies');
 const env = (k, d) => process.env[k] ?? d;
 const parkingId = env('PARKING_ID', 'A');
 const port = Number(env('PORT', 8001));
+const clockSkewMs = Number(env('CLOCK_SKEW_MS', 0));
+if (!Number.isSafeInteger(clockSkewMs) || Math.abs(clockSkewMs) > 300_000) {
+  throw new Error('CLOCK_SKEW_MS must be an integer between -300000 and 300000');
+}
+if (clockSkewMs !== 0) {
+  if (env('ENABLE_TEST_FAULTS', '0') !== '1') throw new Error('CLOCK_SKEW_REQUIRES_TEST_FAULTS');
+  const wallClockNow = Date.now.bind(Date);
+  Date.now = () => wallClockNow() + clockSkewMs;
+}
 
 // PRICING='[{"vehicleType":"CAR","firstBlockMin":120,"firstBlockFee":30000,...}]' (không có thì dùng giá mặc định)
 const pricing = process.env.PRICING ? JSON.parse(process.env.PRICING) : undefined;
@@ -31,7 +40,8 @@ async function main() {
   }
 
   // PT-02: có READ_DATABASE_URL (bản sao) thì đọc thuần đi bản sao; kèm số đo độ trễ sao chép
-  const replica = process.env.READ_DATABASE_URL ? new Pool({ connectionString: process.env.READ_DATABASE_URL, connectionTimeoutMillis: 500 }) : null;
+  const poolMax = Number(process.env.PGPOOL_MAX || 10);
+  const replica = process.env.READ_DATABASE_URL ? new Pool({ connectionString: process.env.READ_DATABASE_URL, max: poolMax, connectionTimeoutMillis: 500 }) : null;
   replica?.on('error', () => {});   // kết nối nhàn rỗi tới bản sao bị đứt: không để sập cả node
   const readPool = replica ? readThrough(replica, pool, { onFallback: (e) => log.error('bản sao lỗi, đọc bản chính 10s', { error: e.message }) }) : pool;
   const lagMetric = (registry, client) => replica && new client.Gauge({

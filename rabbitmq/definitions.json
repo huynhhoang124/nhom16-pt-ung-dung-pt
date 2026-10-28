@@ -75,6 +75,36 @@
       }
     },
     {
+      "name": "cmd.D",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.E",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.F",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
       "name": "cmd.expired",
       "vhost": "/",
       "durable": true,
@@ -107,6 +137,30 @@
       "destination": "cmd.C",
       "destination_type": "queue",
       "routing_key": "cmd.C.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.D",
+      "destination_type": "queue",
+      "routing_key": "cmd.D.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.E",
+      "destination_type": "queue",
+      "routing_key": "cmd.E.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.F",
+      "destination_type": "queue",
+      "routing_key": "cmd.F.#",
       "arguments": {}
     },
     {

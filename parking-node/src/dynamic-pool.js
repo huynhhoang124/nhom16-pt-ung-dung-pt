@@ -15,9 +15,11 @@ async function makeDynamicPool({
   poolFactory = (opts) => new Pool(opts),
   etcdClient = null,
 } = {}) {
+  const poolMax = Number(process.env.PGPOOL_MAX || 10);
+  const poolOptions = (connectionString) => ({ connectionString, max: poolMax });
   // Tương thích ngược 100% khi không có etcd
   if (!etcdEndpoints && !etcdClient) {
-    const pool = poolFactory({ connectionString: defaultDatabaseUrl });
+    const pool = poolFactory(poolOptions(defaultDatabaseUrl));
     return pool;
   }
 
@@ -32,7 +34,7 @@ async function makeDynamicPool({
   const primaryKey = `/nhom16/parking/${parkingId}/db/primary`;
   const epochKey = `/nhom16/parking/${parkingId}/db/epoch`;
 
-  let currentPool = poolFactory({ connectionString: currentUrl });
+  let currentPool = poolFactory(poolOptions(currentUrl));
 
   // Đọc giá trị ban đầu từ etcd nếu có
   try {
@@ -44,7 +46,7 @@ async function makeDynamicPool({
       log.info?.(`[dynamic-pool] Khởi tạo primary từ etcd: ${etcdPrimary}`);
       currentUrl = etcdPrimary;
       const old = currentPool;
-      currentPool = poolFactory({ connectionString: currentUrl });
+      currentPool = poolFactory(poolOptions(currentUrl));
       old.end?.().catch(() => {});
     }
     if (etcdEpoch) {
@@ -111,7 +113,7 @@ async function makeDynamicPool({
       log.info?.(`[dynamic-pool] Đổi kết nối Pool: ${currentUrl} -> ${newUrl}`);
       const oldPool = currentPool;
       currentUrl = newUrl;
-      currentPool = poolFactory({ connectionString: newUrl });
+      currentPool = poolFactory(poolOptions(newUrl));
 
       // Gắn lại các listener (error, connect...) sang pool mới
       for (const { event, listener } of listeners) {
