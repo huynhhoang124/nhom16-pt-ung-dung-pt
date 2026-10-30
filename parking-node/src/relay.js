@@ -41,30 +41,123 @@ function amqpPublisher(url) {
     }
   };
   publish.close = async () => { const old = conn; conn = ch = null; if (old) await old.close().catch(() => {}); };
+
+
+  publish.publishBatch = async (events) => {
+    try {
+      const c = await channel();
+
+      for (const e of events) {
+        const key = `parking.${e.payload.parkingId}.slot.${e.payload.slot}`;
+        c.publish(EXCHANGE, key, Buffer.from(JSON.stringify(e.payload)), {
+          persistent: true,
+          contentType: 'application/json',
+          ...(e.payload.requestId && { correlationId: e.payload.requestId }),
+        });
+      }
+
+      await c.waitForConfirms();
+      return true;
+    } catch {
+      reset();
+      return false;
+    }
+  };
+
+
   return publish;
 }
 
-function makeRelay(pool, publish, logger = log) {
+
+function makeRelay(pool, publish, logger = log, onConfirmed = () => {}) {
   let running = false;
+
   return async function relayOnce() {
-    if (running) return 0;               // không chạy chồng (setInterval có thể gọi khi lần trước chưa xong)
+    if (running) return 0;
     running = true;
+
     let sent = 0;
+    let client;
+
     try {
-      const { rows } = await pool.query(
-        'SELECT id, payload FROM parking_events WHERE published_at IS NULL ORDER BY id LIMIT 100');
+      client = await pool.connect();
+      await client.query('BEGIN');
+
+      const { rows } = await client.query(`
+        SELECT id, payload, created_at
+        FROM parking_events
+        WHERE published_at IS NULL
+        ORDER BY id
+        LIMIT 100
+        FOR UPDATE SKIP LOCKED
+      `);
+
+      if (rows.length === 0) {
+        await client.query('COMMIT');
+        return 0;
+      }
+
+      let confirmed;
+      if (typeof publish.publishBatch === 'function') {
+        confirmed = await publish.publishBatch(rows);
+      } else {
+        confirmed = true;
+        for (const e of rows) {
+          const key = `parking.${e.payload.parkingId}.slot.${e.payload.slot}`;
+          if (!(await publish(key, e.payload))) {
+            confirmed = false;
+            break;
+          }
+        }
+      }
+
+      if (!confirmed) {
+        await client.query('ROLLBACK');
+        return 0;
+      }
+
+      const confirmedAt = Date.now();
+
+      const ids = rows.map((e) => e.id);
+
+      await client.query(
+        'UPDATE parking_events SET published_at = clock_timestamp() WHERE id = ANY($1)',
+        [ids],
+      );
+
       for (const e of rows) {
         const key = `parking.${e.payload.parkingId}.slot.${e.payload.slot}`;
-        if (!(await publish(key, e.payload))) break;   // dừng để giữ thứ tự; lần sau gửi tiếp từ đây
-        await pool.query('UPDATE parking_events SET published_at = now() WHERE id = $1', [e.id]);
-        logger.info('outbox đã gửi', { requestId: e.payload.requestId, eventId: e.id, type: e.payload.type, routingKey: key });
-        sent++;
+        logger.info('outbox đã gửi', {
+          requestId: e.payload.requestId,
+          eventId: e.id,
+          type: e.payload.type,
+          routingKey: key,
+        });
       }
+
+      await client.query('COMMIT');
+
+      try {
+        onConfirmed(rows, confirmedAt);
+      } catch (e) {
+        logger.error('không ghi được metric relay lag', {
+          error: e.message,
+        });
+      }
+
+      sent = rows.length;
+      return sent;
+    } catch (e) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {}
+      throw e;
     } finally {
+      client?.release();
       running = false;
     }
-    return sent;
   };
 }
+
 
 module.exports = { amqpPublisher, makeRelay, EXCHANGE };

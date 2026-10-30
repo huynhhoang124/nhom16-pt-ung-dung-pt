@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "amqplib": "^2.2.0",
+    "etcd3": "^1.1.2",
     "express": "^5.2.1",
     "pg": "^8.23.1",
     "prom-client": "^15.1.3"

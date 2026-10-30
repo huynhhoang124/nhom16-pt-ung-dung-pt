@@ -61,7 +61,7 @@ function mountSessions(app, { reg, need, forward, reserveTimeoutMs }) {
     const key = req.get('idempotency-key');
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
     await forward(res, reg.get(req.params.id), `/api/sessions/${enc(req.params.sid)}/pay`, {
-      method: 'POST', ms: reserveTimeoutMs, retry: true,
+      method: 'POST', ms: reserveTimeoutMs(), retry: true,
       body: { method: 'ONLINE', paymentKey: `${req.user.sub}:${key}`, userId: req.user.sub },
     });
   });
