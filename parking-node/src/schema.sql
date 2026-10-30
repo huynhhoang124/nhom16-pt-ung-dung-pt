@@ -67,6 +67,9 @@ CREATE TABLE IF NOT EXISTS parking_events (
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at  TIMESTAMPTZ
 );
+-- PD-17: bổ sung HLC cho các sự kiện mới; dữ liệu lịch sử cũ giữ nguyên.
+ALTER TABLE parking_events
+  ADD COLUMN IF NOT EXISTS hlc VARCHAR(18);
 CREATE INDEX IF NOT EXISTS ix_events_unpublished ON parking_events(id) WHERE published_at IS NULL;
 -- PD-18: báo relay ngay khi có sự kiện mới trong outbox.
 CREATE OR REPLACE FUNCTION notify_parking_event_outbox()
@@ -93,12 +96,16 @@ CREATE TABLE IF NOT EXISTS parking_sessions (
   reservation_id UUID REFERENCES reservations(id),
   user_id        VARCHAR(64),                         -- có khi xe vào bằng đặt chỗ
   entered_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  hlc            VARCHAR(18),
   exited_at      TIMESTAMPTZ,
   fee            INT,                                 -- VND, tính khi xe ra
   paid_at        TIMESTAMPTZ,
   payment_method VARCHAR(8),                          -- ONLINE | CASH
   payment_key    VARCHAR(128) UNIQUE                  -- Idempotency-Key của lần thanh toán
 );
+-- PD-17: lưu HLC của sự kiện xe vào ngay trong phiên gửi xe.
+ALTER TABLE parking_sessions
+  ADD COLUMN IF NOT EXISTS hlc VARCHAR(18);
 -- Mỗi slot tối đa 1 phiên đang mở; mỗi biển số tối đa 1 phiên đang mở TRONG BÃI NÀY
 -- (chặn trên toàn hệ thống cần phối hợp nhiều bãi -> chọn sẵn sàng, phát hiện bằng tra cứu gom).
 CREATE UNIQUE INDEX IF NOT EXISTS ux_open_session_slot  ON parking_sessions(slot_id)       WHERE exited_at IS NULL;

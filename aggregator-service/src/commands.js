@@ -1,3 +1,4 @@
+const hlc = require('./hlc');
 const { randomUUID } = require('node:crypto');
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
@@ -84,10 +85,37 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       throw failure('INVALID_COMMAND', 400);
     }
     const headers = { ...opts.headers };
-    const envelope = { type, parkingId, schemaVersion: opts.schemaVersion ?? headers.schemaVersion ?? 1, payload: body };
-    for (const field of ['causationId', 'fencingToken', 'hlc', 'traceparent', 'actor']) {
-      const value = opts[field] ?? headers[field];
-      if (value !== undefined) envelope[field] = headers[field] = value;
+
+    // Nếu có HLC cha, cập nhật đồng hồ local trước khi gửi lệnh tiếp theo.
+    const parentHlc = opts.hlc ?? headers.hlc;
+    if (parentHlc !== undefined) {
+      hlc.update(parentHlc);
+    }
+
+    // Mỗi lệnh do Aggregator phát ra phải có HLC riêng.
+    const outgoingHlc = hlc.now();
+
+    const envelope = {
+      type,
+      parkingId,
+      schemaVersion: opts.schemaVersion ?? headers.schemaVersion ?? 1,
+      payload: body,
+    };
+
+    for (const field of [
+      'causationId',
+      'fencingToken',
+      'hlc',
+      'traceparent',
+      'actor',
+    ]) {
+      const value = field === 'hlc'
+        ? outgoingHlc
+        : opts[field] ?? headers[field];
+
+      if (value !== undefined) {
+        envelope[field] = headers[field] = value;
+      }
     }
     headers.schemaVersion = envelope.schemaVersion;
     // Unique per attempt, even when concurrent retries share the same business messageId.

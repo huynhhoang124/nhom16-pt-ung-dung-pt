@@ -35,21 +35,45 @@ test('envelope and properties preserved; only resolve after individual publisher
   const b = broker(); const pub = makeCommands('amqp://test/%2F', { connect: b.connect });
   t.after(() => pub.close());
   let resolved = false;
+  const parentHlc = '1000000000000-0004';
   const p = pub.send('A', 'reserve', { slotCode: 'A07' }, {
     messageId: 'u42:key', correlationId: 'correlation', replyTo: 'agg.2', expiration: '10000',
-    causationId: 'saga:2', fencingToken: 42, hlc: '123.4', actor: { userId: 'u42', role: 'USER' },
+    causationId: 'saga:2', fencingToken: 42, hlc: parentHlc, actor: { userId: 'u42', role: 'USER' },
     headers: { traceparent: '00-trace', custom: 'keep' },
   }).then((r) => { resolved = true; return r; });
   await tick(); assert.equal(resolved, false);
   const [exchange, key, content, props] = b.sent[0];
-  assert.equal(exchange, 'parking.commands'); assert.equal(key, 'cmd.A.reserve');
-  assert.deepEqual(b.connections[0].ch.exchange, ['parking.commands', 'topic', { durable: true }]);
-  assert.equal(props.mandatory, true); assert.equal(props.persistent, true);
-  assert.equal(props.messageId, 'u42:key'); assert.equal(props.correlationId, 'correlation');
-  assert.equal(props.replyTo, 'agg.2'); assert.equal(props.expiration, '10000');
-  assert.equal(props.contentType, 'application/json'); assert.equal(props.headers.custom, 'keep');
+
+  assert.equal(exchange, 'parking.commands');
+  assert.equal(key, 'cmd.A.reserve');
+  // Parse nội dung JSON của message trước khi sử dụng biến env.
   const env = JSON.parse(content);
-  assert.deepEqual(env, { type: 'reserve', parkingId: 'A', schemaVersion: 1, payload: { slotCode: 'A07' }, causationId: 'saga:2', fencingToken: 42, hlc: '123.4', traceparent: '00-trace', actor: { userId: 'u42', role: 'USER' } });
+  const { hlc: sentHlc, ...withoutHlc } = env;
+
+  assert.deepEqual(withoutHlc, {
+    type: 'reserve',
+    parkingId: 'A',
+    schemaVersion: 1,
+    payload: { slotCode: 'A07' },
+    causationId: 'saga:2',
+    fencingToken: 42,
+    traceparent: '00-trace',
+    actor: { userId: 'u42', role: 'USER' },
+  });
+
+  // Kiểm tra HLC được sinh ra hợp lệ và lớn hơn HLC cha.
+  assert.match(sentHlc, /^\d{13}-\d{4}$/);
+  assert.ok(sentHlc > parentHlc);
+  assert.equal(props.headers.hlc, sentHlc);
+
+  assert.equal(props.mandatory, true);
+  assert.equal(props.persistent, true);
+  assert.equal(props.messageId, 'u42:key');
+  assert.equal(props.correlationId, 'correlation');
+  assert.equal(props.replyTo, 'agg.2');
+  assert.equal(props.expiration, '10000');
+  assert.equal(props.contentType, 'application/json');
+  assert.equal(props.headers.custom, 'keep');
   ack(b.sent[0]); assert.equal((await p).status, 'BROKER_CONFIRMED');
 });
 

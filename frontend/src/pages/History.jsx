@@ -4,6 +4,19 @@ import { Icon, Plate } from '../ui.jsx';
 
 const time = (t) => (t ? new Date(t).toLocaleString('vi-VN') : '—');
 const money = (v) => (v == null ? '—' : `${v.toLocaleString('vi-VN')} đ`);
+const historyHlcKey = (session) => {
+  if (
+    typeof session.hlc === 'string' &&
+    /^\d{13}-\d{4}$/.test(session.hlc)
+  ) {
+    return session.hlc;
+  }
+
+  const parsed = Date.parse(session.enteredAt);
+  const ms = Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
+
+  return `${String(ms).padStart(13, '0')}-0000`;
+};
 
 // Lịch sử gửi xe. USER: phiên của mình. STAFF/ADMIN: tra biển số trên toàn hệ thống.
 export default function History({ user }) {
@@ -35,6 +48,13 @@ export default function History({ user }) {
     else if (r.status === 504 || r.status === 0) setPaying({ ...paying, unknown: true });   // chưa rõ: thử lại cùng key
     else { setPaying(null); setError(message(r.data)); load(); }
   }
+
+  const sessions = (data?.sessions ?? []).slice().sort((a, b) => {
+    const ka = historyHlcKey(a);
+    const kb = historyHlcKey(b);
+
+    return ka < kb ? 1 : ka > kb ? -1 : 0;
+  });
 
   return (
     <>
@@ -88,7 +108,7 @@ export default function History({ user }) {
         <div className="scroll"><table>
           <thead><tr><th>Bãi</th><th>Slot</th><th>Biển số</th><th>Vào</th><th>Ra</th><th className="tnum">Phí</th><th>Đã trả</th><th /></tr></thead>
           <tbody>
-            {data.sessions.map((x) => (
+            {sessions.map((x) => (
               <tr key={`${x.parkingId}:${x.id}`}>
                 <td>{x.parkingId}</td><td className="mono">{x.slotCode}</td><td><Plate value={x.licensePlate} /></td>
                 <td className="mono small">{time(x.enteredAt)}</td>
@@ -98,6 +118,7 @@ export default function History({ user }) {
                 <td>{mine && !x.paidAt && !x.exitedAt && <button className="primary" onClick={() => startPay(x)}><Icon name="card" /> Thanh toán</button>}</td>
               </tr>
             ))}
+
           </tbody>
         </table></div>
       )}

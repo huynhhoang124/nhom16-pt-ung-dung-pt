@@ -1,3 +1,4 @@
+const hlc = require('./hlc');
 const { createHash, randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -42,7 +43,13 @@ function decodeCommand(m, parkingId, internalKey) {
   if (META.some((k) => body[k] !== undefined && (k === 'fencingToken'
     ? !((Number.isSafeInteger(body[k]) && body[k] >= 0) || (typeof body[k] === 'string' && /^\d{1,20}$/.test(body[k])))
     : !str(body[k], 512)))) throw new InvalidCommand('INVALID_METADATA');
-  return { ...body, messageId: p.messageId, correlationId: p.correlationId, replyTo: p.replyTo, expiration: p.expiration };
+  if (
+    body.hlc !== undefined
+    && !/^\d{13}-\d{4}$/.test(body.hlc)
+  ) {
+    throw new InvalidCommand('INVALID_HLC');
+  }
+    return { ...body, messageId: p.messageId, correlationId: p.correlationId, replyTo: p.replyTo, expiration: p.expiration };
 }
 
 async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
@@ -79,7 +86,20 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
 function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}` }) {
   return async (m) => {
     const env = decodeCommand(m, parkingId, internalKey);
-    const hash = createHash('sha256').update(canonical({ type: env.type, parkingId, actor: env.actor, payload: env.payload })).digest('hex');
+
+    // Cập nhật HLC ngay khi nhận lệnh, trước khi phát sinh sự kiện mới.
+    if (env.hlc !== undefined) {
+      hlc.update(env.hlc);
+    }
+
+    const hash = createHash('sha256')
+    .update(canonical({
+      type: env.type,
+      parkingId: env.parkingId,
+      actor: env.actor,
+      payload: env.payload,
+    }))
+    .digest('hex');
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
@@ -99,7 +119,14 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         out.body = JSON.parse(JSON.stringify(out.body));
         await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
       }
-      const metadata = Object.fromEntries(META.filter((k) => env[k] !== undefined).map((k) => [k, env[k]]));
+      const metadata = Object.fromEntries(
+        META
+          .filter((k) => k !== 'hlc' && env[k] !== undefined)
+          .map((k) => [k, env[k]])
+      );
+
+      // Phản hồi là thông điệp mới của Node, nên dùng timestamp mới.
+      metadata.hlc = hlc.now();
       const payload = { schemaVersion: 1, type: 'COMMAND_RESULT', commandType: env.type, parkingId, commandId: env.messageId,
         actor: env.actor, statusCode: out.code, result: out.body, ...metadata };
       const properties = { messageId: randomUUID(), correlationId: env.correlationId, type: 'COMMAND_RESULT',

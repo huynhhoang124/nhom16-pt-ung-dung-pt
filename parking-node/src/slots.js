@@ -3,6 +3,7 @@
 
 const { calcFee, fromRow } = require('./pricing');
 const { requestId } = require('./log');
+const hlc = require('./hlc');
 
 // Dừng giao dịch với kết quả nghiệp vụ (409, 404...) thay vì lỗi hệ thống.
 class Abort {
@@ -27,14 +28,35 @@ async function tx(pool, fn) {
 
 // Ghi sự kiện vào outbox. Kèm số chỗ trống hiện tại của bãi (để báo "sắp đầy") và `extra`
 // (userId, reservationId... để dịch vụ thông báo biết gửi cho ai). Chỉ THÊM trường, không đổi trường cũ.
-async function emit(c, parkingId, type, slotCode, status, version, plate, extra = {}) {
+// Ghi HLC cùng sự kiện outbox trong giao dịch nghiệp vụ.
+// HLC chỉ sắp thứ tự nhân quả, không dùng để tính phí hay hết hạn.
+async function emit(c, parkingId, type, slotCode, status, version, plate,extra = {}, eventHlc = null) {
   const occ = (await c.query(
-    `SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available, count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total
-     FROM parking_slots`)).rows[0];
+    `SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available,
+            count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total
+     FROM parking_slots`
+  )).rows[0];
+
+  const timestamp = eventHlc ?? hlc.now();
+
+  const payload = {
+    event: 'SLOT_UPDATED',
+    type,
+    parkingId,
+    slot: slotCode,
+    status,
+    version: Number(version),
+    ...occ,
+    ...extra,
+    hlc: timestamp,
+    requestId: requestId(),
+  };
+
   return c.query(
-    `INSERT INTO parking_events(event_type, slot_code, license_plate, payload) VALUES ($1,$2,$3,$4)`,
-    [type, slotCode, plate ?? null,
-     { event: 'SLOT_UPDATED', type, parkingId, slot: slotCode, status, version: Number(version), ...occ, ...extra, requestId: requestId() }]);
+    `INSERT INTO parking_events(event_type, slot_code, license_plate, payload, hlc)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [type, slotCode, plate ?? null, payload, timestamp],
+  );
 }
 
 const findByRequest = (pool, requestId) =>
@@ -108,7 +130,7 @@ function reserve(pool, parkingId, input, minutes = 15) {
 const WALK_IN_GUARD_MIN = 120;
 
 const SESSION_COLS = `ps.id, s.slot_code AS "slotCode", ps.license_plate AS "licensePlate", ps.user_id AS "userId",
-  ps.reservation_id AS "reservationId", ps.entered_at AS "enteredAt", ps.exited_at AS "exitedAt",
+  ps.reservation_id AS "reservationId", ps.entered_at AS "enteredAt", ps.hlc AS "hlc", ps.exited_at AS "exitedAt",
   ps.fee, ps.paid_at AS "paidAt", ps.payment_method AS "paymentMethod"`;
 
 // Đổi trạng thái slot from -> to (enter/exit/maintenance) kèm sự kiện.
@@ -127,6 +149,8 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
     const s = await c.query(
       `UPDATE parking_slots SET status=$2, version=version+1, updated_at=now() WHERE id=$1 RETURNING id, version`, [slotId, to]);
     let session = null;
+    let sessionHlc = null;
+
     if (type === 'CAR_ENTER') {
       // Xe vào slot đang giữ chỗ = xe của lượt đặt đã được giữ (lượt ACTIVE sớm nhất của slot).
       const r = cur.status !== 'RESERVED' ? null : (await c.query(
@@ -134,9 +158,17 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
            SELECT id FROM reservations WHERE slot_id=$1 AND status='ACTIVE' ORDER BY start_time LIMIT 1)
          RETURNING id, user_id, license_plate`, [slotId])).rows[0];
       plate = plate || r?.license_plate || null;          // xe đặt trước: lấy biển số từ đặt chỗ
+      sessionHlc = hlc.now();
+
       const id = (await c.query(
-        `INSERT INTO parking_sessions(slot_id, license_plate, reservation_id, user_id) VALUES ($1,$2,$3,$4) RETURNING id`,
-        [slotId, plate, r?.id ?? null, r?.user_id ?? null])).rows[0].id;
+        `INSERT INTO parking_sessions(
+          slot_id, license_plate, reservation_id, user_id, hlc
+        )
+        VALUES ($1, $2, $3, $4, $5)
+        RETURNING id`,
+        [slotId, plate, r?.id ?? null, r?.user_id ?? null, sessionHlc]
+      )).rows[0].id;
+
       session = await getSession(c, id);
     } else if (type === 'CAR_EXIT') {
       // Xe vào trước khi có bảng phiên thì không có phiên -> cho ra như cũ.
@@ -161,8 +193,27 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
         session = { ...(await getSession(c, open.id)), breakdown: q.breakdown };
       }
     }
-    await emit(c, parkingId, type, slotCode, to, s.rows[0].version, plate,
-      session?.userId ? { userId: session.userId, reservationId: session.reservationId } : {});
+    const eventExtra = session?.id
+      ? {
+          sessionId: session.id,
+          ...(session.userId ? { userId: session.userId } : {}),
+          ...(session.reservationId
+            ? { reservationId: session.reservationId }
+            : {}),
+        }
+      : {};
+
+    await emit(
+      c,
+      parkingId,
+      type,
+      slotCode,
+      to,
+      s.rows[0].version,
+      plate,
+      eventExtra,
+      sessionHlc,
+    );
     return { code: 200, body: { slot: slotCode, status: to, version: Number(s.rows[0].version), ...(session && { session }) } };
   }).catch((e) => {
     // ux_open_session_plate: biển số này đang có xe trong bãi
@@ -221,15 +272,22 @@ async function payIn(c, { sessionId, method, paymentKey, userId }) {
 function pay(pool, input) { return tx(pool, (c) => payIn(c, input)); }
 
 // Lịch sử phiên gửi xe. Biển số so khớp sau khi bỏ dấu cách/chấm/gạch, không phân biệt hoa thường.
-const listSessions = async (pool, { plate, userId, from, to } = {}) => (await pool.query(
-  `SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
-   WHERE ($1::text IS NULL OR regexp_replace(upper(ps.license_plate), '[^A-Z0-9]', '', 'g')
-                              = regexp_replace(upper($1), '[^A-Z0-9]', '', 'g'))
-     AND ($2::text IS NULL OR ps.user_id = $2)
-     AND ($3::timestamptz IS NULL OR ps.entered_at >= $3)
-     AND ($4::timestamptz IS NULL OR ps.entered_at < $4)
-   ORDER BY ps.entered_at DESC LIMIT 200`, [plate || null, userId || null, from || null, to || null])).rows;
-
+// Lịch sử phiên gửi xe: HLC lấy từ sự kiện CAR_ENTER gắn với sessionId.
+// Phiên cũ chưa có sessionId trong payload sẽ có HLC = NULL và dùng enteredAt làm fallback.
+const listSessions = async (pool, { plate, userId, from, to } = {}) =>
+  (await pool.query(
+    `SELECT ${SESSION_COLS}
+     FROM parking_sessions ps
+     JOIN parking_slots s ON s.id = ps.slot_id
+     WHERE ($1::text IS NULL OR regexp_replace(upper(ps.license_plate), '[^A-Z0-9]', '', 'g')
+                                = regexp_replace(upper($1), '[^A-Z0-9]', '', 'g'))
+       AND ($2::text IS NULL OR ps.user_id = $2)
+       AND ($3::timestamptz IS NULL OR ps.entered_at >= $3)
+       AND ($4::timestamptz IS NULL OR ps.entered_at < $4)
+     ORDER BY ps.hlc DESC NULLS LAST, ps.entered_at DESC
+     LIMIT 200`,
+    [plate || null, userId || null, from || null, to || null],
+  )).rows;
 // Kết thúc một reservation ACTIVE (huỷ hoặc hết hạn): không xoá cứng, đổi status (dấu vết để đối soát).
 function endReservationIn(c, parkingId, id, status, userId) {
   return business(c, async () => {
