@@ -631,6 +631,14 @@ test(
         30_000
       );
 
+      const sessionHlc = sql('db-d', `SELECT ps.hlc FROM parking_sessions ps JOIN parking_events pe ON pe.payload->>'sessionId' = ps.id::text WHERE pe.id > ${beforeD} AND pe.event_type = 'CAR_ENTER' AND pe.slot_code = '${slotD}' ORDER BY pe.id DESC LIMIT 1`);
+
+      assert.equal(
+        sessionHlc,
+        enterHlc,
+        'HLC của CAR_ENTER phải được lưu trực tiếp vào parking_sessions'
+      );
+
       assert.match(exitHlc, /^\d{13}-\d{4}$/, 'HLC sự kiện ra A không hợp lệ');
       assert.match(enterHlc, /^\d{13}-\d{4}$/, 'HLC sự kiện vào D không hợp lệ');
 

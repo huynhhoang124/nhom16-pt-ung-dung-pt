@@ -95,6 +95,8 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
     const hash = createHash('sha256')
     .update(canonical({
       type: env.type,
+      parkingId: env.parkingId,
+      actor: env.actor,
       payload: env.payload,
     }))
     .digest('hex');
