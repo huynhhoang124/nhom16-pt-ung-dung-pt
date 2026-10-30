@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Icon } from './ui.jsx';
 
-const KIND_ICON = { ok: 'check', error: 'x', info: 'info' };
+const KIND_ICON = { ok: 'check', error: 'x', info: 'info', warn: 'alert' };
 
 // Hiện các toast từ toast() trong api.js, mỗi cái tự tắt sau 5 giây.
 export default function Toaster() {

@@ -48,13 +48,13 @@ export default function Dashboard({ onOpen }) {
   // Đang lọc theo loại xe thì số chỗ lấy theo loại đó.
   let shown = items.map((p) => ({
     ...p,
-    ...(type && p.status === 'ONLINE' ? p.byType?.[type] ?? { available: 0, total: 0 } : {}),
+    ...(type && p.status !== 'OFFLINE' ? p.byType?.[type] ?? { available: 0, total: 0 } : {}),
     distance: me && p.lat != null ? km(me, [p.lat, p.lng]) : null,
   }));
   // Có vị trí: bãi còn chỗ và đang chạy lên trước, rồi gần trước.
-  if (me) shown = [...shown].sort((a, b) => ((b.status === 'ONLINE' && b.available > 0) - (a.status === 'ONLINE' && a.available > 0))
+  if (me) shown = [...shown].sort((a, b) => ((b.status !== 'OFFLINE' && b.available > 0) - (a.status !== 'OFFLINE' && a.available > 0))
     || (a.distance ?? Infinity) - (b.distance ?? Infinity));
-  const online = shown.filter((p) => p.status === 'ONLINE');
+  const online = shown.filter((p) => p.status !== 'OFFLINE');
   const free = online.reduce((s, p) => s + p.available, 0);
 
   return (
