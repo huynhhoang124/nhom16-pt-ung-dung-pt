@@ -14,7 +14,8 @@ import './command-inbox-http.test.mjs';
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { io } = createRequire(new URL('../frontend/package.json', import.meta.url))('socket.io-client');
-const AGG = 'http://localhost:8000';
+const AGG = process.env.AGGREGATOR_URL ?? 'http://localhost:8000';
+const AGG2 = process.env.AGGREGATOR_2_URL ?? 'http://localhost:8010';
 const NODE = { A: 'http://localhost:8001', B: 'http://localhost:8002', C: 'http://localhost:8003', D: 'http://localhost:8004' };
 const KEY = process.env.INTERNAL_KEY ?? 'dev';
 const T = { timeout: 120_000 };
@@ -38,7 +39,10 @@ async function http(url, { method = 'GET', body, headers = {} } = {}, retry = me
 const agg = (path, { token, key, ...o } = {}) => http(AGG + path, {
   ...o, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { 'idempotency-key': key } : {}) },
 });
-const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { 'x-internal-key': KEY } });
+const agg2 = (path, { token, key, ...o } = {}) => http(AGG2 + path, {
+  ...o, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { 'idempotency-key': key } : {}) },
+});
+const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { ...o.headers, 'x-internal-key': KEY } });
 
 async function until(what, fn, ms = 60_000) {
   const end = Date.now() + ms;
@@ -678,5 +682,111 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
     }
   }
 );
+
+// --- PD-10: Bầu Leader Aggregator & Fencing Token (COORD=1 node --test tests/e2e.test.mjs) ---
+test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm leader mới trong <= 7s, metric = 1',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // 1. Khởi động bản Aggregator thứ 2
+      compose('--profile ha up -d aggregator-2');
+      await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
+
+      // 2. Xác định bản nào đang là Leader
+      await until('Có ít nhất một bản là Leader', async () => {
+        const l1 = (await agg('/api/leader')).body?.isLeader;
+        const l2 = (await agg2('/api/leader')).body?.isLeader;
+        return l1 || l2;
+      }, 10_000);
+
+      const r1 = (await agg('/api/leader')).body;
+      const [leaderName, followerName, followerUrl] = r1?.isLeader
+        ? ['aggregator', 'aggregator-2', agg2]
+        : ['aggregator-2', 'aggregator', agg];
+
+      console.log(`TC65 - Leader hiện tại là ${leaderName}`);
+
+      // 3. Tắt bản đang là Leader
+      compose(`stop ${leaderName}`);
+
+      // 4. Chờ bản follower lên làm leader mới trong <= 7s (lease TTL 5s hết hạn trên etcd)
+      const start = Date.now();
+      await until('Bản follower trở thành Leader mới <= 7s', async () => {
+        const r = await followerUrl('/api/leader');
+        return r.status === 200 && r.body?.isLeader === true;
+      }, 10_000);
+      const elapsed = Date.now() - start;
+      console.log(`TC65 - ${followerName} đã lên làm Leader mới sau ${elapsed}ms`);
+      assert.ok(elapsed <= 7500, `Leader mới phải được bầu trong <= 7s (thực tế: ${elapsed}ms)`);
+
+      // 5. Kiểm tra metric aggregator_is_leader = 1 trên bản mới
+      const metrics = await (await fetch((followerName === 'aggregator' ? AGG : AGG2) + '/metrics')).text();
+      assert.match(metrics, /aggregator_is_leader 1/);
+
+      console.log('TC65 - PASS: Chuyển giao Leader thành công khi Leader cũ dừng');
+    } finally {
+      compose('start aggregator');
+      compose('--profile ha stop aggregator-2');
+    }
+  }
+);
+
+test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token cũ -> bị node từ chối STALE_LEADER, metric tăng',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // 1. Khởi động bản Aggregator thứ 2
+      compose('--profile ha up -d aggregator-2');
+      await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
+
+      // Đảm bảo aggregator (bản 1) là leader
+      let l1 = (await agg('/api/leader')).body;
+      if (!l1?.isLeader) {
+        await agg2('/api/test/fault/leader-pause', { method: 'POST', body: { ms: 5000 } });
+        await until('Aggregator 1 trở thành Leader', async () => (await agg('/api/leader')).body?.isLeader, 10_000);
+        l1 = (await agg('/api/leader')).body;
+      }
+      assert.ok(l1?.isLeader, 'Aggregator 1 phải là leader');
+      const token1 = l1.fencingToken;
+      console.log(`TC66 - Aggregator 1 là leader với token: ${token1}`);
+
+      // 2. Giả lập pause Leader 1 (ngắt keepalive lease trong 12s, giữ token1 trong RAM)
+      const pauseRes = await agg('/api/test/fault/leader-pause', { method: 'POST', body: { ms: 12000 } });
+      assert.equal(pauseRes.status, 200);
+
+      // 3. Trong thời gian 5s lease của leader 1 hết hạn, Aggregator 2 lên làm leader với token mới (token2 > token1)
+      await until('Aggregator 2 nhận quyền Leader với token lớn hơn', async () => {
+        const r2 = (await agg2('/api/leader')).body;
+        return r2?.isLeader && r2.fencingToken > token1;
+      }, 10_000);
+
+      const token2 = (await agg2('/api/leader')).body.fencingToken;
+      console.log(`TC66 - Aggregator 2 đã trở thành Leader mới với token2: ${token2} > ${token1}`);
+
+      // 4. Leader mới (token2) ghi thật vào Node A: đưa một slot trống vào bảo trì -> Node A nâng max_token = token2
+      const fenced = (token) => ({ method: 'POST', body: {}, headers: { 'x-fencing-token': String(token), 'x-fencing-job': 'reconcile' } });
+      const { slotCode } = (await node('A', '/api/slots/available')).body[0];
+      const jobRes = await node('A', `/api/slots/${slotCode}/maintenance`, fenced(token2));
+      assert.equal(jobRes.status, 200);
+
+      // 5. Leader 1 cũ ghi với token cũ (token1): Node A kiểm token trong cùng giao dịch -> 409 STALE_LEADER, không ghi gì
+      const staleRes = await node('A', `/api/slots/${slotCode}/unmaintenance`, fenced(token1));
+      assert.equal(staleRes.status, 409);
+      assert.equal(staleRes.body?.error, 'STALE_LEADER');
+      const after = (await node('A', '/api/slots')).body.find((x) => x.slotCode === slotCode);
+      assert.equal(after.status, 'MAINTENANCE', 'lệnh của leader cũ không được ghi');
+      assert.equal((await node('A', `/api/slots/${slotCode}/unmaintenance`, fenced(token2))).status, 200);   // trả slot lại
+
+      // 6. Kiểm tra metric fencing_rejected_total trên Node A
+      const nodeMetrics = await (await fetch(NODE.A + '/metrics')).text();
+      assert.match(nodeMetrics, /fencing_rejected_total/);
+
+      console.log('TC66 - PASS: Node từ chối lệnh từ Leader cũ do Fencing Token cũ, bảo vệ chống split-brain');
+    } finally {
+      compose('--profile ha stop aggregator-2');
+    }
+  }
+);
+
 
 

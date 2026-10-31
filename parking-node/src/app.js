@@ -1,5 +1,6 @@
 const express = require('express');
 const s = require('./slots');
+const { checkFencing, withFencing, parseToken } = require('./fencing');
 const { normalizePlate, isPlate } = require('./plate');
 const { invalidRule } = require('./pricing');
 const { savePricing } = require('./db');
@@ -51,6 +52,23 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     const allowed = req.method === 'GET' || (req.method === 'POST' && STAFF_WRITE.some((r) => r.test(req.path)));
     if (!ownStaff || !allowed) return res.status(403).json({ error: 'FORBIDDEN' });
     next();
+  });
+
+  // PD-10: fencing token chống leader cũ (split-brain). Chỉ tin header khi có khoá nội bộ (Aggregator gửi):
+  // nhân viên có JWT không được tự đặt token, nếu không gửi token rất lớn là chặn được leader thật.
+  // Lệnh ghi: token được kiểm trong CÙNG giao dịch với lệnh ghi (tx ở slots.js gọi fenceIn).
+  // Lệnh đọc: không có gì để bảo vệ, chỉ kiểm để leader cũ sớm biết mình đã mất quyền.
+  app.use('/api', async (req, res, next) => {
+    const token = req.get('x-fencing-token');
+    if (req.get('x-internal-key') !== internalKey || token === undefined || token === '') return next();
+    if (parseToken(token) === null) return res.status(400).json({ error: 'INVALID_FENCING_TOKEN' });
+    const job = req.get('x-fencing-job') || 'default';
+    if (req.method === 'GET') {
+      const check = await checkFencing(pool, job, token);
+      if (!check.ok) return res.status(check.code).json({ error: check.error, job, token });
+      return next();
+    }
+    withFencing({ job, token }, next);
   });
 
   const send = (res, r) => res.status(r.code).json(r.body);
