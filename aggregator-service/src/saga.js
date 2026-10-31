@@ -12,14 +12,15 @@ const save = (pool, saga) => pool.query(
 
 const view = (row) => ({ id: row.id, status: row.status, steps: row.steps, createdAt: row.created_at, updatedAt: row.updated_at });
 
-function makeSagas({ pool, reg, timeoutMs = 3000 }) {
+// timeoutMs: hàm trả timeout hiện tại (PD-11 đổi được qua etcd khi đang chạy)
+function makeSagas({ pool, reg, timeoutMs = () => 3000 }) {
   // Gọi node; trả { status, body } hoặc { status: 0 } nếu không gọi được / timeout (không rõ kết quả).
   async function call(parkingId, path, opts) {
     const n = reg.get(parkingId);
     if (!n) return { status: 404, body: { error: 'PARKING_NOT_FOUND' } };
     if (n.status === 'OFFLINE') return { status: 503, body: { error: 'PARKING_OFFLINE' } };
     try {
-      const r = await reg.call(n, path, { ms: timeoutMs, ...opts });
+      const r = await reg.call(n, path, { ms: timeoutMs(), ...opts });
       return { status: r.status, body: await r.json() };
     } catch {
       return { status: 0 };

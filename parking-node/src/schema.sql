@@ -68,6 +68,22 @@ CREATE TABLE IF NOT EXISTS parking_events (
   published_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS ix_events_unpublished ON parking_events(id) WHERE published_at IS NULL;
+-- PD-18: báo relay ngay khi có sự kiện mới trong outbox.
+CREATE OR REPLACE FUNCTION notify_parking_event_outbox()
+RETURNS TRIGGER AS $$
+BEGIN
+  PERFORM pg_notify('outbox', NEW.id::text);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_parking_events_outbox_notify ON parking_events;
+
+CREATE TRIGGER trg_parking_events_outbox_notify
+AFTER INSERT ON parking_events
+FOR EACH ROW
+EXECUTE FUNCTION notify_parking_event_outbox();
+
 
 -- Phiên gửi xe: mở khi xe vào, đóng khi xe ra (lịch sử, tính phí, thanh toán).
 CREATE TABLE IF NOT EXISTS parking_sessions (
