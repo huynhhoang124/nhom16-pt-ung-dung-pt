@@ -141,7 +141,13 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     if (!['ONLINE', 'CASH'].includes(method) || typeof paymentKey !== 'string' || !paymentKey || paymentKey.length > 128) {
       return res.status(400).json({ error: 'method (ONLINE|CASH) and paymentKey are required' });
     }
-    send(res, await s.pay(pool, { sessionId: req.params.id, method, paymentKey, userId }));
+    send(res, await s.pay(pool, {
+      sessionId: req.params.id,
+      method,
+      paymentKey,
+      userId,
+      parkingId
+    }));
   });
 
   // Bảng giá của bãi (NV-03). PUT nhận mảng quy tắc, mỗi loại xe một quy tắc.

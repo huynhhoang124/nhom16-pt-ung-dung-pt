@@ -70,6 +70,9 @@ services:
   db-c: { <<: *pg, volumes: [db-c-data:/var/lib/postgresql/data] }
   db-agg: { <<: *pg, volumes: [db-agg-data:/var/lib/postgresql/data] }
 
+  # PD-23: Database riêng cho Stats CQRS
+  db-stats: { <<: *pg, volumes: [db-stats-data:/var/lib/postgresql/data] }
+
   parking-a:
     build: ./parking-node
     image: nhom16/parking-node
@@ -104,6 +107,8 @@ services:
       DEMO_PASSWORD: ${DEMO_PASSWORD:-123456}
       JWT_PRIVATE_KEY_B64: ${JWT_PRIVATE_KEY_B64:-}    # có cặp khoá -> ký RS256 (node tự kiểm); không có -> HS256
       JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}
+      USE_STATS_SERVICE: "true"
+      STATS_SERVICE_URL: "http://stats-service:8011"
       NODES: >-
         [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875,"publicUrl":"http://localhost:8001"},
          {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002"},
@@ -128,6 +133,24 @@ services:
     build: ./notification-service
     environment: { RABBITMQ_URL: *amqp }
     depends_on: { rabbitmq: { condition: service_healthy } }
+
+    # PD-23: CQRS statistics service
+  stats-service:
+    build: ./stats-service
+    environment:
+      PORT: 8011
+      DATABASE_URL: "postgres://postgres:dev@db-stats/parking"
+      RABBITMQ_URL: *amqp
+      STREAM_HOST: rabbitmq
+      STREAM_PORT: 5552
+      STREAM_NAME: events.stream
+    depends_on:
+      db-stats:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    ports:
+    - "8011:8011"
 
   frontend:
     build: ./frontend
@@ -174,3 +197,4 @@ volumes:
   db-c-data:
   db-agg-data:
   db-d-data:
+  db-stats-data:
