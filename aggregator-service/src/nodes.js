@@ -86,9 +86,11 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   };
 
   // Timeout dùng AbortSignal.timeout: bộ đếm của runtime, không phụ thuộc giờ hệ thống bị chỉnh.
-  const raw = (n, path, { method = 'GET', body, ms, job } = {}) => {
+  // fencingToken: việc của leader (khôi phục saga) truyền token lúc lên leader, để vẫn gửi token đó sau khi mất quyền
+  // và node từ chối khi đã thấy token mới hơn; không truyền thì lấy token hiện tại.
+  const raw = (n, path, { method = 'GET', body, ms, job, fencingToken } = {}) => {
     const effectiveMs = ms ?? getTimeout();
-    const token = leader?.getToken?.();
+    const token = fencingToken ?? leader?.getToken?.();
     const fencingHeaders = token ? {
       'x-fencing-token': String(token),
       'x-fencing-job': job || 'reconcile',
@@ -118,13 +120,13 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   // nhiều client không dồn vào cùng lúc), và CHỈ khi thao tác idempotent: GET (mặc định) hoặc ghi có
   // Idempotency-Key (người gọi truyền retry: true). Xe vào/ra không idempotent nên không bao giờ tự retry.
   // Cả 2 lần thử nằm trong CÙNG ngân sách `ms`: retry không kéo dài thời gian chờ của người dùng.
-  async function call(n, path, { method = 'GET', body, ms, retry = method === 'GET', job } = {}) {
+  async function call(n, path, { method = 'GET', body, ms, retry = method === 'GET', job, fencingToken } = {}) {
     const effectiveMs = ms ?? getTimeout();
     const deadline = Date.now() + effectiveMs;
     for (let attempt = 0; ; attempt++) {
       let res;
       try {
-        res = await raw(n, path, { method, body, ms: Math.max(1, deadline - Date.now()), job });
+        res = await raw(n, path, { method, body, ms: Math.max(1, deadline - Date.now()), job, fencingToken });
         if (res.status === 409) {
           try {
             const data = await res.clone().json();

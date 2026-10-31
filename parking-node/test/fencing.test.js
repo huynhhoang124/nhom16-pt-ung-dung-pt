@@ -73,6 +73,20 @@ test('PD-10 fencing HTTP: lệnh ghi kiểm token trong cùng giao dịch, token
   assert.equal(await slot('A01'), 'MAINTENANCE');
   assert.equal(await events(), before);
 
+  // 2b. Sửa bảng giá bằng token cũ: kiểm trong cùng giao dịch ghi -> 409, giá không đổi
+  const fee = async () => (await pool.query("SELECT first_block_fee FROM pricing_rules WHERE vehicle_type='CAR'")).rows[0].first_block_fee;
+  const before2 = await fee();
+  const rule = { vehicleType: 'CAR', firstBlockMin: 120, firstBlockFee: before2 + 1000, nextHourFee: 5000, overnightFee: 30000 };
+  const put = (token) => fetch(base + '/api/pricing', { method: 'PUT',
+    headers: { 'content-type': 'application/json', 'x-internal-key': 'dev', 'x-fencing-token': String(token), 'x-fencing-job': 'reconcile' },
+    body: JSON.stringify([rule]) });
+  const stalePut = await put(150);
+  assert.equal(stalePut.status, 409);
+  assert.equal((await stalePut.json()).error, 'STALE_LEADER');
+  assert.equal(await fee(), before2);
+  assert.equal((await put(200)).status, 200);
+  assert.equal(await fee(), before2 + 1000);
+
   // 3. Đọc với token cũ cũng bị báo để leader cũ sớm tự rút lui; token sai định dạng -> 400
   assert.equal((await call('/api/slots', 150)).status, 409);
   assert.equal((await call('/api/slots', 'abc')).status, 400);

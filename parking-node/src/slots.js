@@ -420,4 +420,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { reserveIn, endReservationIn, payIn, reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };
+module.exports = { tx, reserveIn, endReservationIn, payIn, reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };

@@ -180,7 +180,9 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     if (!Array.isArray(rules) || !rules.length) return res.status(400).json({ error: 'body must be a non-empty array of rules' });
     const bad = rules.map(invalidRule).find(Boolean);
     if (bad) return res.status(400).json({ error: bad });
-    await savePricing(pool, rules);
+    // PD-10: ghi trong tx() để fencing token của leader được kiểm trong cùng giao dịch
+    const fenced = await s.tx(pool, (c) => savePricing(c, rules).then(() => null));
+    if (fenced) return send(res, fenced);
     res.json(await s.listPricing(pool));
   });
 

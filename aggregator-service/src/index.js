@@ -147,7 +147,10 @@ async function main() {
     try {
       // Bù trừ saga dở dang sau khi health check biết bãi nào sống (PT-07)
       await check();
-      const k = await app.locals.sagas.recover();
+      const k = await app.locals.sagas.recover(undefined, {
+        fencingToken: token,
+        isActive: () => leader.isLeader() && leader.getToken() === token,
+      });
       if (k) log.info(`Khôi phục ${k} saga dở dang`);
     } catch (e) {
       log.error('Khôi phục saga lỗi', { error: e.message });
