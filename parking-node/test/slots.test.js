@@ -48,7 +48,8 @@ test('đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện', async ()
   const ev = await one(pool, 'SELECT payload FROM parking_events');
   assert.deepEqual(ev.payload, {
     event: 'SLOT_UPDATED', type: 'RESERVED', parkingId: 'A', slot: 'A01', status: 'RESERVED', version: 1,
-    available: 4, total: 5, userId: 'u1', reservationId: r.body.id,   // NV-08: số chỗ trống + người nhận thông báo
+    available: 4, total: 5, userId: 'u1', reservationId: r.body.id,
+    occurredAt: ev.payload.occurredAt,
   });
 });
 
