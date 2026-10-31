@@ -97,9 +97,12 @@ async function replayRecentEvents(
   const markerId = `${process.pid}-${Date.now()}`;
 
   return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => void finish(new Error("events.stream replay timed out")), 8000);
     const finish = async (err) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
 
       try {
         if (ch && consumerTag) {
@@ -117,10 +120,13 @@ async function replayRecentEvents(
     void (async () => {
       try {
         conn = await connectAny();
-        conn.on('error', () => {});
+        if (settled) { await conn.close(); return; }
+        conn.on('error', (error) => void finish(error));
 
         ch = await conn.createChannel();
+        ch.on?.('error', (error) => void finish(error));
         pub = await conn.createConfirmChannel();
+        pub.on?.('error', (error) => void finish(error));
 
         await ch.prefetch(100);
 
@@ -195,7 +201,7 @@ async function replayRecentEvents(
 
 
 
-function createReconcileQueue(reg, cache, onApplied, log = console, delayMs = 500) {
+function createReconcileQueue(reg, cache, onApplied, log = console, delayMs = 500, leader) {
   const pending = [];
   const queued = new Set();
   let running = false;
@@ -211,9 +217,11 @@ function createReconcileQueue(reg, cache, onApplied, log = console, delayMs = 50
         const n = pending.shift();
 
         try {
+          if (leader && !leader.isLeader()) continue;
           const count = await reconcile(reg, cache, n, onApplied);
           log.info?.(`Đối soát bãi ${n.id}: cập nhật ${count} slot`);
         } catch (e) {
+          if (e.message?.includes('STALE_LEADER')) leader?.demote();
           log.error?.(`Đối soát bãi ${n.id} lỗi`, { error: e.message });
         } finally {
           queued.delete(n.id);

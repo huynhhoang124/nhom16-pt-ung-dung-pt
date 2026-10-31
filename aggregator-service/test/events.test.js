@@ -49,22 +49,6 @@ test('TC13 đối soát: cache cũ được cập nhật theo DB bãi; chạy l�
   assert.equal(await reconcile(agg.reg, agg.cache, n), 0);
 });
 
-test('applyEvent lưu HLC của sự kiện nhận được', () => {
-  const cache = new Map();
-
-  const event = {
-    ...ev('A04', 1),
-    hlc: '1800000000000-0007',
-  };
-
-  assert.equal(applyEvent(cache, event), true);
-  assert.deepEqual(cache.get('A:A04'), {
-    status: 'RESERVED',
-    version: 1,
-    hlc: '1800000000000-0007',
-  });
-});
-
 test('PD-22: hàng đợi đối soát tuần tự, giãn cách và bỏ bãi trùng', async () => {
   const calls = [];
   const reg = {
@@ -158,4 +142,19 @@ test('PD-22 replay: áp dụng sự kiện mới và kết thúc khi nhận mark
   assert.equal(applied.length, 1);
   assert.equal(ackCount, 2);
   assert.equal(cancelled, true);
+});
+test('applyEvent lưu HLC của sự kiện nhận được', () => {
+  const cache = new Map();
+
+  const event = {
+    ...ev('A04', 1),
+    hlc: '1800000000000-0007',
+  };
+
+  assert.equal(applyEvent(cache, event), true);
+  assert.deepEqual(cache.get('A:A04'), {
+    status: 'RESERVED',
+    version: 1,
+    hlc: '1800000000000-0007',
+  });
 });

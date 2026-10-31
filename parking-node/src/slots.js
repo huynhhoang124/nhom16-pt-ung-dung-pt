@@ -77,6 +77,7 @@ async function emit(c, parkingId, type, slotCode, status, version, plate,extra =
   );
 }
 
+
 const findByRequest = (pool, requestId) =>
   pool.query(
     `SELECT r.*, s.slot_code FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
@@ -237,7 +238,16 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
       to,
       s.rows[0].version,
       plate,
-      eventExtra,
+      {
+        ...eventExtra,
+        ...(session && {
+          enteredAt: session.enteredAt,
+          exitedAt: session.exitedAt,
+          fee: Number(session.fee || 0),
+          paidAt: session.paidAt,
+          paymentMethod: session.paymentMethod,
+        }),
+      },
       sessionHlc,
     );
     return { code: 200, body: { slot: slotCode, status: to, version: Number(s.rows[0].version), ...(session && { session }) } };
@@ -267,7 +277,7 @@ const listPricing = async (pool) => (await pool.query('SELECT * FROM pricing_rul
 
 // NV-04: thanh toán (giả lập). paymentKey = "<userId>:<Idempotency-Key>": bấm lại / retry trả lại kết quả cũ,
 // không ghi nhận lần hai. Trả khi xe còn trong bãi thì khoá số tiền theo phí tạm tính lúc trả.
-async function payIn(c, { sessionId, method, paymentKey, userId }) {
+async function payIn(c, { sessionId, method, paymentKey, userId, parkingId }) {
   const replay = async (fallback) => {
     const r = (await c.query(`SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
       WHERE ps.payment_key=$1 AND ps.id=$2 AND ($3::text IS NULL OR ps.user_id=$3)`, [paymentKey, sessionId, userId ?? null])).rows[0];
@@ -283,9 +293,34 @@ async function payIn(c, { sessionId, method, paymentKey, userId }) {
     const q = await quoteIn(c, sessionId);
     if (q.fee <= 0) throw new Abort(409, { error: 'NOTHING_TO_PAY' });
     await c.query(
-      `UPDATE parking_sessions SET paid_at=now(), payment_method=$2, payment_key=$3, fee=$4 WHERE id=$1`,
-      [sessionId, method, paymentKey, q.fee]);
-    return { code: 200, body: await getSession(c, sessionId) };
+  `UPDATE parking_sessions
+   SET paid_at=now(), payment_method=$2, payment_key=$3, fee=$4
+   WHERE id=$1`,
+  [sessionId, method, paymentKey, q.fee]
+);
+
+const session = await getSession(c, sessionId);
+
+await emit(
+  c,
+  parkingId,
+  'PAYMENT_COMPLETED',
+  session.slotCode,
+  'OCCUPIED',
+  0,
+  session.licensePlate,
+  {
+    event: 'PAYMENT_COMPLETED',
+    sessionId,
+    fee: Number(q.fee),
+    occurredAt: new Date().toISOString(),
+    userId: session.userId,
+    paymentMethod: method,
+    paymentKey
+  }
+);
+
+return { code: 200, body: session };
   }, (e) => {
     if (e instanceof Abort) {
       const out = { code: e.code, body: e.body };
