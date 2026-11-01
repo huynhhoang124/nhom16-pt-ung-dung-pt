@@ -4,7 +4,7 @@
 // Test có tắt/bật container (parking-b, aggregator, rabbitmq, notification) và tự bật lại khi xong.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -881,7 +881,9 @@ test('TC55 bãi tắt lâu hơn TTL: lệnh EXPIRED, bật lại không bị đ�
 test('TC59 hàng đợi lệnh đầy: trả 503 kèm Retry-After, không mất lệnh đã nhận', { ...T, skip: !BROKER }, async () => {
   const token = await login('user1');
   const policy = '{"max-length":2,"overflow":"reject-publish","dead-letter-exchange":"parking.dlx","dead-letter-routing-key":"expired"}';
-  compose(`exec -T rabbitmq rabbitmqctl set_policy -p / --priority 20 --apply-to quorum_queues tc59-small "^cmd\.C$" '${policy}'`);
+  // gọi docker trực tiếp (không qua shell) để JSON của policy không bị shell Windows làm hỏng dấu nháy
+  const rabbitctl = (...args) => execFileSync('docker', ['compose', 'exec', '-T', 'rabbitmq', 'rabbitmqctl', ...args], { cwd: ROOT, stdio: 'pipe' });
+  rabbitctl('set_policy', '-p', '/', '--priority', '20', '--apply-to', 'quorum_queues', 'tc59-small', '^cmd\.C$', policy);
   compose('stop parking-c');
   const accepted = [];
   try {
@@ -898,7 +900,7 @@ test('TC59 hàng đợi lệnh đầy: trả 503 kèm Retry-After, không mất 
       assert.notEqual(c.body?.status, 'FAILED', `lệnh đã nhận ${id} không được mất`);
     }
   } finally {
-    compose('exec -T rabbitmq rabbitmqctl clear_policy -p / tc59-small');
+    rabbitctl('clear_policy', '-p', '/', 'tc59-small');
     compose('start parking-c');
   }
 });
