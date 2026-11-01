@@ -1,0 +1,295 @@
+{
+  "services": {
+    "db-agg": {
+      "command": [
+        "postgres",
+        "-c",
+        "shared_buffers=32MB"
+      ],
+      "mem_limit": "192m",
+      "shm_size": "64m"
+    },
+    "aggregator": {
+      "environment": {
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "bac"
+      }
+    },
+    "aggregator-2": {
+      "environment": {
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "bac"
+      }
+    },
+    "db-a": {
+      "command": [
+        "postgres",
+        "-c",
+        "shared_buffers=32MB"
+      ],
+      "mem_limit": "192m",
+      "shm_size": "64m"
+    },
+    "parking-a": {
+      "environment": {
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "bac"
+      }
+    },
+    "db-b": {
+      "command": [
+        "postgres",
+        "-c",
+        "shared_buffers=32MB"
+      ],
+      "mem_limit": "192m",
+      "shm_size": "64m"
+    },
+    "parking-b": {
+      "environment": {
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "bac"
+      }
+    },
+    "db-c": {
+      "command": [
+        "postgres",
+        "-c",
+        "shared_buffers=32MB"
+      ],
+      "mem_limit": "192m",
+      "shm_size": "64m"
+    },
+    "parking-c": {
+      "environment": {
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "bac"
+      }
+    },
+    "db-d": {
+      "profiles": [
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "environment": {
+        "POSTGRES_PASSWORD": "dev",
+        "POSTGRES_DB": "parking"
+      },
+      "command": [
+        "postgres",
+        "-c",
+        "shared_buffers=32MB"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U postgres -d parking"
+        ],
+        "interval": "3s",
+        "timeout": "3s",
+        "retries": 30
+      },
+      "mem_limit": "192m",
+      "shm_size": "64m",
+      "volumes": [
+        "db-d-data:/var/lib/postgresql/data"
+      ]
+    },
+    "parking-d": {
+      "profiles": [
+        "scale"
+      ],
+      "build": "./parking-node",
+      "image": "nhom16/parking-node",
+      "environment": {
+        "INTERNAL_KEY": "${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}",
+        "RABBITMQ_URL": "${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}",
+        "RESERVATION_MINUTES": "${RESERVATION_MINUTES:-15}",
+        "JWT_PUBLIC_KEY_B64": "${JWT_PUBLIC_KEY_B64:-}",
+        "CORS_ORIGIN": "${CORS_ORIGIN:-http://localhost:3000}",
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "nam",
+        "LEASE_TTL_S": "${LEASE_TTL_S:-5}",
+        "PARKING_ID": "D",
+        "PORT": 8004,
+        "NODE_URL": "http://toxiproxy:18004",
+        "SLOTS": "CAR:1:10,CAR:2:10",
+        "DATABASE_URL": "postgres://postgres:dev@db-d/parking"
+      },
+      "ports": [
+        "8004:8004"
+      ],
+      "depends_on": {
+        "db-d": {
+          "condition": "service_healthy"
+        }
+      },
+      "mem_limit": "256m"
+    },
+    "db-e": {
+      "profiles": [
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "environment": {
+        "POSTGRES_PASSWORD": "dev",
+        "POSTGRES_DB": "parking"
+      },
+      "command": [
+        "postgres",
+        "-c",
+        "shared_buffers=32MB"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U postgres -d parking"
+        ],
+        "interval": "3s",
+        "timeout": "3s",
+        "retries": 30
+      },
+      "mem_limit": "192m",
+      "shm_size": "64m",
+      "volumes": [
+        "db-e-data:/var/lib/postgresql/data"
+      ]
+    },
+    "parking-e": {
+      "profiles": [
+        "scale"
+      ],
+      "build": "./parking-node",
+      "image": "nhom16/parking-node",
+      "environment": {
+        "INTERNAL_KEY": "${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}",
+        "RABBITMQ_URL": "${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}",
+        "RESERVATION_MINUTES": "${RESERVATION_MINUTES:-15}",
+        "JWT_PUBLIC_KEY_B64": "${JWT_PUBLIC_KEY_B64:-}",
+        "CORS_ORIGIN": "${CORS_ORIGIN:-http://localhost:3000}",
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "nam",
+        "LEASE_TTL_S": "${LEASE_TTL_S:-5}",
+        "PARKING_ID": "E",
+        "PORT": 8005,
+        "NODE_URL": "http://toxiproxy:18005",
+        "SLOTS": "CAR:1:10,MOTO:1:10",
+        "DATABASE_URL": "postgres://postgres:dev@db-e/parking"
+      },
+      "ports": [
+        "8005:8005"
+      ],
+      "depends_on": {
+        "db-e": {
+          "condition": "service_healthy"
+        }
+      },
+      "mem_limit": "256m"
+    },
+    "db-f": {
+      "profiles": [
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "environment": {
+        "POSTGRES_PASSWORD": "dev",
+        "POSTGRES_DB": "parking"
+      },
+      "command": [
+        "postgres",
+        "-c",
+        "shared_buffers=32MB"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U postgres -d parking"
+        ],
+        "interval": "3s",
+        "timeout": "3s",
+        "retries": 30
+      },
+      "mem_limit": "192m",
+      "shm_size": "64m",
+      "volumes": [
+        "db-f-data:/var/lib/postgresql/data"
+      ]
+    },
+    "parking-f": {
+      "profiles": [
+        "scale"
+      ],
+      "build": "./parking-node",
+      "image": "nhom16/parking-node",
+      "environment": {
+        "INTERNAL_KEY": "${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}",
+        "RABBITMQ_URL": "${RABBITMQ_URL:-amqp://parking:parking@rabbitmq}",
+        "RESERVATION_MINUTES": "${RESERVATION_MINUTES:-15}",
+        "JWT_PUBLIC_KEY_B64": "${JWT_PUBLIC_KEY_B64:-}",
+        "CORS_ORIGIN": "${CORS_ORIGIN:-http://localhost:3000}",
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
+        "ZONE": "nam",
+        "LEASE_TTL_S": "${LEASE_TTL_S:-5}",
+        "PARKING_ID": "F",
+        "PORT": 8006,
+        "NODE_URL": "http://toxiproxy:18006",
+        "SLOTS": "CAR:1:10,MOTO:1:10",
+        "DATABASE_URL": "postgres://postgres:dev@db-f/parking"
+      },
+      "ports": [
+        "8006:8006"
+      ],
+      "depends_on": {
+        "db-f": {
+          "condition": "service_healthy"
+        }
+      },
+      "mem_limit": "256m"
+    },
+    "toxiproxy": {
+      "profiles": [
+        "scale"
+      ],
+      "image": "ghcr.io/shopify/toxiproxy:2.9.0",
+      "command": [
+        "-host=0.0.0.0",
+        "-config=/config/scale.json"
+      ],
+      "ports": [
+        "8474:8474"
+      ],
+      "volumes": [
+        "./toxiproxy/scale.json:/config/scale.json:ro"
+      ],
+      "depends_on": [
+        "parking-d",
+        "parking-e",
+        "parking-f"
+      ],
+      "mem_limit": "64m"
+    },
+    "region-latency": {
+      "profiles": [
+        "scale"
+      ],
+      "image": "node:22-alpine",
+      "working_dir": "/app",
+      "command": [
+        "node",
+        "configure-region-latency.mjs"
+      ],
+      "volumes": [
+        "./scripts/configure-region-latency.mjs:/app/configure-region-latency.mjs:ro"
+      ],
+      "depends_on": [
+        "toxiproxy"
+      ],
+      "restart": "on-failure"
+    }
+  },
+  "volumes": {
+    "db-d-data": {},
+    "db-e-data": {},
+    "db-f-data": {}
+  }
+}

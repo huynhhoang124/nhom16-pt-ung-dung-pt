@@ -18,10 +18,10 @@ async function init(pool) {
   for (const n of JSON.parse(env('NODES', '[]'))) {
     // bãi đã có: api_url theo cấu hình hiện tại (vd đổi sang toxiproxy khi demo mạng xấu); toạ độ/địa chỉ công khai chỉ bổ sung nếu chưa có
     await pool.query(
-      `INSERT INTO parking_nodes(parking_id, name, api_url, address, lat, lng, public_url) VALUES ($1,$2,$3,$4,$5,$6,$7)
+      `INSERT INTO parking_nodes(parking_id, name, api_url, address, lat, lng, public_url, zone) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
        ON CONFLICT (parking_id) DO UPDATE SET api_url = EXCLUDED.api_url, lat = COALESCE(parking_nodes.lat, EXCLUDED.lat), lng = COALESCE(parking_nodes.lng, EXCLUDED.lng),
-         public_url = COALESCE(parking_nodes.public_url, EXCLUDED.public_url)`,
-      [n.parkingId, n.name, n.apiUrl, n.address ?? null, n.lat ?? null, n.lng ?? null, n.publicUrl ?? null]);
+         public_url = COALESCE(parking_nodes.public_url, EXCLUDED.public_url), zone = COALESCE(parking_nodes.zone, EXCLUDED.zone)`,
+      [n.parkingId, n.name, n.apiUrl, n.address ?? null, n.lat ?? null, n.lng ?? null, n.publicUrl ?? null, n.zone ?? env('ZONE', 'bac')]);
   }
   await seedUsers(pool, env('DEMO_PASSWORD', '123456'));
 }
@@ -59,6 +59,7 @@ async function main() {
     internalKey: env('INTERNAL_KEY', 'dev'),
     config,
     leader,
+    zone: env('ZONE', 'bac'),
     timeoutMs: config.get('timeoutMs'),
     failThreshold: config.get('failThreshold'),
   });

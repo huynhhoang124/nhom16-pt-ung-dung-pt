@@ -20,6 +20,9 @@ ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
 ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;
 -- PT-05: địa chỉ node mà TRÌNH DUYỆT nhân viên gọi thẳng được khi Aggregator sập (khác api_url trong mạng nội bộ)
 ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS public_url TEXT;
+ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS zone TEXT NOT NULL DEFAULT 'bac';
+ALTER TABLE parking_nodes ALTER COLUMN zone SET DEFAULT 'bac';
+UPDATE parking_nodes SET zone = 'bac' WHERE zone IS NULL;
 
 -- PT-07: nhật ký saga đặt chỗ nhiều bãi (ghi sau mỗi bước để khôi phục khi Aggregator chết giữa chừng)
 CREATE TABLE IF NOT EXISTS sagas (
