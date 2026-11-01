@@ -2,6 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { EventEmitter } = require('node:events');
 const { makeCommands, routingKey, ATTEMPT_HEADER } = require('../src/commands');
+const { trusted } = require('../src/retry-contract');
 
 function broker() {
   const connections = [];
@@ -23,6 +24,15 @@ const tick = () => new Promise((r) => setImmediate(r));
 const ack = (m, error) => m[4](error);
 const returned = (b, m, code = 312) => b.connections.at(-1).ch.emit('return', { properties: m[3], fields: { replyCode: code } });
 const rejects = (p, code) => assert.rejects(p, { code });
+
+test('runtime command has signed absolute deadline, server identity and remaining queue TTL',async(t)=>{
+  const b=broker(),pub=makeCommands('amqp://test',{connect:b.connect,signingKey:'key',ttlMs:60000,replyTo:'agg.1'});
+  t.after(()=>pub.close());const result=pub.send('A','reserve',{}, {actor:{userId:'u',role:'USER'}});
+  await tick();const [,key,content,p]=b.sent[0],body=JSON.parse(content);
+  assert.equal(key,'cmd.A.reserve');assert.match(p.messageId,/^u:/);assert.equal(p.replyTo,'agg.1');
+  assert.equal(body.deadlineAt-body.issuedAt,60000);assert.ok(Number(p.expiration)<=60000);assert.ok(trusted('key',body,p));
+  ack(b.sent[0]);await result;
+});
 
 test('routing key rejects wildcards, dots and empty segments without restricting parking registry', () => {
   assert.equal(routingKey('UNKNOWN', 'reserve'), 'cmd.UNKNOWN.reserve');
@@ -134,4 +144,17 @@ test('channel error invalidates publisher and does not become unhandled EventEmi
   const b = broker(); const pub = makeCommands('amqp://test', { connect: b.connect });
   const p = pub.send('A', 'reserve', {}); const check = rejects(p, 'PUBLISH_UNKNOWN_RESULT');
   await tick(); b.connections[0].ch.emit('error', new Error('channel failure')); await check; await pub.close();
+});
+
+
+test('persisted issuedAt/deadlineAt are honored on republish, never reset to factory TTL', async(t)=>{
+  const b=broker(),pub=makeCommands('amqp://test',{connect:b.connect,signingKey:'key',ttlMs:60000});t.after(()=>pub.close());
+  const issuedAt=Date.now()-12000,deadlineAt=issuedAt+60000;
+  const p=pub.send('A','reserve',{}, {messageId:'u:persisted',issuedAt,deadlineAt,actor:{userId:'u',role:'USER'}});
+  await tick();const wire=b.sent[0],body=JSON.parse(wire[2]);
+  assert.equal(body.issuedAt,issuedAt);assert.equal(body.deadlineAt,deadlineAt);
+  assert.ok(Number(wire[3].expiration)<=48000&&Number(wire[3].expiration)>47000);
+  ack(wire);await p;
+  await rejects(pub.send('A','reserve',{}, {issuedAt:Date.now()-2000,deadlineAt:Date.now()-1000}),'COMMAND_EXPIRED');
+  assert.equal(b.sent.length,1);
 });

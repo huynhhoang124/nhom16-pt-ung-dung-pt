@@ -8,6 +8,7 @@ const { makeRegistryClient } = require('./registry');
 const { log } = require('./log');
 const { startCommandConsumer, makeCommandProcessor, cleanupInbox } = require('./commands');
 const { makeReplyPublisher, makeReplyRelay } = require('./command-replies');
+const { withDeadline, makeRetryOrDead, testFailures } = require('./command-retry');
 const { makeRelayLagMetric } = require('./metrics');
 
 const env = (k, d) => process.env[k] ?? d;
@@ -107,9 +108,11 @@ async function main() {
 
   const replyPublisher = makeReplyPublisher(url);
   const replyOnce = makeReplyRelay(pool, replyPublisher.publish);
-  const consumer = startCommandConsumer({ url, pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'), log,
-    processCommand: makeCommandProcessor({ pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
+  const retryOrDead = makeRetryOrDead({ url, internalKey:env('INTERNAL_KEY','dev') });
+  const consumer = startCommandConsumer({ url, pool, parkingId, retryOrDead, internalKey: env('INTERNAL_KEY', 'dev'), log,
+    processCommand: withDeadline(makeCommandProcessor({ pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
       reservationMinutes: Number(env('RESERVATION_MINUTES', 15)), qrSecret: env('QR_SECRET', `${env('INTERNAL_KEY', 'dev')}:qr:${parkingId}`) }),
+      { internalKey:env('INTERNAL_KEY','dev'), parkingId, pool, beforeDispatch:testFailures() }),
   });
   const jobs = [];
   function every(fn, ms) {
@@ -157,6 +160,7 @@ async function main() {
       const httpClosed = new Promise((resolve) => server.close(resolve));
       for (const job of jobs) clearInterval(job.timer);
       await consumer.stop();
+      await retryOrDead.close();
       await Promise.allSettled(jobs.map((job) => job.running));
         // PD-13: Nhả advisory lock trước khi đóng pool database.
         await scheduledJobsLock.stop();

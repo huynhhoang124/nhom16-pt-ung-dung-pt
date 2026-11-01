@@ -76,6 +76,15 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
   return payIn(c, { sessionId: b.sessionId, method: 'ONLINE', paymentKey: env.messageId, userId: actor.userId });
 }
 
+// PD-08: check DB wall clock after lock waits, and again before committing effects.
+async function checkCommandDeadline(c, env) {
+  if (env.deadlineAt === undefined) return; // legacy PD-02 callers
+  const row = (await c.query('SELECT clock_timestamp() AS command_now')).rows[0];
+  if (new Date(row.command_now).getTime() >= env.deadlineAt) {
+    throw Object.assign(new Error('COMMAND_EXPIRED'), { code: 'COMMAND_EXPIRED' });
+  }
+}
+
 function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}` }) {
   return async (m) => {
     const env = decodeCommand(m, parkingId, internalKey);
@@ -94,7 +103,9 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
           : { code: prior.status_code, body: prior.result };
         if (out.code == null || out.body == null) throw new Error('Incomplete inbox result');
       } else {
+        await checkCommandDeadline(c, env);
         out = await dispatch(c, env, { parkingId, reservationMinutes, qrSecret });
+        await checkCommandDeadline(c, env);
         // Normalize Date values once: first delivery and replay return identical JSON.
         out.body = JSON.parse(JSON.stringify(out.body));
         await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
@@ -106,6 +117,7 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         headers: { schemaVersion: 1, ...metadata, causationId: env.causationId ?? env.messageId } };
       await c.query('INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties) VALUES ($1,$2,$3,$4)',
         [env.messageId, env.replyTo, payload, properties]);
+      if (inserted.rowCount) await checkCommandDeadline(c, env);
       await c.query('COMMIT');
       return { ...out, messageId: env.messageId, duplicate: !inserted.rowCount };
     } catch (e) {

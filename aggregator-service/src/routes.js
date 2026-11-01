@@ -5,10 +5,11 @@ const { mountSessions } = require('./sessions-routes');
 const { log, withRequestId } = require('./log');
 const { makeSagas } = require('./saga');
 const { mountMetrics } = require('./metrics');
+const { mountDlq } = require('./dlq');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, config, leader }) {
+function makeApp({ pool, reg, cache, auth, commands, dlq, reserveTimeoutMs = 3000, config, leader }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
@@ -18,6 +19,7 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, co
   mountMetrics(app, { reg, leader, instance });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
+  if (dlq) mountDlq(app, { dlq, need });
   // PD-11: timeout ghi đọc lại mỗi lần gọi (đổi qua etcd là áp dụng ngay cho đặt chỗ, saga, trả tiền)
   const reserveMs = () => (config ? config.get('reserveTimeoutMs', reserveTimeoutMs) : reserveTimeoutMs);
 

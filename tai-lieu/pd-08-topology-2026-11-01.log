@@ -1,0 +1,2 @@
+Default mode verified: active runtime event queues have consumers; no aggregator-2 queues
+PD-01 Management API verified: vhost /, 2 exchanges, 7 quorum queues, 7 bindings, 2 policy, parking permissions

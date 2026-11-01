@@ -1,5 +1,7 @@
 # Nhóm 16 – Bãi đỗ xe thông minh liên kết nhiều bãi
 
+PD-08: [runbook retry/DLQ, TTL và giới hạn tích hợp](tai-lieu/pd-08-retry-dlq.md).
+
 **Môn:** Hệ thống / Ứng dụng phân tán – PTIT
 
 **Thành viên:** Vũ Văn Hùng, Hoàng Văn Huynh, Nguyễn Văn Luân, Trịnh Kim Loan, Đỗ Huyền Trang, Phạm Sỹ Hiệp

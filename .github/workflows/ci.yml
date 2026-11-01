@@ -50,3 +50,29 @@ jobs:
         run: docker compose logs --no-color --tail 200
       - if: always()
         run: docker compose down -v
+
+
+  retry-dlq:
+    runs-on: ubuntu-latest
+    env:
+      COMPOSE_PROJECT_NAME: pd08-ci
+      COMPOSE_FILE: docker-compose.yml:tests/pd08-compose.test.yml
+      PD08_AMQP_URL: amqp://parking:parking@localhost:5673/%2F
+      PD08_DATABASE_URL: postgres://postgres:dev@localhost:15432/parking
+      PD08_AGG_DATABASE_URL: postgres://postgres:dev@localhost:15433/parking
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: "**/package-lock.json" }
+      - run: cp .env.example .env
+      - run: npm ci --prefix parking-node && npm ci --prefix aggregator-service
+      - run: docker compose build parking-a aggregator
+      - run: docker compose up -d --no-build --wait rabbitmq parking-a parking-b parking-c aggregator
+      - run: node --test tests/pd08-runtime.test.cjs
+        env: { PD08_RUNTIME: "1" }
+      - run: docker compose stop parking-a parking-b parking-c aggregator
+      - run: node --test tests/pd08-retry.integration.cjs
+      - if: failure()
+        run: docker compose logs --no-color --tail 100
+      - if: always()
+        run: docker compose down

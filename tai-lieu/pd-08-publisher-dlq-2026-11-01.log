@@ -1,0 +1,35 @@
+✔ runtime command has signed absolute deadline, server identity and remaining queue TTL (6.3278ms)
+✔ routing key rejects wildcards, dots and empty segments without restricting parking registry (1.0453ms)
+✔ envelope and properties preserved; only resolve after individual publisher confirm (1.952ms)
+✔ concurrent duplicate business IDs: return and out-of-order confirms match the exact attempt (1.8173ms)
+✔ nack is unavailable, non-NO_ROUTE return is not 404 (0.9912ms)
+✔ disconnect settles all in-flight sends as unknown; next send reconnects without automatic replay (1.1506ms)
+✔ connection failure and stalled connect are 503 before publish; connector tries next broker (25.7592ms)
+✔ stalled setup is retired; late connection cannot replace a reconnected channel (30.4828ms)
+✔ confirm timeout / closed channel callback / publish throw are unknown, never 404 (31.2486ms)
+✔ channel error invalidates publisher and does not become unhandled EventEmitter error (0.6681ms)
+✔ persisted issuedAt/deadlineAt are honored on republish, never reset to factory TTL (1.0518ms)
+✔ persist before ack boundary: duplicate delivery stored once; API projection masks plate and signature (1712.5331ms)
+✔ replay edit creates one durable intent, relay retries same ID after publish failure; no inbox deletion (945.8685ms)
+✔ exhausted retry reuses original ID unchanged; editing cannot force an already committed operation (3205.0995ms)
+✔ unverified DLQ and invalid edits rejected; expired pending replay never republished (3104.6406ms)
+✔ HTTP ADMIN permissions, pagination and validation (1925.9157ms)
+✔ retry 2s then 10s then dead preserves identity and immutable deadline (2.6567ms)
+✔ publish failure never reports safe ack; no hot retry or lost source (0.5619ms)
+✔ invalid schema goes dead, expired goes expired, independent of x-death (0.364ms)
+✔ deadline guards execution and authenticated retry routing; untrusted body rejected (0.811ms)
+✔ test hook is off by default in production and scoped to one ID (0.4741ms)
+✔ business 409 returns normally; no retry classification is invoked (0.2423ms)
+✔ expired redelivery may return a committed inbox result, never admit an unprocessed ID (0.3172ms)
+✔ stalled setup times out; late connection retired; shared wire helpers match both service contexts (20.5082ms)
+✔ concurrent same messageId maps mandatory return independently of out of order confirms (1.4105ms)
+✔ nack and disconnect are failures; reconnect next call (1.569ms)
+✔ replay claim fails closed without inbox, fences original atomically, refuses existing business result (1803.9757ms)
+ℹ tests 27
+ℹ suites 0
+ℹ pass 27
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 11333.0064

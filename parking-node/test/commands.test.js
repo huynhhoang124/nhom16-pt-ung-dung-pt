@@ -201,3 +201,20 @@ test('reply publisher: mandatory return/nack/disconnect keep outbox pending; con
   const retry = p.publish('agg.1', {}, { headers: {} }); await tick(); b.connections[1].ch.sent[0][4](null); assert.equal(await retry, true);
   assert.equal(b.connections.length, 2); await p.close();
 });
+
+test('PD08 consumer acks only after confirmed transfer; transfer failure closes unacked source', async () => {
+  for (const success of [true, false]) {
+    const b = fakeBroker(); let settle;
+    const transfer = new Promise((resolve, reject) => { settle = success ? () => resolve(true) : () => reject(new Error('PUBLISH_NACKED')); });
+    const consumer = startCommandConsumer({ url:'amqp://fake',parkingId:'A',connect:b.connect,log:quiet,retryMs:5000,
+      processCommand:async()=>{throw new Error('DB_UNAVAILABLE');},retryOrDead:()=>transfer,afterCommit:()=>{} });
+    await until(()=>b.connections[0]?.ch.deliver);
+    const conn=b.connections[0],ch=conn.ch,m=message('transfer');
+    ch.deliver(m);await tick();assert.equal(ch.acks.length,0);
+    settle();
+    await until(()=>success?ch.acks.length===1:conn.closed);
+    assert.equal(ch.acks.length,success?1:0);
+    assert.equal(ch.nacks.length,0);
+    await consumer.stop();
+  }
+});

@@ -1,0 +1,98 @@
+
+> aggregator-service@1.0.0 test
+> node --test "test/*.test.js"
+
+✔ administrative endpoint publishes unknown parking, preserves old routes, and maps publish outcomes (311.3052ms)
+﹣ real RabbitMQ: concurrent mandatory returns, routed confirm, and reconnect (3.451ms) # SKIP
+﹣ real isolated RabbitMQ: cmd.A reject reaches durable cmd.expired (0.2328ms) # SKIP
+﹣ isolated RabbitMQ: policy routing can change with a command already queued, without recreating cmd.C (0.9349ms) # SKIP
+✔ runtime command has signed absolute deadline, server identity and remaining queue TTL (21.9964ms)
+✔ routing key rejects wildcards, dots and empty segments without restricting parking registry (5.6531ms)
+✔ envelope and properties preserved; only resolve after individual publisher confirm (10.835ms)
+✔ concurrent duplicate business IDs: return and out-of-order confirms match the exact attempt (19.5464ms)
+✔ nack is unavailable, non-NO_ROUTE return is not 404 (11.7465ms)
+✔ disconnect settles all in-flight sends as unknown; next send reconnects without automatic replay (12.8783ms)
+✔ connection failure and stalled connect are 503 before publish; connector tries next broker (41.556ms)
+✔ stalled setup is retired; late connection cannot replace a reconnected channel (45.7598ms)
+✔ confirm timeout / closed channel callback / publish throw are unknown, never 404 (45.0357ms)
+✔ channel error invalidates publisher and does not become unhandled EventEmitter error (1.6309ms)
+[etcd-config] Cập nhật /nhom16/config/aggregator/failThreshold {
+  key: '/nhom16/config/aggregator/failThreshold',
+  oldValue: 3,
+  newValue: 5,
+  revision: 100
+}
+[etcd-config] Cập nhật /nhom16/config/aggregator/timeoutMs {
+  key: '/nhom16/config/aggregator/timeoutMs',
+  oldValue: 2000,
+  newValue: 500,
+  revision: 101
+}
+[etcd-config] Đã đồng bộ và kích hoạt watcher trên tiền tố /nhom16/config/aggregator/ (bắt đầu từ revision 89)
+✔ PD-11 config: parseKey trích xuất đúng key, section, prop (4.8413ms)
+✔ PD-11 config: parseValue chuyển đổi đúng kiểu dữ liệu (số, boolean, JSON, chuỗi) (1.1884ms)
+✔ PD-11 config: giá trị mặc định lấy từ DEFAULTS / env (0.6895ms)
+✔ PD-11 config: cập nhật qua watch (applyPut) và xoá (applyDelete) kèm log JSON và revision (2.3281ms)
+✔ PD-11 config: fallback an toàn khi không có ETCD_ENDPOINTS (tương thích ngược 100%) (0.3866ms)
+✔ PD-11 nodes registry: makeRegistry đọc động qua config.get ngay lập tức mà không cần khởi động lại (2.1894ms)
+✔ PD-11 config: đặt giá trị sai (failThreshold=0, timeoutMs=abc) bị từ chối, giữ nguyên giá trị cũ và bãi vẫn ONLINE (0.8915ms)
+✔ PD-11 config: khởi tạo watch với startRevision(revision + 1) từ snapshot và retry (1.1087ms)
+✔ PD-11 config: resync sau khi mất watch đưa khoá đã bị xoá về giá trị mặc định (0.762ms)
+✔ PD-11 config routes: GET /api/config yêu cầu quyền ADMIN, không có token nhận 401 (165.7539ms)
+[etcd-discovery] Phát hiện bãi mới: D (http://parking-d:8004, zone: bac)
+[etcd-discovery] Bãi D mất toàn bộ etcd lease
+[etcd-discovery] Phát hiện bãi mới: E (http://parking-e:8005, zone: nam)
+[etcd-discovery] Đã đồng bộ và kích hoạt watcher trên tiền tố /nhom16/parking/nodes/ (bắt đầu từ revision 43)
+[etcd-discovery] Bãi A mất toàn bộ etcd lease
+✔ PD-09 discovery: parseKey trích xuất đúng parkingId và hostname (6.4012ms)
+✔ PD-09 trạng thái phân tán: kết hợp lease etcd và HTTP health check (0.9612ms)
+✔ PD-09 dynamic discovery: phát hiện bãi mới qua applyPut và thu hồi qua applyDelete (13.1064ms)
+✔ PD-09 discovery: khởi tạo watch với startRevision(revision + 1) từ snapshot (1.3204ms)
+✔ PD-09 discovery: khi không có ETCD_ENDPOINTS thì inactive, không lỗi (0.3494ms)
+✔ PD-09 discovery: bãi nạp từ DB với hasLease: false giữ nguyên metadata và chuyển DEGRADED <-> ONLINE (0.825ms)
+✔ persist before ack boundary: duplicate delivery stored once; API projection masks plate and signature (21506.8835ms)
+✔ replay edit creates one durable intent, relay retries same ID after publish failure; no inbox deletion (14495.1762ms)
+✔ exhausted retry reuses original ID unchanged; editing cannot force an already committed operation (12604.0942ms)
+✔ unverified DLQ and invalid edits rejected; expired pending replay never republished (9718.622ms)
+✔ HTTP ADMIN permissions, pagination and validation (8780.2833ms)
+✔ TC11 tin trùng và tin đến sai thứ tự bị bỏ nhờ version (2.5567ms)
+✔ slotsFromCache chỉ lấy đúng bãi, sắp theo mã (27.5146ms)
+✔ TC13 đối soát: cache cũ được cập nhật theo DB bãi; chạy lại lần 2 không đổi gì (idempotent) (42964.5322ms)
+✔ PD-10 leader: fallback an toàn khi không có ETCD_ENDPOINTS (tương thích ngược 100%) (7.7709ms)
+✔ PD-10 leader: trạng thái, callback onLeaderStart, onLeaderStop và tự demote (0.8182ms)
+✔ PD-10 nodes: gửi kèm X-Fencing-Token khi gọi node và tự động demote khi nhận 409 STALE_LEADER (1.3998ms)
+✔ health check: OFFLINE chỉ sau 3 lần lỗi liên tiếp; sống lại thì ONLINE ngay, báo onChange (29866.5098ms)
+✔ TC01/TC04 tra cứu song song: bãi chậm bị bỏ qua, vẫn trả kết quả các bãi còn lại kịp thời (33710.0729ms)
+✔ TC40 mạch mở: lỗi liên tiếp đủ ngưỡng thì OFFLINE ngay, request sau bị từ chối tức thì; health check đóng mạch (7561.5208ms)
+✔ TC41 retry 1 lần cứu được lỗi thoáng qua: GET và đặt chỗ (có Idempotency-Key) (6450.6926ms)
+✔ TC42 xe vào/ra không idempotent: lỗi thì KHÔNG retry, trả nguyên lỗi của node (5570.6579ms)
+✔ GS-04 /metrics của Aggregator: trạng thái và số lần lỗi từng bãi (5897.0779ms)
+✔ PT-01 X-Instance và nạp bãi do bản Aggregator khác thêm (dùng chung DB) (4759.3639ms)
+✔ resolveUrl: tên -> IP (request thật không phải tra DNS); IP giữ nguyên; tra lỗi thì giữ tên (23.7798ms)
+✔ đăng nhập: sai mật khẩu 401, đúng thì có token (56525.972ms)
+✔ đặt chỗ qua Aggregator: cần đăng nhập + Idempotency-Key; retry an toàn; key không dùng chéo giữa người (21713.635ms)
+✔ TC04 bãi OFFLINE: ghi bị từ chối ngay (503); chi tiết bãi trả bản cache cũ có stale=true (16479.4662ms)
+✔ TC12 node treo khi đang ghi: 504 TIMEOUT_UNKNOWN_RESULT (không biết đã đặt hay chưa) (12773.0578ms)
+✔ nhân viên chỉ thao tác bãi của mình; lịch sử và huỷ của người dùng (13131.2179ms)
+✔ TC19 lịch sử gửi xe: tra biển số gom từ mọi bãi, bãi treo báo thiếu; USER chỉ thấy của mình (12761.1068ms)
+✔ quản trị: xem trạng thái node, thêm bãi mới (không sửa code) (12174.4572ms)
+✔ TC33–TC35 đăng ký, đổi mật khẩu, khoá tạm khi sai mật khẩu nhiều lần (13848.0758ms)
+✔ NV-04 người dùng trả tiền qua Aggregator: cần Idempotency-Key, bấm lại cùng key không trả lần 2 (12116.5959ms)
+✔ NV-09 quản lý slot qua Aggregator: nhân viên chỉ bãi mình, người dùng không được (11765.2457ms)
+✔ GS-03 mã truy vết: X-Request-Id từ client đi qua Aggregator -> node -> sự kiện outbox; trả lại trong response (11639.106ms)
+✔ UX-01 toạ độ bãi: thêm bãi kèm lat/lng, /api/parkings trả toạ độ; toạ độ sai -> 400 (12011.3423ms)
+✔ UX-02 thống kê gom các bãi: bãi treo báo thiếu; STAFF chỉ thấy bãi mình; USER bị chặn (12060.8817ms)
+✔ PT-05 Aggregator ký RS256 -> node tự kiểm được bằng khoá công khai (không cần Aggregator) (456.9594ms)
+✔ UX-04 cổng quét QR qua Aggregator: nhân viên bãi mình vào/ra được; bãi khác 403 (14199.9064ms)
+✔ PT-07 saga thành công: đặt ở 2 bãi; gửi lại cùng key trả saga cũ, không đặt lần hai (12481.4307ms)
+✔ TC52 saga: bãi B OFFLINE -> chỗ đã giữ ở A được trả lại (bù trừ), saga FAILED (12297.9235ms)
+✔ TC53 Aggregator chết giữa saga: khởi động lại thì bù trừ nốt (huỷ chỗ đã giữ) (12470.2946ms)
+✔ PD-10 khôi phục saga mang token lúc lên leader: node đã thấy token mới hơn thì từ chối, mất quyền thì dừng (12937.8434ms)
+ℹ tests 68
+ℹ suites 0
+ℹ pass 65
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 3
+ℹ todo 0
+ℹ duration_ms 298653.8254

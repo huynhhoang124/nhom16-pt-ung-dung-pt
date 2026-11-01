@@ -8,6 +8,7 @@ const { mountGate, tokenFor } = require('./gate');
 const { log, withRequestId } = require('./log');
 const { verifyRS256 } = require('./jwt');
 const { mountMetrics } = require('./metrics');
+const { mountReplayClaim } = require('./replay-claim');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -72,6 +73,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
   });
 
   const send = (res, r) => res.status(r.code).json(r.body);
+  mountReplayClaim(app,{pool,internalKey});
 
   // PD-09 / TC64: Giả lập lỗi đứt kết nối etcd (chỉ cho phép khi bật cờ test ENABLE_TEST_FAULTS=1 hoặc FAULT_INJECTION=1)
   app.post('/api/test/fault/etcd-partition', async (req, res) => {

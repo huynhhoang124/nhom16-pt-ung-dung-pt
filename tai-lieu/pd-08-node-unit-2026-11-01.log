@@ -1,0 +1,109 @@
+
+> parking-node@1.0.0 test
+> node --test "test/*.test.js"
+
+✔ PT-03 nối cụm RabbitMQ: nút đầu chết thì sang nút kế; lần sau bắt đầu từ nút đang sống (2.858ms)
+✔ HTTP: health mở, API cần khoá nội bộ, luồng đặt/vào/ra/huỷ (28845.4816ms)
+✔ bảng giá: xem, sửa (kiểm dữ liệu), seed không ghi đè giá đã sửa (13766.9357ms)
+✔ TC29–TC32 QR ở cổng: đúng thì vào/ra được; sửa ký tự 401; QR bãi khác 403; dùng lại 409 (11918.2718ms)
+✔ NV-01 HTTP: kiểm giờ đến / thời lượng; đặt trước rồi xem lịch slot (9883.3051ms)
+✔ PT-05 nhân viên gọi thẳng node bằng JWT: chỉ bãi mình, chỉ thao tác được phép; CORS cho trang web (7301.6098ms)
+✔ GS-04 /metrics: không cần khoá; có thời gian request, outbox chưa gửi, số chỗ theo loại (6198.8404ms)
+✔ retry 2s then 10s then dead preserves identity and immutable deadline (9.9884ms)
+✔ publish failure never reports safe ack; no hot retry or lost source (1.4303ms)
+✔ invalid schema goes dead, expired goes expired, independent of x-death (1.3858ms)
+✔ deadline guards execution and authenticated retry routing; untrusted body rejected (2.0992ms)
+✔ test hook is off by default in production and scoped to one ID (1.314ms)
+✔ business 409 returns normally; no retry classification is invoked (0.9382ms)
+✔ stalled setup times out; late connection retired; shared wire helpers match both service contexts (33.2504ms)
+✔ concurrent same messageId maps mandatory return independently of out of order confirms (9.1076ms)
+✔ nack and disconnect are failures; reconnect next call (15.8131ms)
+﹣ PostgreSQL: concurrent duplicate transactions, same-slot contention, SQL failure and rollback (2.4231ms) # SKIP
+✔ signed envelope: property authority, identity, metadata and producer/consumer canonical contract (7.0283ms)
+▶ inbox transaction: replay, key reuse, savepoint, rollback, permissions, replies and retention
+  ✔ same command returns exact saved status/body and creates a reply for each delivery (563.1861ms)
+  ✔ same key with changed payload/type is rejected without changing the original inbox (112.4052ms)
+  ✔ business conflict is stored and replayed after savepoint rollback (288.5414ms)
+  ✔ outbox failure rolls back inbox, slot update, reservation and slot event together (168.2197ms)
+  ✔ cancel and pay share inbox transaction and enforce signed owner identity (757.9389ms)
+  ✔ reply relay keeps returned/unavailable replies pending; marks sent only after publish succeeds (162.8005ms)
+  ✔ retention deletes only committed inbox results older than seven days, leaves outbox untouched (66.1847ms)
+✔ inbox transaction: replay, key reuse, savepoint, rollback, permissions, replies and retention (25883.2251ms)
+✔ consumer serializes handlers despite prefetch 20, ack follows commit hook, and stop waits in-flight (168.7192ms)
+✔ temporary rollback reconnects with backoff, permanent envelope error dead-letters without hot requeue (75.9407ms)
+✔ reply publisher: mandatory return/nack/disconnect keep outbox pending; connection reused until loss (19.0081ms)
+✔ PD-10 fencing: chấp nhận token tăng dần (41 -> 42), từ chối token cũ (41 < 42) (27301.2988ms)
+✔ PD-10 fencing HTTP: lệnh ghi kiểm token trong cùng giao dịch, token cũ không ghi được gì (14961.01ms)
+✔ PD-10 fencing: nhân viên có JWT gửi x-fencing-token thì bị bỏ qua, không chặn được leader thật (13191.4144ms)
+✔ PT-05 kiểm JWT RS256 bằng khoá công khai: đúng / sai khoá / sửa nội dung / hết hạn / đổi alg (158.4066ms)
+✔ biển số: chuẩn hoá và kiểm định dạng (1.4819ms)
+✔ TC24 tính phí: các mốc biên theo thời gian (1.523ms)
+✔ TC24 tính phí: qua đêm theo giờ Việt Nam (1.3677ms)
+✔ quy tắc giá: kiểm dữ liệu gửi lên (0.4772ms)
+✔ QR: ký rồi kiểm đúng; sửa 1 ký tự, sai khoá, hết hạn đều bị từ chối (3.3494ms)
+✔ PT-02 đọc bản sao; bản sao lỗi -> đọc bản chính và bỏ qua bản sao một lúc (77.6903ms)
+✔ PD-09 registry: khi không có ETCD_ENDPOINTS thì inactive, không lỗi (7.7341ms)
+✔ PD-09 registry: cấu hình key và payload đúng định dạng (9.4681ms)
+Đã đăng ký bãi TEST lên etcd với lease TTL 5s {
+  key: '/nhom16/parking/nodes/TEST/DESKTOP-KJ73U19',
+  url: 'http://DESKTOP-KJ73U19:8001',
+  zone: 'bac'
+}
+Mất lease etcd {
+  error: 'lease expired',
+  parkingId: 'TEST',
+  key: '/nhom16/parking/nodes/TEST/DESKTOP-KJ73U19'
+}
+[registry] Đăng ký etcd ban đầu thất bại, sẽ tự động thử lại trong nền... { error: 'connection refused', parkingId: 'TEST' }
+✔ PD-09 fault injection endpoint: mặc định tắt (403), chỉ bật khi ENABLE_TEST_FAULTS=1 (14689.358ms)
+✔ PD-09 registry: tự động lập lịch thử lại khi mất lease (lease on lost) (23.4452ms)
+✔ PD-09 registry: start() tự động gọi scheduleRetry khi khởi tạo lỗi ban đầu (9.8286ms)
+✔ GS-03 relay ghi đúng request ID từ outbox chỉ sau broker confirm và đánh dấu đã gửi (23066.7326ms)
+✔ broker lỗi: không đánh dấu gì; broker khoẻ lại: gửi đủ theo thứ tự, không gửi lặp (14617.5411ms)
+✔ broker lỗi khi publish theo lô: không đánh dấu sự kiện; lần sau gửi đủ theo thứ tự (11673.2211ms)
+✔ không chạy chồng khi lần trước chưa xong (10068.3912ms)
+✔ relay gửi theo lô, giới hạn 100 sự kiện mỗi lần (9580.8983ms)
+✔ relay dùng transaction và SKIP LOCKED để lấy batch (4.7705ms)
+✔ replay claim fails closed without inbox, fences original atomically, refuses existing business result (24219.6716ms)
+✔ PD-13: one node acquires advisory lock (35.06ms)
+✔ PD-13: two nodes cannot both own the lock (29.3609ms)
+✔ PD-13: standby takes over after shutdown (1041.6418ms)
+✔ PD-13: disconnect removes ownership (1031.8142ms)
+✔ PD-13: shutdown releases lock (36.7151ms)
+✔ seed tạo đủ slot, chạy init lần 2 không nhân đôi (22657.0986ms)
+✔ TC15 SLOTS: đúng số slot từng loại/tầng, mã ô tô A01.., xe máy AM01..; init lần 2 không nhân đôi (14505.1583ms)
+✔ TC16 tra cứu theo loại xe: byType và lọc type=MOTO (11973.6982ms)
+✔ đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện (9896.0329ms)
+✔ TC08 gửi lại cùng requestId: trả bản cũ, vẫn 1 reservation, không thêm sự kiện (8489.0411ms)
+✔ TC03 người thứ hai đặt cùng slot: 409, không sinh reservation/sự kiện (6443.5341ms)
+✔ ràng buộc DB ex_no_overlap: chèn thẳng một khung giờ chồng lên khung đang giữ -> lỗi 23P01 (5396.1577ms)
+✔ TC20 đặt trước: hai khung giờ chồng nhau trên cùng slot -> cái sau 409 TIME_CONFLICT; slot vẫn AVAILABLE (5590.9902ms)
+✔ TC21 hai khung nối tiếp (10–12, 12–14) đều được; huỷ lượt sau không nhả chỗ lượt trước đang giữ (5914.0333ms)
+✔ TC22 activateDue: gần đến giờ thì giữ chỗ + phát sự kiện; xe vào chỉ dùng lượt đang giữ; xe ra -> DONE (4700.5916ms)
+✔ TC23 đến giờ mà slot còn xe (xe trước ở quá giờ) -> chuyển lượt đặt sang slot trống cùng loại (3819.8476ms)
+✔ xe vãng lai không được vào slot sắp có người đặt (trong 2 giờ) (3315.2004ms)
+✔ lịch slot theo ngày (giờ VN) (4518.5034ms)
+✔ xe vào/ra: RESERVED -> OCCUPIED -> AVAILABLE, reservation thành USED, version tăng (3627.5141ms)
+✔ xe vào không đặt trước (AVAILABLE -> OCCUPIED); slot bảo trì không đặt được (4266.0268ms)
+✔ TC17 vào bằng đặt chỗ rồi ra: đúng 1 phiên, lấy biển số + user từ đặt chỗ, có exitedAt (4058.6251ms)
+✔ TC25 xe ra: phiên có phí theo bảng giá của bãi; xem phí tạm tính khi xe còn trong bãi (3294.2733ms)
+✔ TC28 chưa trả tiền thì không cho ra (402, kèm số tiền); thu tiền mặt thì ra được; slot không đổi khi 402 (3997.8645ms)
+✔ TC26 trả 2 lần cùng key: chỉ ghi nhận 1 lần, lần 2 trả lại kết quả cũ; key khác thì 409 ALREADY_PAID (3735.166ms)
+✔ key thanh toán đã dùng cho phiên khác: 422, không trả lại kết quả của phiên kia, phiên này vẫn chưa trả (3574.5402ms)
+✔ chưa đến phí (gửi dưới 5 phút) thì không cho trả (3414.7978ms)
+✔ TC18 cùng biển số vào lần 2 khi chưa ra: 409, slot thứ hai không bị chiếm (3459.7315ms)
+✔ huỷ: chỉ chủ reservation huỷ được; slot về AVAILABLE; huỷ lần 2 -> 404 (4295.9226ms)
+✔ hết hạn: reservation quá giờ -> EXPIRED, slot AVAILABLE; chưa quá giờ thì giữ nguyên (3736.9238ms)
+✔ availability, danh sách slot và reservation của user (3442.6614ms)
+✔ TC38 gỡ slot đang có xe / đang có lượt đặt -> 409; slot trống thì gỡ được, không còn trong danh sách và tổng số (3722.9126ms)
+✔ TC39 thêm slot mới / bật lại slot đã gỡ; trùng mã 409; đổi tầng-loại khi slot rảnh (3388.026ms)
+✔ UX-02 thống kê: lượt xe, doanh thu đã trả, TG gửi TB, lượt theo giờ VN, lấp đầy hiện tại (3235.1932ms)
+✔ NV-08 warnExpiring: báo 1 lần khi lượt đang giữ chỗ sắp hết hạn; không đổi version slot (4242.8692ms)
+ℹ tests 85
+ℹ suites 0
+ℹ pass 84
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 177732.883

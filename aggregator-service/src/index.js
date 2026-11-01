@@ -8,6 +8,7 @@ const { applyEvent, reconcile, startConsumer } = require('./events');
 const { makeAuth, seedUsers } = require('./auth');
 const { makeApp } = require('./routes');
 const { makeCommands } = require('./commands');
+const { makeDlq, startDlq } = require('./dlq');
 const { log } = require('./log');
 
 const env = (k, d) => process.env[k] ?? d;
@@ -79,22 +80,28 @@ async function main() {
     discovery.start().catch((e) => log.error('Lỗi khởi động discovery etcd', { error: e.message }));
   }
 
-  if (discovery.active || config.active || leader.active) {
-    const cleanup = async () => {
-      if (discovery.active) await discovery.stop();
-      if (config.active) await config.stop();
-      if (leader.active) await leader.stop();
-      process.exit(0);
-    };
-    process.once('SIGINT', cleanup);
-    process.once('SIGTERM', cleanup);
-  }
-
   const cache = new Map();
   const b64 = (k) => (process.env[k] ? Buffer.from(process.env[k], 'base64').toString() : undefined);
   const auth = makeAuth(env('JWT_SECRET', 'dev-secret'), { privateKey: b64('JWT_PRIVATE_KEY_B64'), publicKey: b64('JWT_PUBLIC_KEY_B64') });
-  const commands = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'), { signingKey: env('INTERNAL_KEY', 'dev') });
-  const app = makeApp({ pool, reg, cache, auth, commands, config, leader, reserveTimeoutMs: config.get('reserveTimeoutMs', 3000) });
+  const commandUrl = env('RABBITMQ_URL', 'amqp://localhost/%2F');
+  const commands = makeCommands(commandUrl, { signingKey: env('INTERNAL_KEY','dev'), ttlMs: Number(env('COMMAND_TTL_MS',10000)), replyTo:`agg.${env('INSTANCE_ID','1')}` });
+  const dlq = makeDlq({ pool, url:commandUrl, internalKey:env('INTERNAL_KEY','dev'), ttlMs:Number(env('COMMAND_TTL_MS',10000)),
+    claimReplay:async(parkingId,messageId,replayMessageId)=>{
+      const node=reg.get(parkingId);if(!node)throw Object.assign(new Error('PARKING_NOT_FOUND'),{code:'PARKING_NOT_FOUND',status:404});
+      const r=await reg.call(node,'/api/internal/commands/replay-claim',{method:'POST',body:{messageId,replayMessageId}});
+      if(!r.ok)throw Object.assign(new Error('INBOX_CLAIM_REJECTED'),{code:'INBOX_CLAIM_REJECTED',status:r.status===409?409:503});
+      if((await r.json()).claimed!==true)throw Object.assign(new Error('INBOX_CLAIM_UNAVAILABLE'),{code:'INBOX_CLAIM_UNAVAILABLE',status:503});
+    } });
+  const dlqWorker = startDlq({ url:commandUrl, dlq, log });
+  const app = makeApp({ pool, reg, cache, auth, commands, dlq, config, leader, reserveTimeoutMs:config.get('reserveTimeoutMs',3000) });
+  for (const signal of ['SIGINT','SIGTERM']) process.once(signal, async () => {
+    const deadline=setTimeout(()=>process.exit(1),10000);
+    await dlqWorker.stop(); await commands.close();
+    if (discovery.active) await discovery.stop();
+    if (config.active) await config.stop();
+    if (leader.active) await leader.stop();
+    clearTimeout(deadline);process.exit(0);
+  });
   const server = http.createServer(app);
   const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS
   // NV-08: socket có token hợp lệ thì vào phòng "user:<id>" để nhận thông báo riêng; không có vẫn nhận realtime chung.

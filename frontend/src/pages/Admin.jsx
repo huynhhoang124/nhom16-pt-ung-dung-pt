@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api, message, useLive } from '../api.js';
+import DeadLetters from '../DeadLetters.jsx';
 import { clock, Icon, NodeBadge } from '../ui.jsx';
 
 const EMPTY = { parkingId: '', name: '', apiUrl: '', address: '', lat: '', lng: '' };
@@ -28,6 +29,7 @@ export default function Admin() {
   const down = nodes.filter((n) => n.status === 'OFFLINE');
   return (
     <>
+      <DeadLetters />
       <div className="page-head">
         <div>
           <h2>Giám sát các Parking Node</h2>
