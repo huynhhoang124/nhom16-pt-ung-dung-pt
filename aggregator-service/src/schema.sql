@@ -29,11 +29,15 @@ CREATE TABLE IF NOT EXISTS sagas (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   request_id VARCHAR(128) UNIQUE NOT NULL,     -- userId:Idempotency-Key
   user_id    TEXT NOT NULL,
-  status     VARCHAR(14) NOT NULL CHECK (status IN ('RUNNING','COMPLETED','COMPENSATING','FAILED')),
+  status     VARCHAR(14) NOT NULL CHECK (status IN ('PENDING','RUNNING','CONFIRMING','COMPLETED','COMPENSATING','FAILED')),
   steps      JSONB NOT NULL,                   -- [{parkingId, slotCode, licensePlate, state, reservationId?, error?}]
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- DB cũ cần nhận trạng thái mới khi khởi động lại.
+ALTER TABLE sagas DROP CONSTRAINT IF EXISTS sagas_status_check;
+ALTER TABLE sagas ADD CONSTRAINT sagas_status_check
+  CHECK (status IN ('PENDING','RUNNING','CONFIRMING','COMPLETED','COMPENSATING','FAILED'));
 
 -- PD-03: shared durable command identity and recoverable publish intent.
 CREATE TABLE IF NOT EXISTS commands (
