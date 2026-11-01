@@ -11,7 +11,7 @@ Schema được nạp idempotent bởi init hiện có, chỉ bổ sung bảng/i
 | Bảng | Các cột |
 |---|---|
 | `inbox_messages` | `message_id TEXT PRIMARY KEY`, `command_type TEXT NOT NULL`, `request_hash TEXT NOT NULL`, `result JSONB`, `status_code INT`, `processed_at TIMESTAMPTZ` |
-| `command_reply_outbox` | `id BIGSERIAL PRIMARY KEY`, `command_id TEXT NOT NULL`, `reply_to TEXT NOT NULL`, `payload JSONB NOT NULL`, `properties JSONB NOT NULL`, `created_at TIMESTAMPTZ DEFAULT now()`, `published_at TIMESTAMPTZ` |
+| `command_reply_outbox` | `id BIGSERIAL PRIMARY KEY`, `command_id TEXT NOT NULL`, `reply_to TEXT NOT NULL`, `payload JSONB NOT NULL`, `properties JSONB NOT NULL`, `created_at TIMESTAMPTZ DEFAULT now()`, `published_at TIMESTAMPTZ`, `next_attempt_at TIMESTAMPTZ`, `last_error TEXT` |
 
 Chọn **`command_type`** theo tài liệu phân công; không dùng thêm cột `type` trong inbox. Index `ix_inbox_processed_at` phục vụ dọn dữ liệu; partial index `ix_command_replies_unpublished` phục vụ relay. `processed_at` chỉ được đặt khi đã có kết quả; dòng đang xử lý chưa commit không hiện ra ngoài transaction.
 
@@ -44,13 +44,13 @@ Các HTTP wrapper `reserve/endReservation/pay` vẫn mở transaction riêng khi
 
 Consumer manual ack, prefetch **20**, nhưng dùng một chuỗi promise tuần tự trong mỗi connection. SAC chỉ chọn consumer, không được coi là bảo đảm callback async hoàn tất tuần tự. Unique key Postgres vẫn là cơ chế chống duplicate giữa nhiều client/tiến trình: INSERT thua chờ transaction thắng, rồi SELECT đọc kết quả ở isolation READ COMMITTED mặc định. CAS/version, row lock và ràng buộc EXCLUDE/UNIQUE cũ vẫn giữ cho HTTP, timer nền và các lệnh tranh cùng slot.
 
-Reconnect chỉ có một loop, đợi handler của connection cũ kết thúc trước khi tạo consumer mới. Tin đã prefetch nhưng chưa chạy được giữ unacked để broker giao lại. Lỗi tạm đóng connection rồi backoff 5 giây; không nack requeue liên tục. Hook `retryOrDead` cho PD-08 chỉ cho ack nguồn khi hook trả true sau chuyển tiếp được xác nhận. Khi chưa có PD-08, tin sai envelope/chữ ký được reject không requeue, đi vào DLX bền vững `cmd.expired` theo policy PD-01. Tin lỗi tạm giao lại quá delivery-limit cũng có thể vào đây; chưa có xử lý/phân loại EXPIRED/dead trong PR này.
+Reconnect chỉ có một loop, đợi handler của connection cũ kết thúc trước khi tạo consumer mới. Tin đã prefetch nhưng chưa chạy được giữ unacked để broker giao lại. Lỗi tạm đóng connection rồi backoff từ 5 giây, tăng gấp đôi đến tối đa 60 giây nếu đăng ký consumer tiếp tục thất bại; đăng ký thành công đặt lại 5 giây; không nack requeue liên tục. Hook `retryOrDead` cho PD-08 chỉ cho ack nguồn khi hook trả true sau chuyển tiếp được xác nhận. Khi chưa có PD-08, tin sai envelope/chữ ký được reject không requeue, đi vào DLX bền vững `cmd.expired` theo policy PD-01. Tin lỗi tạm giao lại quá delivery-limit cũng có thể vào đây; chưa có xử lý/phân loại EXPIRED/dead trong PR này.
 
 ## Outbox phản hồi và vòng đời
 
 Không ép phản hồi vào parking_events vì bảng đó yêu cầu slot_code. Relay riêng gửi `command_reply_outbox` qua exchange direct durable `parking.replies`, routing key=replyTo. Body gồm commandId, commandType, parkingId, actor, statusCode, result và metadata; properties gồm messageId phản hồi riêng, correlationId gốc và header causation/trace/HLC/fencing.
 
-Publish mandatory/persistent và confirm từng tin, dùng chung connection/channel. Return/nack/disconnect/timeout giữ `published_at` NULL; chỉ cập nhật sau confirm và không có return. Relay chạy mỗi 500 ms, không chạy chồng trong một tiến trình; có thể phát lại phản hồi nếu chết sau confirm trước cập nhật DB. PD-03 cần ghép/loại trùng phản hồi theo commandId/correlationId; đây không phải exactly-once delivery. Khi replyTo chưa có đích nhận, row vẫn nằm trong outbox; relay giữ thứ tự và dừng ở row chưa gửi được, nên cần tạo đúng reply binding trước khi sử dụng broker cho nghiệp vụ.
+Publish mandatory/persistent và confirm từng tin, dùng chung connection/channel. Return/nack/disconnect/timeout giữ `published_at` NULL; chỉ cập nhật sau confirm và không có return. Relay chạy mỗi 500 ms, không chạy chồng trong một tiến trình; có thể phát lại phản hồi nếu chết sau confirm trước cập nhật DB. PD-03 cần ghép/loại trùng phản hồi theo commandId/correlationId; đây không phải exactly-once delivery. Khi broker trả NO_ROUTE (312), row vẫn chưa published, được đánh dấu last_error=NO_ROUTE và next_attempt_at sau 30 giây; relay đi tiếp tới đích khác. Khi binding xuất hiện, row đến hạn được phát lại và chỉ đánh dấu đã gửi sau confirm. Nack/disconnect/confirm timeout không bị coi là NO_ROUTE: giữ pending và dừng batch để tránh thử liên tục trên broker lỗi. Đây là lịch gửi lại phản hồi đã lưu, không phải retry thực thi lệnh PD-08.
 
 `parking.replies` chỉ được runtime khai báo; chưa tạo queue phản hồi Aggregator, bảng commands, HTTP wait/poll hoặc Socket.IO kết quả của PD-03. Queue phản hồi trong test là exclusive, tự dọn khi đóng connection. Relay sự kiện cũ được giữ; chỉ bổ sung close cho lifecycle, không làm batching/SKIP LOCKED của PD-18.
 
@@ -104,3 +104,25 @@ Hoàn tác bằng phiên bản trước và giữ hai bảng/outbox; dừng publ
 - PostgreSQL thật kiểm 10 transaction đồng thời, 10 ID tranh cùng slot (1 thành công/9 conflict), reuse key 422, exclusion conflict và rollback khi lỗi outbox. Lần đầu test so JSON bằng chuỗi bị ảnh hưởng thứ tự khóa JSONB; đã sửa sang so giá trị JSON và chạy lại đạt.
 
 Log ở `tai-lieu/pd-02-evidence.txt`. Stack `pd02-inbox` dùng port 5673/15673, không đụng broker sẵn có ở cổng mặc định; test khôi phục dịch vụ, dọn đúng bản ghi thử và dừng stack, giữ toàn bộ volume. E2e local tái sử dụng socket.io-client đã cài với cùng lockfile ở worktree PD-01 trong lúc npm ci hoàn tất; sau đó mọi dependency của worktree PD-02 đã cài đủ. CI e2e cài dependency trực tiếp tại workspace.
+
+
+## Bổ sung PD-02 ngày 01/11/2026
+
+PR #48 và commit `238b77692f64b502b4ac5761c9b464dee3c91f5d` đã merge. Lượt này tiếp tục đúng nhánh hiện hữu `hung-pd-02-command-inbox`, fast-forward lên `origin/dev` tại `eef361f1a1542ad6c620fa217116b7f54016048f`; không amend, không force-push, không lấy thay đổi chưa commit ở checkout khác. Ref `hung` vẫn tồn tại nên giữ tên nhánh đã có, không tạo nhánh trùng hoặc thêm tiền tố codex/.
+
+Issue #19 không có bình luận thiết kế. Người dùng đã chỉ thị trong chat **“tự làm hết không cần xin”**, cho phép tiếp tục không chờ duyệt. Đây là miễn điều kiện chờ của người dùng; không gọi là thiết kế đã được Huynh duyệt và không tự đăng bình luận Issue.
+
+Phạm vi bổ sung chỉ gồm hai nhận xét PD-02 trong review #48 và `nhan-xet-thanh-vien-gd2.md`: một reply không route không chặn đích khác; queue bãi chưa có dùng backoff tăng dần. Giữ nguyên transaction inbox/nghiệp vụ/outbox, schema `command_type`, messageId/fingerprint, prefetch 20, ack sau COMMIT, consumer tuần tự, HTTP wrapper và các hook PD-08/10/17. Không triển khai request–reply HTTP hoặc retry thực thi lệnh.
+
+Migration cộng thêm vào `command_reply_outbox`:
+
+```sql
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS last_error TEXT;
+```
+
+Không đổi/xóa inbox hoặc payload cũ. Schema init chạy lặp được; test mô phỏng outbox phiên bản cũ chứa tin trước khi nâng cấp. Publisher trả riêng trạng thái UNROUTABLE khi basic.return có replyCode 312; confirm callback đến sau không ghi đè trạng thái. Các lỗi khác giữ pending. Hoàn tác app giữ hai cột mới và dữ liệu; bản cũ sẽ không xét lịch hoãn nên có thể gặp lại tình trạng chặn đầu hàng. Không xóa volume.
+
+Test tập trung: `node --test parking-node/test/commands.test.js`. Test broker bổ sung được đăng ký trong `tests/command-inbox.e2e.mjs`, chạy cùng `node --test --test-name-pattern='PD-02' tests/e2e.test.mjs`: gửi phản hồi tới route thiếu, xác nhận row còn nguyên/chưa published và có lịch hoãn, kiểm đích khác nhận ngay, thêm binding rồi xác nhận row cũ được gửi và xóa trạng thái lỗi. TC52/TC53 và PostgreSQL concurrent test tiếp tục kiểm invariants cũ. HTTP TC52 vẫn chỉ là scaffold bỏ qua đến PD-03.
+
+Kết quả mới, lệnh chạy và giới hạn thực tế nằm trong `pd-02-review-evidence-2026-11-01.txt`; số liệu ở phần 22/10 bên trên là bằng chứng lịch sử.

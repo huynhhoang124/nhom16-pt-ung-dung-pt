@@ -25,7 +25,7 @@ export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, 
     t.after(async () => { await commands.close(); await conn.close(); });
     const token = await login('user1');
     const actor = { userId: JSON.parse(Buffer.from(token.split('.')[1], 'base64url')).sub, role: 'USER' };
-    return { commands, replyTo, responses, actor };
+    return { commands, replyTo, responses, actor, bindReply: (key) => ch.bindQueue(queue, 'parking.replies', key) };
   }
   const restoreReservation = async (id, result) => {
     if (result?.id) await node(id, `/api/reservations/${result.id}`, { method: 'DELETE' });
@@ -36,6 +36,27 @@ export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, 
     execFileSync('docker', ['cp', path.join(ROOT, 'parking-node/test/commands-pg.test.js'), `${container}:/app/commands-pg.test.js`]);
     const output = compose('exec -T -e PD02_SOURCE_ROOT=/app/src -e PD02_REAL_DATABASE_URL=postgres://postgres:dev@db-a/parking parking-a node --test /app/commands-pg.test.js');
     assert.match(output, /pass 1/);
+  });
+
+  test('PD-02 reply outbox: missing reply queue cannot block another destination; late binding recovers the reply', options, async (t) => {
+    const { commands, replyTo, responses, actor, bindReply } = await setup(t);
+    const missingRoute = `test.missing.${randomUUID()}`;
+    const first = `${actor.userId}:missing-${randomUUID()}`;
+    const second = `${actor.userId}:routed-${randomUUID()}`;
+    t.after(() => sql('db-a', `DELETE FROM command_reply_outbox WHERE command_id IN ('${first}','${second}'); DELETE FROM inbox_messages WHERE message_id IN ('${first}','${second}')`));
+    // Nonexistent reservations produce stable 404 replies without mutating parking data.
+    await commands.send('A', 'cancel', { reservationId: randomUUID() }, { messageId: first, actor, replyTo: missingRoute });
+    await until('unroutable reply retained and deferred', () =>
+      sql('db-a', `SELECT count(*) FROM command_reply_outbox WHERE command_id='${first}' AND published_at IS NULL AND next_attempt_at IS NOT NULL AND last_error='NO_ROUTE'`) === '1');
+    await commands.send('A', 'cancel', { reservationId: randomUUID() }, { messageId: second, actor, replyTo });
+    await until('other destination receives its reply', () => responses.some((r) => r.commandId === second));
+    assert.equal(responses.find((r) => r.commandId === second).statusCode, 404);
+    assert.equal(sql('db-a', `SELECT count(*) FROM command_reply_outbox WHERE command_id='${first}' AND published_at IS NULL`), '1');
+    await bindReply(missingRoute);
+    await until('late binding receives the retained reply', () => responses.some((r) => r.commandId === first));
+    assert.equal(responses.find((r) => r.commandId === first).statusCode, 404);
+    await until('recovered reply is confirmed', () =>
+      sql('db-a', `SELECT count(*) FROM command_reply_outbox WHERE command_id='${first}' AND published_at IS NOT NULL AND next_attempt_at IS NULL AND last_error IS NULL`) === '1');
   });
 
   test('TC52 PD-02 broker: 10 concurrent messages with one messageId create one reservation and 10 identical replies', options, async (t) => {
