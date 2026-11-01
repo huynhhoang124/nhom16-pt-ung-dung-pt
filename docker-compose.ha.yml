@@ -25,17 +25,36 @@ services:
         condition: service_healthy
 
   parking-a:
+    environment:
+      READ_DATABASE_URL: postgres://postgres:dev@db-a-replica/parking
     depends_on:
       db-a:
         condition: service_healthy
       db-a-sync-config:
         condition: service_completed_successfully
-  # PD-14a: Enable replication settings for parking D.
+        required: false
+  parking-b:
+    environment:
+      READ_DATABASE_URL: postgres://postgres:dev@db-b-replica/parking
+
+  parking-c:
+    environment:
+      READ_DATABASE_URL: postgres://postgres:dev@db-c-replica/parking
+
+  parking-d:
+    environment:
+      READ_DATABASE_URL: postgres://postgres:dev@db-d-replica/parking
+    depends_on:
+      db-d:
+        condition: service_healthy
+      db-d-sync-config:
+        condition: service_completed_successfully
+        required: false
+
+  # PD-14a: db-d chạy lệnh không có synchronous_standby_names để ALTER SYSTEM của db-d-sync-config có hiệu lực
+  # (compose gốc đặt rỗng trên dòng lệnh, nên bỏ profile ha là về bất đồng bộ, không treo ghi).
   db-d:
-    command: ["postgres", "-c", "wal_log_hints=on"]
-    volumes:
-      - db-d-data:/var/lib/postgresql/data
-      - ./postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+    command: ["postgres", "-c", "wal_log_hints=on", "-c", "synchronous_commit=on"]
 
   # PD-14a: Standby for parking D.
   db-d-replica:

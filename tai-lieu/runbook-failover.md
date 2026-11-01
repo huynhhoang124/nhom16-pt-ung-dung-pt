@@ -327,3 +327,22 @@ Kết quả trên standby phải là `t`.
 - D/E/F đã kiểm chứng database replication nhưng chưa xác nhận metric HTTP trên Parking Node tương ứng. Phần tích hợp node E/F phụ thuộc triển khai PD-12.
 
 Không ghi nhận metric Node A–F đạt 6/6 khi chưa có bằng chứng thực tế.
+### 6.10. Chạy bản sao cho 6 bãi (01/11)
+
+- Bật bản sao 3 bãi: `docker compose -f docker-compose.yml -f docker-compose.ha.yml --profile ha up -d`.
+  Thêm `--profile extra` để có bãi D.
+- Bật bản sao 6 bãi: `node scripts/gen-lots.mjs`, rồi
+  `docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord up -d`.
+  Bãi A, D đồng bộ; B, C, E, F bất đồng bộ.
+- Dùng `up -d`, **không** dùng `--wait`: các service `db-*-sync-config` và `region-latency` chạy xong thì thoát, nên `--wait` báo lỗi.
+  Kiểm bằng `docker compose ps -a`.
+- Chế độ đồng bộ không còn lưu vĩnh viễn trong volume. Compose gốc chạy `db-a`, `db-d` với `-c synchronous_standby_names=`
+  (tham số dòng lệnh ưu tiên hơn `postgresql.auto.conf`). Chỉ khi có `docker-compose.ha.yml` hoặc overlay 6 bãi,
+  lệnh primary mới bỏ tham số này để `ALTER SYSTEM` của `db-x-sync-config` có hiệu lực.
+  Vì vậy bỏ profile `ha` thì bãi A tự về bất đồng bộ, ghi không bị treo.
+- Đo độ trễ bản sao (script cần package `pg` của node, nên chạy trong container):
+
+```bash
+docker compose cp scripts/do-tre-ban-sao-pd14a.mjs parking-a:/app/do-tre.mjs
+docker compose exec parking-a node /app/do-tre.mjs A 20
+```

@@ -21,11 +21,74 @@
         "ZONE": "bac"
       }
     },
+    "db-a-replica": {
+      "profiles": [
+        "ha",
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "entrypoint": [
+        "/bin/sh",
+        "/replica-entrypoint.sh"
+      ],
+      "environment": {
+        "PGDATA": "/var/lib/postgresql/data",
+        "REPLICA_OF": "db-a",
+        "REPLICATION_PASSWORD": "replica",
+        "APPLICATION_NAME": "db-a-replica"
+      },
+      "volumes": [
+        "db-a-replica-data:/var/lib/postgresql/data",
+        "./postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U postgres"
+        ],
+        "interval": "3s",
+        "timeout": "3s",
+        "retries": 60
+      },
+      "depends_on": {
+        "db-a": {
+          "condition": "service_healthy",
+          "required": false
+        }
+      }
+    },
+    "db-a-sync-config": {
+      "profiles": [
+        "ha",
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "environment": {
+        "PGPASSWORD": "dev"
+      },
+      "volumes": [
+        "./postgres/configure-sync-a.sh:/configure-sync-a.sh:ro"
+      ],
+      "entrypoint": [
+        "/bin/sh",
+        "/configure-sync-a.sh"
+      ],
+      "depends_on": {
+        "db-a": {
+          "condition": "service_healthy"
+        },
+        "db-a-replica": {
+          "condition": "service_healthy"
+        }
+      }
+    },
     "db-a": {
       "command": [
         "postgres",
         "-c",
-        "shared_buffers=32MB"
+        "shared_buffers=32MB",
+        "-c",
+        "wal_log_hints=on"
       ],
       "mem_limit": "192m",
       "shm_size": "64m"
@@ -33,14 +96,62 @@
     "parking-a": {
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
-        "ZONE": "bac"
+        "ZONE": "bac",
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-a-replica/parking"
+      },
+      "depends_on": {
+        "db-a": {
+          "condition": "service_healthy"
+        },
+        "db-a-sync-config": {
+          "condition": "service_completed_successfully",
+          "required": false
+        }
+      }
+    },
+    "db-b-replica": {
+      "profiles": [
+        "ha",
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "entrypoint": [
+        "/bin/sh",
+        "/replica-entrypoint.sh"
+      ],
+      "environment": {
+        "PGDATA": "/var/lib/postgresql/data",
+        "REPLICA_OF": "db-b",
+        "REPLICATION_PASSWORD": "replica",
+        "APPLICATION_NAME": "db-b-replica"
+      },
+      "volumes": [
+        "db-b-replica-data:/var/lib/postgresql/data",
+        "./postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U postgres"
+        ],
+        "interval": "3s",
+        "timeout": "3s",
+        "retries": 60
+      },
+      "depends_on": {
+        "db-b": {
+          "condition": "service_healthy",
+          "required": false
+        }
       }
     },
     "db-b": {
       "command": [
         "postgres",
         "-c",
-        "shared_buffers=32MB"
+        "shared_buffers=32MB",
+        "-c",
+        "wal_log_hints=on"
       ],
       "mem_limit": "192m",
       "shm_size": "64m"
@@ -48,14 +159,53 @@
     "parking-b": {
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
-        "ZONE": "bac"
+        "ZONE": "bac",
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-b-replica/parking"
+      }
+    },
+    "db-c-replica": {
+      "profiles": [
+        "ha",
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "entrypoint": [
+        "/bin/sh",
+        "/replica-entrypoint.sh"
+      ],
+      "environment": {
+        "PGDATA": "/var/lib/postgresql/data",
+        "REPLICA_OF": "db-c",
+        "REPLICATION_PASSWORD": "replica",
+        "APPLICATION_NAME": "db-c-replica"
+      },
+      "volumes": [
+        "db-c-replica-data:/var/lib/postgresql/data",
+        "./postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U postgres"
+        ],
+        "interval": "3s",
+        "timeout": "3s",
+        "retries": 60
+      },
+      "depends_on": {
+        "db-c": {
+          "condition": "service_healthy",
+          "required": false
+        }
       }
     },
     "db-c": {
       "command": [
         "postgres",
         "-c",
-        "shared_buffers=32MB"
+        "shared_buffers=32MB",
+        "-c",
+        "wal_log_hints=on"
       ],
       "mem_limit": "192m",
       "shm_size": "64m"
@@ -63,7 +213,69 @@
     "parking-c": {
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
-        "ZONE": "bac"
+        "ZONE": "bac",
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-c-replica/parking"
+      }
+    },
+    "db-d-replica": {
+      "profiles": [
+        "ha",
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "entrypoint": [
+        "/bin/sh",
+        "/replica-entrypoint.sh"
+      ],
+      "environment": {
+        "PGDATA": "/var/lib/postgresql/data",
+        "REPLICA_OF": "db-d",
+        "REPLICATION_PASSWORD": "replica",
+        "APPLICATION_NAME": "db-d-replica"
+      },
+      "volumes": [
+        "db-d-replica-data:/var/lib/postgresql/data",
+        "./postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U postgres"
+        ],
+        "interval": "3s",
+        "timeout": "3s",
+        "retries": 60
+      },
+      "depends_on": {
+        "db-d": {
+          "condition": "service_healthy",
+          "required": false
+        }
+      }
+    },
+    "db-d-sync-config": {
+      "profiles": [
+        "ha",
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "environment": {
+        "PGPASSWORD": "dev"
+      },
+      "volumes": [
+        "./postgres/configure-sync-d.sh:/configure-sync-d.sh:ro"
+      ],
+      "entrypoint": [
+        "/bin/sh",
+        "/configure-sync-d.sh"
+      ],
+      "depends_on": {
+        "db-d": {
+          "condition": "service_healthy"
+        },
+        "db-d-replica": {
+          "condition": "service_healthy"
+        }
       }
     },
     "db-d": {
@@ -78,7 +290,9 @@
       "command": [
         "postgres",
         "-c",
-        "shared_buffers=32MB"
+        "shared_buffers=32MB",
+        "-c",
+        "wal_log_hints=on"
       ],
       "healthcheck": {
         "test": [
@@ -92,7 +306,8 @@
       "mem_limit": "192m",
       "shm_size": "64m",
       "volumes": [
-        "db-d-data:/var/lib/postgresql/data"
+        "db-d-data:/var/lib/postgresql/data",
+        "./postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro"
       ]
     },
     "parking-d": {
@@ -114,7 +329,8 @@
         "PORT": 8004,
         "NODE_URL": "http://toxiproxy:18004",
         "SLOTS": "CAR:1:10,CAR:2:10",
-        "DATABASE_URL": "postgres://postgres:dev@db-d/parking"
+        "DATABASE_URL": "postgres://postgres:dev@db-d/parking",
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-d-replica/parking"
       },
       "ports": [
         "8004:8004"
@@ -122,9 +338,49 @@
       "depends_on": {
         "db-d": {
           "condition": "service_healthy"
+        },
+        "db-d-sync-config": {
+          "condition": "service_completed_successfully",
+          "required": false
         }
       },
       "mem_limit": "256m"
+    },
+    "db-e-replica": {
+      "profiles": [
+        "ha",
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "entrypoint": [
+        "/bin/sh",
+        "/replica-entrypoint.sh"
+      ],
+      "environment": {
+        "PGDATA": "/var/lib/postgresql/data",
+        "REPLICA_OF": "db-e",
+        "REPLICATION_PASSWORD": "replica",
+        "APPLICATION_NAME": "db-e-replica"
+      },
+      "volumes": [
+        "db-e-replica-data:/var/lib/postgresql/data",
+        "./postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U postgres"
+        ],
+        "interval": "3s",
+        "timeout": "3s",
+        "retries": 60
+      },
+      "depends_on": {
+        "db-e": {
+          "condition": "service_healthy",
+          "required": false
+        }
+      }
     },
     "db-e": {
       "profiles": [
@@ -138,7 +394,9 @@
       "command": [
         "postgres",
         "-c",
-        "shared_buffers=32MB"
+        "shared_buffers=32MB",
+        "-c",
+        "wal_log_hints=on"
       ],
       "healthcheck": {
         "test": [
@@ -152,7 +410,8 @@
       "mem_limit": "192m",
       "shm_size": "64m",
       "volumes": [
-        "db-e-data:/var/lib/postgresql/data"
+        "db-e-data:/var/lib/postgresql/data",
+        "./postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro"
       ]
     },
     "parking-e": {
@@ -174,7 +433,8 @@
         "PORT": 8005,
         "NODE_URL": "http://toxiproxy:18005",
         "SLOTS": "CAR:1:10,MOTO:1:10",
-        "DATABASE_URL": "postgres://postgres:dev@db-e/parking"
+        "DATABASE_URL": "postgres://postgres:dev@db-e/parking",
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-e-replica/parking"
       },
       "ports": [
         "8005:8005"
@@ -185,6 +445,42 @@
         }
       },
       "mem_limit": "256m"
+    },
+    "db-f-replica": {
+      "profiles": [
+        "ha",
+        "scale"
+      ],
+      "image": "postgres:16-alpine",
+      "entrypoint": [
+        "/bin/sh",
+        "/replica-entrypoint.sh"
+      ],
+      "environment": {
+        "PGDATA": "/var/lib/postgresql/data",
+        "REPLICA_OF": "db-f",
+        "REPLICATION_PASSWORD": "replica",
+        "APPLICATION_NAME": "db-f-replica"
+      },
+      "volumes": [
+        "db-f-replica-data:/var/lib/postgresql/data",
+        "./postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro"
+      ],
+      "healthcheck": {
+        "test": [
+          "CMD-SHELL",
+          "pg_isready -U postgres"
+        ],
+        "interval": "3s",
+        "timeout": "3s",
+        "retries": 60
+      },
+      "depends_on": {
+        "db-f": {
+          "condition": "service_healthy",
+          "required": false
+        }
+      }
     },
     "db-f": {
       "profiles": [
@@ -198,7 +494,9 @@
       "command": [
         "postgres",
         "-c",
-        "shared_buffers=32MB"
+        "shared_buffers=32MB",
+        "-c",
+        "wal_log_hints=on"
       ],
       "healthcheck": {
         "test": [
@@ -212,7 +510,8 @@
       "mem_limit": "192m",
       "shm_size": "64m",
       "volumes": [
-        "db-f-data:/var/lib/postgresql/data"
+        "db-f-data:/var/lib/postgresql/data",
+        "./postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro"
       ]
     },
     "parking-f": {
@@ -234,7 +533,8 @@
         "PORT": 8006,
         "NODE_URL": "http://toxiproxy:18006",
         "SLOTS": "CAR:1:10,MOTO:1:10",
-        "DATABASE_URL": "postgres://postgres:dev@db-f/parking"
+        "DATABASE_URL": "postgres://postgres:dev@db-f/parking",
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-f-replica/parking"
       },
       "ports": [
         "8006:8006"
@@ -289,7 +589,10 @@
   },
   "volumes": {
     "db-d-data": {},
+    "db-d-replica-data": {},
     "db-e-data": {},
-    "db-f-data": {}
+    "db-e-replica-data": {},
+    "db-f-data": {},
+    "db-f-replica-data": {}
   }
 }

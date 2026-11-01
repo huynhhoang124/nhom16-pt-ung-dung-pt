@@ -60,7 +60,7 @@ services:
 
   db-a:
     <<: *pg
-    command: ["postgres", "-c", "wal_log_hints=on"]
+    command: ["postgres", "-c", "wal_log_hints=on", "-c", "synchronous_standby_names="]
     volumes:
       - db-a-data:/var/lib/postgresql/data
       - ./postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
@@ -215,7 +215,13 @@ services:
     depends_on: [aggregator]
 
   # --- Demo mở rộng: thêm bãi D rồi đăng ký trên trang Quản trị (apiUrl http://parking-d:8004) ---
-  db-d: { <<: *pg, profiles: [extra], volumes: [db-d-data:/var/lib/postgresql/data] }
+  db-d:
+    <<: *pg
+    profiles: [extra, ha]
+    command: ["postgres", "-c", "wal_log_hints=on", "-c", "synchronous_standby_names="]
+    volumes:
+      - db-d-data:/var/lib/postgresql/data
+      - ./postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
   parking-d:
     profiles: [extra]
     build: ./parking-node
