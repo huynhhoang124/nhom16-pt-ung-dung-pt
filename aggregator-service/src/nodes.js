@@ -25,8 +25,11 @@ async function resolveUrl(url) {
   return u.href.replace(/\/$/, '');
 }
 
-function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config, leader }) {
+function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config, leader, zone = 'bac' }) {
   const nodes = new Map();
+  // PD-12: bãi cùng vùng với Aggregator đứng trước (gọi trước, không qua đường liên vùng), sau đó theo mã bãi.
+  const ordered = () => [...nodes.values()].sort((a, b) =>
+    ((a.zone ?? zone) !== zone) - ((b.zone ?? zone) !== zone) || a.id.localeCompare(b.id));
 
   const getTimeout = () => (config ? config.get('timeoutMs', timeoutMs) : (typeof timeoutMs === 'function' ? timeoutMs() : timeoutMs));
   const getThreshold = () => (config ? config.get('failThreshold', failThreshold) : (typeof failThreshold === 'function' ? failThreshold() : failThreshold));
@@ -174,7 +177,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   };
 
   // Scatter–gather: gọi song song, bãi lỗi/chậm thì bỏ qua và gắn nhãn, vẫn trả phần còn lại.
-  const gather = (fn) => Promise.all([...nodes.values()].map(async (n) => {
+  const gather = (fn) => Promise.all(ordered().map(async (n) => {
     if (n.status === 'OFFLINE') return { parkingId: n.id, status: 'OFFLINE' };
     try { return { parkingId: n.id, status: n.status, ...(await fn(n)) }; }
     catch { return { parkingId: n.id, status: 'OFFLINE' }; }
@@ -189,6 +192,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
     sync,
     get: (id) => nodes.get(id),
     all: () => [...nodes.values()],
+    ordered,
     call,
     json,
     check,

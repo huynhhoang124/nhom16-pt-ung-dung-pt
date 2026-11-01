@@ -20,17 +20,24 @@ ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
 ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;
 -- PT-05: địa chỉ node mà TRÌNH DUYỆT nhân viên gọi thẳng được khi Aggregator sập (khác api_url trong mạng nội bộ)
 ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS public_url TEXT;
+ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS zone TEXT NOT NULL DEFAULT 'bac';
+ALTER TABLE parking_nodes ALTER COLUMN zone SET DEFAULT 'bac';
+UPDATE parking_nodes SET zone = 'bac' WHERE zone IS NULL;
 
 -- PT-07: nhật ký saga đặt chỗ nhiều bãi (ghi sau mỗi bước để khôi phục khi Aggregator chết giữa chừng)
 CREATE TABLE IF NOT EXISTS sagas (
   id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   request_id VARCHAR(128) UNIQUE NOT NULL,     -- userId:Idempotency-Key
   user_id    TEXT NOT NULL,
-  status     VARCHAR(14) NOT NULL CHECK (status IN ('RUNNING','COMPLETED','COMPENSATING','FAILED')),
+  status     VARCHAR(14) NOT NULL CHECK (status IN ('PENDING','RUNNING','CONFIRMING','COMPLETED','COMPENSATING','FAILED')),
   steps      JSONB NOT NULL,                   -- [{parkingId, slotCode, licensePlate, state, reservationId?, error?}]
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- DB cũ cần nhận trạng thái mới khi khởi động lại.
+ALTER TABLE sagas DROP CONSTRAINT IF EXISTS sagas_status_check;
+ALTER TABLE sagas ADD CONSTRAINT sagas_status_check
+  CHECK (status IN ('PENDING','RUNNING','CONFIRMING','COMPLETED','COMPENSATING','FAILED'));
 
 -- PD-03: shared durable command identity and recoverable publish intent.
 CREATE TABLE IF NOT EXISTS commands (

@@ -14,7 +14,7 @@ const response = (row) => ({
 });
 
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-const COMMAND_TYPES = ['reserve', 'cancel', 'pay'];
+const COMMAND_TYPES = ['reserve', 'cancel', 'pay', 'confirm'];
 // Lỗi chắc chắn chưa gửi được: đánh dấu FAILED ngay; lỗi khác coi như "không rõ đã gửi chưa" và thử lại sau.
 const DEFINITE_SEND_ERRORS = ['BROKER_UNAVAILABLE', 'PARKING_NOT_FOUND', 'QUEUE_FULL', 'INVALID_COMMAND',
   'COMMAND_DEADLINE_BEFORE_SEND'];
@@ -76,19 +76,26 @@ function makeCommandFlow({
       [id, { error: code, sendStatus: 'FAILED_TO_SEND' }, status, code]);
   }
 
-  async function execute({ parkingId, type, user, payload, key, traceparent }) {
+  async function execute({ parkingId, type, user, payload, key, traceparent, fencingToken }) {
     if (stopped) throw fail('COMMAND_SERVICE_STOPPED', 503);
     if (typeof key !== 'string' || !key.length || key.length > 64 || /[\u0000-\u001f\u007f]/.test(key)) {
       throw fail('IDEMPOTENCY_KEY_REQUIRED', 400);
     }
     if (!ID_RE.test(parkingId) || !COMMAND_TYPES.includes(type)) throw fail('INVALID_COMMAND', 400);
-    const id = `${user.sub}:${key}`;
+    const sagaId = payload?.sagaId;
+    const sagaKey = sagaId && `${sagaId}:${payload.step}:${type}`;
+    if (sagaId && (!/^[0-9a-f-]{36}$/.test(sagaId) || !Number.isInteger(payload.step) ||
+      payload.step < 0 || payload.step > 4 || key !== sagaKey ||
+      !Number.isSafeInteger(fencingToken) || fencingToken < 0)) throw fail('INVALID_COMMAND', 400);
+    if (type === 'confirm' && !sagaId) throw fail('INVALID_COMMAND', 400);
+    const id = sagaKey ?? `${user.sub}:${key}`;
     if (id.length > 128) throw fail('INVALID_COMMAND_ID', 400);
 
     const actor = { userId: user.sub, role: user.role, ...(user.parkingId && { parkingId: user.parkingId }) };
     const hash = createHash('sha256').update(canonical({ parkingId, type, actor, payload })).digest('hex');
     const issuedAt = now();
-    const envelope = { issuedAt, deadlineAt: issuedAt + (config?.get('commandTtlMs', ttlMs) ?? ttlMs), ...(traceparent && { traceparent }) };
+    const envelope = { issuedAt, deadlineAt: issuedAt + (config?.get('commandTtlMs', ttlMs) ?? ttlMs),
+      ...(traceparent && { traceparent }), ...(fencingToken !== undefined && { fencingToken }) };
     const waiter = wait(id);   // phải đăng ký chờ TRƯỚC khi ghi ý định, vì worker có thể gửi ngay sau đó
 
     try {
@@ -98,14 +105,23 @@ function makeCommandFlow({
         [id, parkingId, type, user.sub, hash, payload, actor, envelope, `agg.${instanceId}`]);
       let row = await get(id);
       if (row.request_hash !== hash) throw fail('IDEMPOTENCY_KEY_REUSED', 422);
+      // Leader mới phát lại cùng ID với token mới; inbox của node bảo đảm không ghi hai lần.
+      if (sagaId && row.status === 'PENDING' && replyReady &&
+          (row.envelope.fencingToken !== fencingToken || row.envelope.deadlineAt <= now())) {
+        await pool.query(
+          `UPDATE commands SET envelope=$2, publish_state='QUEUED', publish_lease_until=NULL,
+             next_publish_at=now(), updated_at=now() WHERE id=$1 AND status='PENDING'`,
+          [id, envelope]);
+        row = await get(id);
+      }
 
       // Lần trước broker từ chối và còn hạn: cho gửi lại cùng commandId
       const retryable = row.status === 'FAILED' && row.failure_phase === 'SEND' && row.publish_state === 'REJECTED';
-      if (retryable && row.envelope.deadlineAt > now() && replyReady) {
+      if (retryable && (sagaId || row.envelope.deadlineAt > now()) && replyReady) {
         await pool.query(
           `UPDATE commands SET status='PENDING', result=NULL, status_code=NULL, publish_state='QUEUED', failure_phase=NULL,
-             last_error=NULL, next_publish_at=now(), updated_at=now()
-           WHERE id=$1 AND status='FAILED' AND publish_state='REJECTED'`, [id]);
+             last_error=NULL, next_publish_at=now(), envelope=$2, updated_at=now()
+           WHERE id=$1 AND status='FAILED' AND publish_state='REJECTED'`, [id, sagaId ? envelope : row.envelope]);
         row = await get(id);
       }
       if (terminal(row)) return response(row);
