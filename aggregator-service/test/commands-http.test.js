@@ -35,8 +35,9 @@ test('administrative endpoint publishes unknown parking, preserves old routes, a
   const count = sent.length;
   assert.equal((await call('ADMIN', { type: 'reserve', payload: {}, messageId: 'victim:stolen' })).status, 400);
   assert.equal(sent.length, count);
-  for (const [code, status] of [['PARKING_NOT_FOUND', 404], ['BROKER_UNAVAILABLE', 503], ['PUBLISH_NACKED', 503], ['PUBLISH_UNKNOWN_RESULT', 504], ['INVALID_COMMAND', 400]]) {
+  for (const [code, status] of [['PARKING_NOT_FOUND', 404], ['BROKER_UNAVAILABLE', 503], ['QUEUE_FULL', 503], ['PUBLISH_UNKNOWN_RESULT', 504], ['INVALID_COMMAND', 400]]) {
     error = Object.assign(new Error(code), { code, status });
     const r = await call(); assert.equal(r.status, status); assert.deepEqual(await r.json(), { error: code });
+    if (code === 'QUEUE_FULL') assert.equal(r.headers.get('retry-after'), '1');
   }
 });

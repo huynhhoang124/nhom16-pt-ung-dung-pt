@@ -288,3 +288,10 @@ Nền: `feature/PD-14b-auto-failover-epoch` (Luận). Lấy `a613d05 c13fc62 512
 ## Câu hỏi
 
 (Chưa có. Bước nào chưa rõ thì ghi câu hỏi vào đây rồi dừng.)
+
+- B6: Lệnh nào phải đi vào `cmd.<bãi>.admin`? Tất cả lệnh của ADMIN hay chỉ lệnh từ API quản trị? Các loại lệnh quản trị cần node xử lý là gì?
+
+### Trả lời (Huynh, 01/11)
+
+- B6, hàng đợi admin: lệnh quản trị là các lệnh do ADMIN phát cho nhiều bãi (PD-04: đổi bảng giá, bảo trì hàng loạt). `commands.send(parkingId, type, payload, { admin: true })` gửi vào `cmd.<bãi>.admin`; mặc định (`reserve`, `cancel`, `pay`) vẫn vào `cmd.<bãi>`. Hiện chưa có nơi nào gửi `admin: true`; PD-04 sẽ dùng sau. Node mở 2 channel: prefetch 16 cho `cmd.<bãi>`, 4 cho `cmd.<bãi>.admin`, cùng một processor/inbox. Khai báo hàng đợi admin trong `rabbitmq/definitions.json` và lúc node khởi động (giống `cmd.<bãi>`).
+- Làm nốt phần còn lại của B6: `x-dead-letter-routing-key: expired`, queue `cmd.expired` bind `parking.dlx`, consumer `cmd.expired` chỉ chạy ở leader (EXPIRED + Socket.IO; `delivery_limit` → `cmd.dead`), 503 + `Retry-After` khi `QUEUE_FULL`, và test.

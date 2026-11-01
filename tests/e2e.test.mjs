@@ -4,7 +4,7 @@
 // Test có tắt/bật container (parking-b, aggregator, rabbitmq, notification) và tự bật lại khi xong.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +35,7 @@ const sql = (db, q) => compose(`exec -T ${db} psql -U postgres -d parking -tAc "
 async function http(url, { method = 'GET', body, headers = {} } = {}, retry = method === 'GET') {
   try {
     const r = await fetch(url, { method, headers: { 'content-type': 'application/json', ...headers }, body: body && JSON.stringify(body) });
-    return { status: r.status, body: await r.json().catch(() => null) };
+    return { status: r.status, headers: r.headers, body: await r.json().catch(() => null) };
   } catch {
     if (retry) { await sleep(300); return http(url, { method, body, headers }, false); }
     return { status: 0, body: null };
@@ -981,5 +981,58 @@ test('TC76 saga qua broker: bước 3 lỗi -> bù trừ 2 bước trước, kh�
     assert.equal(step.state, 'COMPENSATED', JSON.stringify(step));
     const st = sql(`db-${step.parkingId.toLowerCase()}`, `SELECT status FROM reservations WHERE id='${step.reservationId}'`);
     assert.equal(st, 'CANCELLED');
+  }
+});
+
+// --- PD-06: TTL lệnh và back-pressure (COMMAND_MODE=broker) ---
+const reserveVia = (token, id, slotCode) => agg(`/api/parkings/${id}/reservations`, {
+  method: 'POST', token, key: `e2e-pd06-${randomUUID()}`, body: { slotCode, licensePlate: plate() } });
+
+test('TC55 bãi tắt lâu hơn TTL: lệnh EXPIRED, bật lại không bị đặt muộn', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const slot = await freeSlot('B');
+  compose('stop parking-b');
+  try {
+    const r = await reserveVia(token, 'B', slot);
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    const id = r.body.commandId;
+    const final = await until('lệnh hết hạn', async () => {
+      const c = await agg(`/api/commands/${encodeURIComponent(id)}`, { token });
+      return c.body?.status === 'EXPIRED' && c.body;
+    }, 40_000);
+    assert.equal(final.statusCode, 410);
+  } finally {
+    compose('start parking-b');
+  }
+  await until('bãi B chạy lại', async () => (await node('B', '/health')).status === 200, 30_000);
+  await sleep(3000);
+  const st = sql('db-b', `SELECT status FROM parking_slots WHERE slot_code='${slot}'`);
+  assert.equal(st, 'AVAILABLE', 'lệnh đã hết hạn không được đặt muộn');
+});
+
+test('TC59 hàng đợi lệnh đầy: trả 503 kèm Retry-After, không mất lệnh đã nhận', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const policy = '{"max-length":2,"overflow":"reject-publish","dead-letter-exchange":"parking.dlx","dead-letter-routing-key":"expired"}';
+  // gọi docker trực tiếp (không qua shell) để JSON của policy không bị shell Windows làm hỏng dấu nháy
+  const rabbitctl = (...args) => execFileSync('docker', ['compose', 'exec', '-T', 'rabbitmq', 'rabbitmqctl', ...args], { cwd: ROOT, stdio: 'pipe' });
+  rabbitctl('set_policy', '-p', '/', '--priority', '20', '--apply-to', 'quorum_queues', 'tc59-small', '^cmd\.C$', policy);
+  compose('stop parking-c');
+  const accepted = [];
+  try {
+    let full;
+    for (let i = 0; i < 6 && !full; i++) {
+      const r = await reserveVia(token, 'C', `TC59-${i}`);
+      if (r.status === 503) full = r; else accepted.push(r.body.commandId);
+    }
+    assert.ok(full, 'phải có một lần trả 503 khi hàng đợi đầy');
+    assert.equal(full.body.error, 'QUEUE_FULL');
+    assert.ok(full.headers.get('retry-after'), 'thiếu Retry-After');
+    for (const id of accepted) {
+      const c = await agg(`/api/commands/${encodeURIComponent(id)}`, { token });
+      assert.notEqual(c.body?.status, 'FAILED', `lệnh đã nhận ${id} không được mất`);
+    }
+  } finally {
+    rabbitctl('clear_policy', '-p', '/', 'tc59-small');
+    compose('start parking-c');
   }
 });
