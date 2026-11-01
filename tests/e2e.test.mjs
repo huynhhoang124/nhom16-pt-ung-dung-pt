@@ -948,6 +948,39 @@ test('TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự đ
   }
 );
 
+// --- PD-16: phân mảnh users (SHARD=1, compose thêm docker-compose.shard.yml) ---
+test('TC73 phân mảnh users: tắt db-users-1 -> người ở phân mảnh 2 vẫn đăng nhập và đặt chỗ được', { ...T, skip: !process.env.SHARD }, async () => {
+  const on = (db, u) => sql(db, `SELECT count(*) FROM users WHERE username='${u}'`) === '1';
+  // Tìm một người dùng ở phân mảnh 2 và một người ở phân mảnh 1 (user mẫu, thiếu thì tự đăng ký)
+  const pick = async (db) => {
+    for (const u of ['user1', 'user2']) if (on(db, u)) return u;
+    for (let i = 0; i < 50; i++) {
+      const u = `tc73_${randomUUID().slice(0, 8)}`;
+      const r = await agg('/api/auth/register', { method: 'POST', body: { username: u, password: 'matkhau123' } });
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      if (on(db, u)) return u;
+    }
+    throw new Error(`không tìm được username thuộc ${db}`);
+  };
+  const [u2, u1] = [await pick('db-users-2'), await pick('db-users-1')];
+  const pass = (u) => (u.startsWith('tc73_') ? 'matkhau123' : process.env.DEMO_PASSWORD ?? '123456');
+  const loginAs = (u) => agg('/api/auth/login', { method: 'POST', body: { username: u, password: pass(u) } });
+  try {
+    compose('stop db-users-1');
+    const r2 = await loginAs(u2);
+    assert.equal(r2.status, 200, JSON.stringify(r2.body));
+    const slot = await freeSlot('A');
+    const b = await agg('/api/parkings/A/reservations', {
+      method: 'POST', token: r2.body.token, key: randomUUID(), body: { slotCode: slot, licensePlate: plate() } });
+    assert.equal(b.status, 201, JSON.stringify(b.body));
+    cancelLater('A', b.body.id);
+    assert.notEqual((await loginAs(u1)).status, 200, 'người ở phân mảnh đã tắt không đăng nhập được');
+  } finally {
+    compose('start db-users-1');
+    await until('db-users-1 chạy lại', async () => { try { return sql('db-users-1', 'SELECT 1') === '1'; } catch { return false; } }, 30_000);
+  }
+});
+
 // --- PD-07: saga đặt nhiều bãi qua broker (COMMAND_MODE=broker cho cả compose và test) ---
 const BROKER = process.env.COMMAND_MODE === 'broker';
 const groupBooking = async (token, items) =>

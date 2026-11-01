@@ -6,6 +6,7 @@ const { Server } = require('socket.io');
 const { makeRegistry } = require('./nodes');
 const { applyEvent, reconcile, startConsumer } = require('./events');
 const { makeAuth, seedUsers } = require('./auth');
+const { makeUserShards } = require('./ring');
 const { makeApp } = require('./routes');
 const { makeCommands } = require('./commands');
 const { makeCommandFlow } = require('./command-flow');
@@ -16,8 +17,10 @@ const { log } = require('./log');
 const env = (k, d) => process.env[k] ?? d;
 
 // NODES='[{"parkingId":"A","name":"Bãi A","apiUrl":"http://parking-a:8001","address":"..."}]'
-async function init(pool) {
-  await pool.query(fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8'));
+async function init(pool, users) {
+  const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
+  await pool.query(schema);
+  if (users.sharded) for (const p of users.all()) await p.query(schema);   // PD-16: mỗi phân mảnh có bảng users riêng
   for (const n of JSON.parse(env('NODES', '[]'))) {
     // bãi đã có: api_url theo cấu hình hiện tại (vd đổi sang toxiproxy khi demo mạng xấu); toạ độ/địa chỉ công khai chỉ bổ sung nếu chưa có
     await pool.query(
@@ -26,14 +29,18 @@ async function init(pool) {
          public_url = COALESCE(parking_nodes.public_url, EXCLUDED.public_url), zone = COALESCE(parking_nodes.zone, EXCLUDED.zone)`,
       [n.parkingId, n.name, n.apiUrl, n.address ?? null, n.lat ?? null, n.lng ?? null, n.publicUrl ?? null, n.zone ?? env('ZONE', 'bac')]);
   }
-  await seedUsers(pool, env('DEMO_PASSWORD', '123456'));
+  await seedUsers(users, env('DEMO_PASSWORD', '123456'));
 }
 
 async function main() {
   const pool = new Pool({ connectionString: env('DATABASE_URL') });
   pool.on('error', (e) => log.error('mất kết nối DB điều phối', { error: e.message }));   // không bắt thì DB khởi động lại làm sập Aggregator
+  const users = makeUserShards({
+    urls: env('USERS_DATABASE_URLS', ''), agg: pool,
+    makePool: (u) => new Pool({ connectionString: u, connectionTimeoutMillis: 2000 }).on('error', (e) => log.error('mất kết nối phân mảnh users', { error: e.message })),
+  });
   for (let i = 1; ; i++) {
-    try { await init(pool); break; }
+    try { await init(pool, users); break; }
     catch (e) { if (i >= 30) throw e; log.info('DB chưa sẵn sàng, thử lại', { error: e.message }); await new Promise((r) => setTimeout(r, 2000)); }
   }
 
@@ -106,7 +113,7 @@ async function main() {
     waitMs: Number(env('REPLY_WAIT_MS', 3000)), ttlMs: Number(env('COMMAND_TTL_MS', 10000)),
   });
   const app = makeApp({
-    pool, reg, cache, auth, commands, commandFlow, commandMode, config, leader,
+    pool, users, reg, cache, auth, commands, commandFlow, commandMode, config, leader,
     reserveTimeoutMs: config.get('reserveTimeoutMs', 3000),
   });
   const server = http.createServer(app);

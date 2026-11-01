@@ -8,10 +8,11 @@ const DEMO_USERS = [
   ['admin', 'ADMIN', null],
 ];
 
-async function seedUsers(pool, password) {
+// db: pool db-agg, hoặc bộ phân mảnh của ring.js (PD-16) -> mỗi user mẫu ghi vào đúng phân mảnh của nó
+async function seedUsers(db, password) {
   const hash = await bcrypt.hash(password, 10);
   for (const [username, role, parkingId] of DEMO_USERS) {
-    await pool.query(
+    await (db.for ? db.for(username) : db).query(
       `INSERT INTO users(username, password_hash, role, parking_id) VALUES ($1,$2,$3,$4)
        ON CONFLICT (username) DO NOTHING`, [username, hash, role, parkingId]);
   }

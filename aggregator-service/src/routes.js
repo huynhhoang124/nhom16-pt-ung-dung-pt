@@ -8,8 +8,9 @@ const { mountMetrics } = require('./metrics');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
+const { makeUserShards } = require('./ring');
 function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 'http', reserveTimeoutMs = 3000, config, leader,
-  zone = process.env.ZONE ?? 'bac', peerUrl = process.env.REGIONAL_PEER_URL }) {
+  zone = process.env.ZONE ?? 'bac', peerUrl = process.env.REGIONAL_PEER_URL, users = makeUserShards({ agg: pool }) }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
@@ -99,7 +100,8 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
   app.post('/api/auth/login', async (req, res) => {
     const key = `login|${req.body?.username}|${req.ip}`;
     if (auth.limiter.blocked(key)) return res.status(429).json({ error: 'TOO_MANY_ATTEMPTS' });
-    const out = await auth.login(pool, req.body?.username, req.body?.password);
+    const out = typeof req.body?.username === 'string' && req.body.username
+      ? await auth.login(users.for(req.body.username), req.body.username, req.body?.password) : null;
     if (!out) { auth.limiter.hit(key); return res.status(401).json({ error: 'INVALID_CREDENTIALS' }); }
     auth.limiter.reset(key);
     res.json(out);
@@ -113,7 +115,8 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
     if (!validPassword(password)) return res.status(400).json({ error: 'WEAK_PASSWORD' });
     const key = `register|${req.ip}`;                         // chống tạo tài khoản hàng loạt
     if (auth.limiter.blocked(key)) return res.status(429).json({ error: 'TOO_MANY_ATTEMPTS' });
-    const out = await auth.register(pool, username, password);
+    if (!(await users.writable())) return res.status(503).set('Retry-After', '5').json({ error: 'USERS_MIGRATING' });
+    const out = await auth.register(users.for(username), username, password);
     if (!out) return res.status(409).json({ error: 'USERNAME_TAKEN' });
     auth.limiter.hit(key);
     res.status(201).json(out);
@@ -122,7 +125,8 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
   app.put('/api/me/password', need(), async (req, res) => {
     const { oldPassword, newPassword } = req.body ?? {};
     if (!validPassword(newPassword)) return res.status(400).json({ error: 'WEAK_PASSWORD' });
-    (await auth.changePassword(pool, req.user.sub, oldPassword, newPassword))
+    if (!(await users.writable())) return res.status(503).set('Retry-After', '5').json({ error: 'USERS_MIGRATING' });
+    (await auth.changePassword(users.for(req.user.username), req.user.sub, oldPassword, newPassword))
       ? res.json({ ok: true }) : res.status(400).json({ error: 'WRONG_PASSWORD' });
   });
 

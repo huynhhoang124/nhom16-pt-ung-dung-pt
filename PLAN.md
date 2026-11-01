@@ -129,18 +129,18 @@ Nền: `feature/PD-14a-db-replication-clean` (`23d9fbc 23d5ee0 3d53169`, Loan).
 ### B4 – PD-16 Phân mảnh `db-users` (issue #34) – sau B2
 
 - [ ] Thiết kế nửa trang vào #34.
-- [ ] `aggregator-service/src/ring.js`:
+- [x] `aggregator-service/src/ring.js`:
   - Băm `sha1(username.toLowerCase())`, lấy 4 byte đầu thành số trên vòng 2³².
   - 128 nút ảo mỗi phân mảnh.
   - Hàm `shardFor`, `addShard`, `removeShard`.
-- [ ] Compose: `db-users-1`, `db-users-2`, mỗi cái có replica (cùng mẫu B3). Biến `USERS_DATABASE_URLS` là danh sách URL phân cách bằng dấu phẩy.
-- [ ] Aggregator: mỗi phân mảnh một `Pool`, thêm hàm `usersPool(username)`. Chuyển sang pool theo người dùng:
+- [x] Compose: `db-users-1`, `db-users-2`, mỗi cái có replica (cùng mẫu B3). Biến `USERS_DATABASE_URLS` là danh sách URL phân cách bằng dấu phẩy.
+- [x] Aggregator: mỗi phân mảnh một `Pool`, thêm hàm `usersPool(username)`. Chuyển sang pool theo người dùng:
   - `users` (`auth.js`, kể cả `seedUsers`).
   - `commands` (B2).
   - `sagas` (`saga.js`).
   - Các bảng chung khác giữ ở `db-agg`.
-- [ ] `scripts/them-phan-manh.mjs`: ghi đôi → chép → đối chiếu số lượng và checksum → chuyển đọc → xoá bản cũ. Có `--dry-run`.
-- [ ] Kiểm tra:
+- [x] `scripts/them-phan-manh.mjs`: ghi đôi → chép → đối chiếu số lượng và checksum → chuyển đọc → xoá bản cũ. Có `--dry-run`.
+- [x] Kiểm tra:
   - TC72 (`aggregator-service/test/ring.test.js`): 10 000 username lệch ≤ 10%; thêm phân mảnh 3 thì 30–36% khoá phải chuyển.
   - TC73 (e2e): `stop db-users-1` → người ở phân mảnh 2 vẫn đăng nhập và đặt chỗ được.
   - e2e cũ đạt.
@@ -287,11 +287,13 @@ Nền: `feature/PD-14b-auto-failover-epoch` (Luận). Lấy `a613d05 c13fc62 512
 
 ## Câu hỏi
 
-(Chưa có. Bước nào chưa rõ thì ghi câu hỏi vào đây rồi dừng.)
-
+- B4 – Định tuyến theo username nhưng `commands.user_id`, `sagas.user_id` và `commandId` hiện chỉ chứa UUID; phản hồi broker cũng không chứa username. Có chấp nhận thêm bảng ánh xạ `user_id → username` ở `db-agg` để chọn phân mảnh mà không phải dò mọi DB không? Đề xuất giữ nguyên UUID, token và commandId hiện tại; đăng nhập ở phân mảnh 2 không được phụ thuộc phân mảnh 1.
+- B4 – `scripts/them-phan-manh.mjs` cần chuyển dữ liệu hiện có từ `db-agg` sang hai phân mảnh đầu tiên, hay chỉ thêm phân mảnh thứ ba? Khi ghi đôi/chuyển đọc, có chấp nhận lưu cấu hình vòng băm và trạng thái di chuyển chung ở `db-agg`, cùng một khoảng chặn ghi ngắn để đối chiếu và chuyển đọc an toàn trên mọi bản Aggregator không? Cần chốt trước khi triển khai việc xoá bản cũ.
 - B6: Lệnh nào phải đi vào `cmd.<bãi>.admin`? Tất cả lệnh của ADMIN hay chỉ lệnh từ API quản trị? Các loại lệnh quản trị cần node xử lý là gì?
 
 ### Trả lời (Huynh, 01/11)
 
+- B4 câu 1: **Không thêm bảng ánh xạ.** Chỉ bảng `users` (và sau này `login_buckets` của B9) chia phân mảnh theo `username`. JWT đã có `username`, nên mọi request đã đăng nhập chọn phân mảnh bằng `req.user.username`. Bảng `commands`, `sagas` **giữ ở `db-agg`** (đây là dữ liệu điều phối, không phải dữ liệu người dùng); giữ nguyên UUID, token, commandId. Đăng nhập chỉ đụng phân mảnh của username đó, không phụ thuộc phân mảnh khác.
+- B4 câu 2: `scripts/them-phan-manh.mjs` chỉ cần **thêm phân mảnh thứ ba** (2 → 3), chuyển những username đổi chủ. Lưu trạng thái di chuyển ở bảng `shard_migrations` trong `db-agg`; chấp nhận chặn ghi ngắn (cờ trong bảng đó, Aggregator đọc trước khi ghi `users`) để đối chiếu số lượng + checksum rồi chuyển đọc. Có thêm cờ `--import-agg` chép một lần các user cũ từ bảng `users` ở `db-agg` sang đúng phân mảnh. `seedUsers` ghi mỗi user mẫu vào đúng phân mảnh của nó. Có `--dry-run`. Không có `USERS_DATABASE_URLS` thì chạy như cũ (bảng `users` ở `db-agg`).
 - B6, hàng đợi admin: lệnh quản trị là các lệnh do ADMIN phát cho nhiều bãi (PD-04: đổi bảng giá, bảo trì hàng loạt). `commands.send(parkingId, type, payload, { admin: true })` gửi vào `cmd.<bãi>.admin`; mặc định (`reserve`, `cancel`, `pay`) vẫn vào `cmd.<bãi>`. Hiện chưa có nơi nào gửi `admin: true`; PD-04 sẽ dùng sau. Node mở 2 channel: prefetch 16 cho `cmd.<bãi>`, 4 cho `cmd.<bãi>.admin`, cùng một processor/inbox. Khai báo hàng đợi admin trong `rabbitmq/definitions.json` và lúc node khởi động (giống `cmd.<bãi>`).
 - Làm nốt phần còn lại của B6: `x-dead-letter-routing-key: expired`, queue `cmd.expired` bind `parking.dlx`, consumer `cmd.expired` chỉ chạy ở leader (EXPIRED + Socket.IO; `delivery_limit` → `cmd.dead`), 503 + `Retry-After` khi `QUEUE_FULL`, và test.
