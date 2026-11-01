@@ -86,6 +86,12 @@ async function makeDynamicPool({
     });
     epochWatcher.on('error', (err) => log.error?.('[dynamic-pool] Watcher epoch lỗi', { error: err.message }));
 
+  } catch (e) {
+    log.warn?.('[dynamic-pool] Không thể tạo etcd watcher', { error: e.message });
+  }
+
+  // Heartbeat chạy kể cả khi tạo watcher lỗi (etcd chưa sẵn sàng lúc khởi động): không có nó thì lastEtcdContact
+  // đứng yên và mọi lệnh ghi bị 503 ETCD_UNREACHABLE mãi sau watchWindowMs
     if (!etcdClient) {
       const pingInterval = Math.min(1000, Math.max(500, Math.floor(watchWindowMs / 2)));
       heartbeatTimer = setInterval(async () => {
@@ -97,9 +103,6 @@ async function makeDynamicPool({
         }
       }, pingInterval);
     }
-  } catch (e) {
-    log.warn?.('[dynamic-pool] Không thể tạo etcd watcher', { error: e.message });
-  }
 
   const wrapper = {
     isDynamic: true,

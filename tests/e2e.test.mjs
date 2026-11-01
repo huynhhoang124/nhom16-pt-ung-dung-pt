@@ -123,7 +123,8 @@ test('TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo b
   assert.equal(a.status, 201);
   cancelLater('A', a.body.id);
   const b = await agg('/api/parkings/A/reservations', { method: 'POST', token: tok.user1, key, body });
-  assert.deepEqual([b.status, b.body.id], [200, a.body.id]);
+  // http: lần gửi lại trả 200; broker (PD-03): trả nguyên phản hồi đã lưu của lệnh (201)
+  assert.deepEqual([b.status, b.body.id], [process.env.COMMAND_MODE === 'broker' ? 201 : 200, a.body.id]);
   assert.equal(sql('db-a', `SELECT count(*) FROM reservations r JOIN parking_slots s ON s.id=r.slot_id WHERE s.slot_code='${slot}' AND r.status='ACTIVE'`), '1');
 });
 
@@ -953,6 +954,8 @@ test('TC-PD21 giới hạn đăng nhập phân tán: 5 lần sai rải qua 2 Agg
   const usersDb = process.env.SHARD ? 'db-users-1' : 'db-agg';   // user2 ở phân mảnh 1 (ring.js)
   const clear = () => sql(usersDb, "DELETE FROM login_buckets WHERE username='user2'");
   const tryLogin = (i, password) => (i % 2 ? agg2 : agg)('/api/auth/login', { method: 'POST', body: { username: 'user2', password } });
+  // Test trước (TC65, TC66) có thể vừa tắt/tạm dừng một bản Aggregator: chờ cả hai sống lại
+  await until('2 Aggregator sẵn sàng', async () => (await agg('/health')).status === 200 && (await agg2('/health')).status === 200, 30_000);
   clear();
   try {
     for (let i = 0; i < 5; i++) assert.equal((await tryLogin(i, 'sai-mat-khau')).status, 401, `lần sai ${i + 1}`);
@@ -984,11 +987,12 @@ test('TC73 phân mảnh users: tắt db-users-1 -> người ở phân mảnh 2 v
     compose('stop db-users-1');
     const r2 = await loginAs(u2);
     assert.equal(r2.status, 200, JSON.stringify(r2.body));
-    const slot = await freeSlot('A');
-    const b = await agg('/api/parkings/A/reservations', {
+    // Bãi C: sau TC68 bản sao của A đã thành primary riêng, đọc chỗ trống ở A có thể cũ
+    const slot = await freeSlot('C');
+    const b = await agg('/api/parkings/C/reservations', {
       method: 'POST', token: r2.body.token, key: randomUUID(), body: { slotCode: slot, licensePlate: plate() } });
     assert.equal(b.status, 201, JSON.stringify(b.body));
-    cancelLater('A', b.body.id);
+    cancelLater('C', b.body.id);
     assert.notEqual((await loginAs(u1)).status, 200, 'người ở phân mảnh đã tắt không đăng nhập được');
   } finally {
     compose('start db-users-1');
