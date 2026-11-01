@@ -142,7 +142,8 @@ function fakeBroker() {
     conn.closed = false;
     conn.close = async () => { if (!conn.closed) { conn.closed = true; conn.emit('close'); ch.emit('close'); } };
     conn.createChannel = conn.createConfirmChannel = async () => ch;
-    ch.checkQueue = async (q) => { ch.queue = q; };
+    // Mặc định chưa có hàng đợi admin (như bãi D–F): consumer phải bỏ qua, vẫn chạy hàng thường
+    ch.checkQueue = async (q) => { if (q.endsWith('.admin')) throw new Error('NOT_FOUND'); ch.queue = q; };
     ch.assertExchange = async () => {};
     ch.prefetch = async (n) => { ch.prefetchValue = n; };
     ch.consume = async (_q, cb, opts) => { ch.deliver = cb; ch.opts = opts; return { consumerTag: 'one' }; };
@@ -166,7 +167,7 @@ test('consumer serializes handlers despite prefetch 20, ack follows commit hook,
   });
   await until(() => b.connections[0]?.ch.deliver);
   const ch = b.connections[0].ch;
-  assert.equal(ch.prefetchValue, 20); assert.equal(ch.opts.noAck, false); assert.equal(ch.queue, 'cmd.A');
+  assert.equal(ch.prefetchValue, 16); assert.equal(ch.opts.noAck, false); assert.equal(ch.queue, 'cmd.A');
   ch.deliver({ id: 1 }); ch.deliver({ id: 2 }); await tick();
   assert.deepEqual(order, ['begin1']); assert.equal(ch.acks.length, 0);
   const stopped = consumer.stop(); await tick(); assert.equal(ch.cancelled, true);
@@ -200,4 +201,18 @@ test('reply publisher: mandatory return/nack/disconnect keep outbox pending; con
   const lost = p.publish('agg.1', {}, { headers: {} }); await tick(); await b.connections[0].close(); assert.equal(await lost, false);
   const retry = p.publish('agg.1', {}, { headers: {} }); await tick(); b.connections[1].ch.sent[0][4](null); assert.equal(await retry, true);
   assert.equal(b.connections.length, 2); await p.close();
+});
+
+test('PD-06 thiếu hàng đợi admin: ghi log một lần, consumer hàng thường vẫn nhận lệnh', async () => {
+  const b = fakeBroker(); const infos = [];
+  const consumer = startCommandConsumer({ url: 'amqp://test', parkingId: 'D', connect: b.connect,
+    log: { error() {}, info: (msg) => infos.push(msg) }, processCommand: async (m) => m, afterCommit() {} });
+  await until(() => b.connections[0]?.ch.deliver);
+  const ch = b.connections[0].ch;
+  assert.equal(ch.queue, 'cmd.D');
+  ch.deliver({ id: 1 }); await tick();
+  assert.equal(ch.acks.length, 1);
+  assert.equal(b.connections[0].closed, false);
+  assert.equal(infos.filter((m) => m.includes('quản trị')).length, 1);
+  await consumer.stop();
 });

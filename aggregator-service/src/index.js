@@ -10,6 +10,7 @@ const { makeApp } = require('./routes');
 const { makeCommands } = require('./commands');
 const { makeCommandFlow } = require('./command-flow');
 const { startReplyService } = require('./command-replies');
+const { startExpiredConsumer } = require('./expired-commands');
 const { log } = require('./log');
 
 const env = (k, d) => process.env[k] ?? d;
@@ -121,6 +122,11 @@ async function main() {
       catch(e){if(e.message!=='DUPLICATE_AGGREGATOR_ID'||attempt>=20)throw e;await new Promise(r=>setTimeout(r,1000));}
     }
     commandFlow.start();
+    // PD-06: lệnh hết hạn / quá số lần giao -> chỉ leader xử lý cmd.expired
+    startExpiredConsumer({ pool, leader, log, url: env('RABBITMQ_URL', 'amqp://localhost/%2F'),
+      notify: (row) => io.to(`user:${row.user_id}`).emit('COMMAND_RESULT', {
+        commandId: row.id, status: row.status, statusCode: row.status_code, result: row.result, parkingId: row.parking_id,
+      }) });
   }
   for(const signal of ['SIGTERM','SIGINT'])process.once(signal,async()=>{
     const timeout=setTimeout(()=>process.exit(1),10000);

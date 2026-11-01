@@ -172,36 +172,49 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
         conn.on('error', () => end(s)); conn.on('close', () => end(s));
         if (stopped) { end(s); break; }
         s.channels = [];
-        for (const [queue, prefetch] of [[`cmd.${parkingId}`, 16], [`cmd.${parkingId}.admin`, 4]]) {
-        const ch = await conn.createChannel();
-        const entry = { ch }; s.channels.push(entry);
-        ch.on('error', () => end(s)); ch.on('close', () => end(s));
-        await ch.checkQueue(queue); // Topology owned by definitions/policy, not redeclared here.
-        await ch.prefetch(prefetch);
-        if (stopped) { end(s); break; }
-        if (s.dead) throw new Error('Command channel closed during setup');
-        const { consumerTag } = await ch.consume(queue, (m) => {
-          if (!m) { end(s); return; }
-          // SAC chooses a consumer, NOT a serial async callback execution order.
-          s.tail = s.tail.then(async () => {
-            if (s.dead || stopped) return;
-            try {
-              const result = await processCommand(m);
-              await afterCommit(result);
-              if (!s.dead) ch.ack(m); // processor returns only after COMMIT succeeds.
-            } catch (error) {
-              log.error('command processing failed', { parkingId, error: error.message });
-              if (s.dead) return;
-              // PD-08 may replace this hook with confirmed delayed retry/dead transfer.
-              const transferred = await retryOrDead?.({ ch, message: m, error, permanent: error instanceof InvalidCommand });
-              if (transferred === true) ch.ack(m);
-              else if (error instanceof InvalidCommand) ch.nack(m, false, false); // durable DLX target; no hot requeue.
-              else end(s); // Leave unacked, close/reconnect with backoff after rollback.
+        // PD-06: hàng thường prefetch 16, hàng quản trị prefetch 4. Hàng admin là tuỳ chọn: bãi chưa có
+        // queue admin (vd D–F của overlay 6 bãi) thì bỏ qua, không làm hỏng consumer hàng thường.
+        for (const [queue, prefetch, optional] of [[`cmd.${parkingId}`, 16, false], [`cmd.${parkingId}.admin`, 4, true]]) {
+          const ch = await conn.createChannel();
+          if (optional) {
+            ch.on('error', () => {});
+            const ok = await ch.checkQueue(queue).then(() => true, () => false);
+            if (!ok) {
+              if (!s.adminWarned) log.info?.('không có hàng đợi lệnh quản trị, bỏ qua', { parkingId, queue });
+              s.adminWarned = true;
+              try { await ch.close(); } catch { /* channel đã đóng do lỗi 404 */ }
+              continue;
             }
-          }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
-        }, { noAck: false });
-        entry.tag = consumerTag;
-        log.info?.('command consumer ready', { parkingId, consumerTag, prefetch });
+          } else {
+            await ch.checkQueue(queue); // Topology owned by definitions/policy, not redeclared here.
+          }
+          ch.on('error', () => end(s)); ch.on('close', () => end(s));
+          const entry = { ch }; s.channels.push(entry);
+          await ch.prefetch(prefetch);
+          if (stopped) { end(s); break; }
+          if (s.dead) throw new Error('Command channel closed during setup');
+          const { consumerTag } = await ch.consume(queue, (m) => {
+            if (!m) { end(s); return; }
+            // SAC chooses a consumer, NOT a serial async callback execution order.
+            s.tail = s.tail.then(async () => {
+              if (s.dead || stopped) return;
+              try {
+                const result = await processCommand(m);
+                await afterCommit(result);
+                if (!s.dead) ch.ack(m); // processor returns only after COMMIT succeeds.
+              } catch (error) {
+                log.error('command processing failed', { parkingId, error: error.message });
+                if (s.dead) return;
+                // PD-08 may replace this hook with confirmed delayed retry/dead transfer.
+                const transferred = await retryOrDead?.({ ch, message: m, error, permanent: error instanceof InvalidCommand });
+                if (transferred === true) ch.ack(m);
+                else if (error instanceof InvalidCommand) ch.nack(m, false, false); // durable DLX target; no hot requeue.
+                else end(s); // Leave unacked, close/reconnect with backoff after rollback.
+              }
+            }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
+          }, { noAck: false });
+          entry.tag = consumerTag;
+          log.info?.('command consumer ready', { parkingId, queue, consumerTag, prefetch });
         }
         await closed;
       } catch (e) {
@@ -218,7 +231,7 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
       stopped = true; clearTimeout(retryTimer); wake?.();
       const s = state;
       if (s && !s.dead) {
-        if (s.tag) await s.ch.cancel(s.tag).catch(() => {});
+        for (const { ch, tag } of s.channels ?? []) if (tag) await ch.cancel(tag).catch(() => {});
         await s.tail;
         end(s);
       }
