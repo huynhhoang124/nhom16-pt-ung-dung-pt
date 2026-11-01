@@ -5,6 +5,7 @@ import { Icon, Plate } from './ui.jsx';
 // Trạng thái từng bước của saga: [nhãn, class của dòng, class của chip, biểu tượng]
 const STEP = {
   DONE: ['Đã giữ', 'done', 'ok', 'check'],
+  CONFIRMED: ['Đã xác nhận', 'done', 'ok', 'check'],
   FAILED: ['Lỗi', 'failed', 'bad', 'x'],
   UNKNOWN: ['Chưa rõ', 'running', 'warn', 'hourglass'],
   COMPENSATED: ['Đã trả lại', 'undoing', 'warn', 'undo'],
@@ -21,6 +22,13 @@ export default function GroupBooking({ onDone }) {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   useEffect(() => { api('/api/parkings').then((r) => r.ok && setParkings(r.data)); }, []);
+  useEffect(() => {
+    if (!saga || ['COMPLETED', 'FAILED'].includes(saga.status)) return undefined;
+    const timer = setInterval(() => api(`/api/group-reservations/${saga.id}`).then((r) => {
+      if (r.ok) { setSaga(r.data); if (r.data.status === 'COMPLETED') { setKey(newKey()); onDone?.(); } }
+    }), 1500);
+    return () => clearInterval(timer);
+  }, [saga?.id, saga?.status]);
 
   const set = (i, k, v) => { setItems(items.map((x, j) => (j === i ? { ...x, [k]: k === 'slotCode' ? v.toUpperCase() : v } : x))); setKey(newKey()); };
 
@@ -54,11 +62,13 @@ export default function GroupBooking({ onDone }) {
         <button className="primary" disabled={busy}>{busy && <Icon name="loader" spin />} Đặt tất cả</button>
       </div>
       {error && <div className="banner bad"><Icon name="x" /><div>{error}</div></div>}
-      {saga && saga.status !== 'COMPLETED' && (
+      {saga && saga.status === 'FAILED' && (
         <div className="banner bad"><Icon name="x" />
           <div><strong>Không giữ được đủ chỗ</strong>Các chỗ đã giữ đã được trả lại.</div>
         </div>
       )}
+      {saga && !['COMPLETED', 'FAILED'].includes(saga.status) &&
+        <div className="banner"><Icon name="loader" spin /> Đang xử lý đặt chỗ.</div>}
       {saga && saga.status === 'COMPLETED' && <p className="success" style={{ margin: 0 }}><Icon name="circle-check" /> Đã giữ đủ chỗ.</p>}
       {saga && (
         <ol className="steps">

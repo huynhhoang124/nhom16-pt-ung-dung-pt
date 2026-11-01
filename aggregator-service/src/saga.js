@@ -108,4 +108,148 @@ function makeSagas({ pool, reg, timeoutMs = () => 3000 }) {
   return { start, recover, get, run, compensate };
 }
 
-module.exports = { makeSagas };
+// PD-07: khi bật broker, chỉ leader gửi bước đã ghi vào nhật ký.
+function makeBrokerSagas({ pool, commandFlow, leader }) {
+  const active = () => !leader || leader.isLeader();
+  const token = () => leader?.getToken() ?? 0;
+  const load = async (id) => (await pool.query('SELECT * FROM sagas WHERE id=$1', [id])).rows[0];
+  const persist = async (saga) => save(pool, saga);
+  const claims = new Set();
+
+  async function call(saga, i, type, payload, fence) {
+    const step = saga.steps[i];
+    const messageId = `${saga.id}:${i}:${type}`;
+    step.messageId = messageId;
+    step.action = type;
+    await persist(saga);  // Ghi ý định trước khi phát lệnh.
+    if (!active() || token() !== fence) return null;
+    try {
+      const out = await commandFlow.execute({ parkingId: step.parkingId, type,
+        user: { sub: saga.userId, role: 'USER' }, payload: { ...payload, sagaId: saga.id, step: i },
+        key: messageId, fencingToken: fence });
+      if (out.code === 202) return { status: 0 };
+      return { status: out.code, body: out.body };
+    } catch (e) {
+      if (e.code === 'IDEMPOTENCY_KEY_REUSED') return { status: 409, body: { error: e.code } };
+      return { status: 0 };
+    }
+  }
+
+  const reserve = (saga, i, fence) => call(saga, i, 'reserve', {
+    slotCode: saga.steps[i].slotCode, licensePlate: saga.steps[i].licensePlate,
+  }, fence);
+
+  async function compensate(saga, fence = token()) {
+    saga.status = 'COMPENSATING';
+    await persist(saga);
+    for (let i = saga.steps.length - 1; i >= 0; i--) {
+      if (!active() || token() !== fence) return saga;
+      const step = saga.steps[i];
+      if (step.state === 'UNKNOWN') {
+        const r = await reserve(saga, i, fence);
+        if (!r || r.body?.error === 'STALE_LEADER') return saga;
+        if ([200, 201].includes(r.status)) Object.assign(step, { state: 'DONE', reservationId: r.body.id });
+        else if ([400, 409].includes(r.status)) step.state = 'FAILED';
+        else continue;
+        await persist(saga);
+      }
+      if (step.state !== 'DONE' && step.state !== 'CONFIRMED') continue;
+      const r = await call(saga, i, 'cancel', { reservationId: step.reservationId }, fence);
+      if (!r || r.body?.error === 'STALE_LEADER') return saga;
+      if (r.status === 200 || r.status === 404) step.state = 'COMPENSATED';
+      await persist(saga);
+    }
+    saga.status = saga.steps.some((s) => ['DONE', 'UNKNOWN', 'CONFIRMED'].includes(s.state)) ? 'COMPENSATING' : 'FAILED';
+    await persist(saga);
+    return saga;
+  }
+
+  async function run(saga, fence = token()) {
+    if (!active() || token() !== fence) return saga;
+    if (saga.status === 'COMPENSATING') return compensate(saga, fence);
+    if (saga.status === 'PENDING') saga.status = 'RUNNING';
+    await persist(saga);
+    if (saga.status === 'RUNNING') {
+      for (let i = 0; i < saga.steps.length; i++) {
+        if (!active() || token() !== fence) return saga;
+        const step = saga.steps[i];
+        if (step.state === 'DONE') continue;
+        const r = await reserve(saga, i, fence);
+        if (!r || r.body?.error === 'STALE_LEADER') return saga;
+        if ([200, 201].includes(r.status)) Object.assign(step, { state: 'DONE', reservationId: r.body.id });
+        else Object.assign(step, { state: r.status === 0 ? 'UNKNOWN' : 'FAILED', error: r.body?.error ?? 'TIMEOUT_UNKNOWN_RESULT' });
+        await persist(saga);
+        if (step.state !== 'DONE') return compensate(saga, fence);
+      }
+      saga.status = 'CONFIRMING';
+      await persist(saga);
+    }
+    for (let i = 0; i < saga.steps.length; i++) {
+      if (!active() || token() !== fence) return saga;
+      const step = saga.steps[i];
+      if (step.state === 'CONFIRMED') continue;
+      const r = await call(saga, i, 'confirm', { reservationId: step.reservationId }, fence);
+      if (!r || r.body?.error === 'STALE_LEADER') return saga;
+      if (r.status !== 200) {
+        if (r.status === 0) return saga; // Lệnh đã nhận có thể hoàn tất sau timeout; gửi lại cùng ID khi recover.
+        step.error = r.body?.error ?? 'CONFIRM_FAILED';
+        await persist(saga);
+        return compensate(saga, fence);
+      }
+      step.state = 'CONFIRMED';
+      await persist(saga);
+    }
+    saga.steps.forEach((step) => { step.state = 'DONE'; });
+    saga.status = 'COMPLETED';
+    await persist(saga);
+    return saga;
+  }
+
+  async function start(userId, key, items) {
+    const steps = items.map((x) => ({ ...x, state: 'PENDING' }));
+    const requestId = `${userId}:${key}`;
+    const row = (await pool.query(
+      `INSERT INTO sagas(request_id, user_id, status, steps) VALUES ($1,$2,'PENDING',$3)
+       ON CONFLICT (request_id) DO NOTHING RETURNING *`, [requestId, userId, JSON.stringify(steps)])).rows[0];
+    if (!row) return { replayed: true, saga: view((await pool.query('SELECT * FROM sagas WHERE request_id=$1', [requestId])).rows[0]) };
+    if (active()) {
+      claims.add(row.id);
+      try { await run({ id: row.id, userId, status: 'PENDING', steps }); }
+      finally { claims.delete(row.id); }
+    }
+    return { replayed: false, saga: view(await load(row.id)) };
+  }
+
+  let recovering = false;
+  async function recover(staleMs = 60_000, { fencingToken = token(), isActive = active } = {}) {
+    if (!isActive() || recovering) return 0;
+    recovering = true;
+    try {
+      const rows = (await pool.query(
+        `SELECT * FROM sagas WHERE status='PENDING' OR
+         (status IN ('RUNNING','CONFIRMING','COMPENSATING') AND updated_at < now() - make_interval(secs => $1))
+         ORDER BY created_at`, [staleMs / 1000])).rows;
+      let done = 0;
+      for (const row of rows) {
+        if (!isActive() || token() !== fencingToken) break;
+        if (claims.has(row.id)) continue;
+        claims.add(row.id);
+        try {
+          const saga = { id: row.id, userId: row.user_id, status: row.status, steps: row.steps };
+          if (saga.status === 'COMPENSATING' || saga.status === 'RUNNING' || saga.steps.some((s) => s.state === 'UNKNOWN')) {
+            await compensate(saga, fencingToken);
+          } else await run(saga, fencingToken);
+          done++;
+        } finally { claims.delete(row.id); }
+      }
+      return done;
+    } finally { recovering = false; }
+  }
+
+  const get = async (id, userId) =>
+    (await pool.query('SELECT * FROM sagas WHERE id=$1 AND user_id=$2', [id, userId])).rows.map(view)[0] ?? null;
+  return { start, recover, get, run, compensate };
+}
+
+const legacySagas = makeSagas;
+module.exports = { makeSagas: (options) => options.commandFlow ? makeBrokerSagas(options) : legacySagas(options) };

@@ -790,3 +790,39 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
 
 
 
+
+// --- PD-07: saga đặt nhiều bãi qua broker (COMMAND_MODE=broker cho cả compose và test) ---
+const BROKER = process.env.COMMAND_MODE === 'broker';
+const groupBooking = async (token, items) =>
+  agg('/api/group-reservations', { method: 'POST', token, key: `e2e-saga-${randomUUID()}`, body: { items } });
+
+test('TC75 saga 3 bãi qua broker: mọi bước giữ chỗ rồi xác nhận, saga COMPLETED', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const items = [];
+  for (const id of ['A', 'B', 'C']) items.push({ parkingId: id, slotCode: await freeSlot(id), licensePlate: plate() });
+  const r = await groupBooking(token, items);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.status, 'COMPLETED', JSON.stringify(r.body));
+  for (const [i, step] of r.body.steps.entries()) {
+    assert.ok(step.reservationId, `bước ${i} thiếu reservationId`);
+    undo.push(() => node(step.parkingId, `/api/reservations/${step.reservationId}`, { method: 'DELETE' }));
+    const st = sql(`db-${step.parkingId.toLowerCase()}`, `SELECT status FROM reservations WHERE id='${step.reservationId}'`);
+    assert.equal(st, 'ACTIVE', `bãi ${step.parkingId}`);
+  }
+});
+
+test('TC76 saga qua broker: bước 3 lỗi -> bù trừ 2 bước trước, không còn chỗ giữ', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const items = [
+    { parkingId: 'A', slotCode: await freeSlot('A'), licensePlate: plate() },
+    { parkingId: 'B', slotCode: await freeSlot('B'), licensePlate: plate() },
+    { parkingId: 'C', slotCode: 'KHONG-CO', licensePlate: plate() },
+  ];
+  const r = await groupBooking(token, items);
+  assert.equal(r.body.status, 'FAILED', JSON.stringify(r.body));
+  for (const step of r.body.steps.slice(0, 2)) {
+    assert.equal(step.state, 'COMPENSATED', JSON.stringify(step));
+    const st = sql(`db-${step.parkingId.toLowerCase()}`, `SELECT status FROM reservations WHERE id='${step.reservationId}'`);
+    assert.equal(st, 'CANCELLED');
+  }
+});

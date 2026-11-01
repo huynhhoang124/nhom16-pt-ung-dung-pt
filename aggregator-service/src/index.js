@@ -175,7 +175,7 @@ async function main() {
     try {
       // Bù trừ saga dở dang sau khi health check biết bãi nào sống (PT-07)
       await check();
-      const k = await app.locals.sagas.recover(undefined, {
+      const k = await app.locals.sagas.recover(commandMode === 'broker' ? 0 : undefined, {
         fencingToken: token,
         isActive: () => leader.isLeader() && leader.getToken() === token,
       });
@@ -187,6 +187,11 @@ async function main() {
     if (leaderInterval) clearInterval(leaderInterval);
     leaderInterval = setInterval(async () => {
       if (!leader.isLeader()) return;
+      if (commandMode === 'broker') {
+        app.locals.sagas.recover(5000, {
+          fencingToken: leader.getToken(), isActive: () => leader.isLeader(),
+        }).catch((e) => log.error('Khôi phục saga lỗi', { error: e.message }));
+      }
       // Hook chuẩn bị sẵn cho PD-06 (dọn DLQ, lệnh hết hạn, tổng hợp thống kê)
     }, 30000);
   });

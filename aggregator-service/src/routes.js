@@ -193,7 +193,8 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
   });
 
   // PT-07: đặt chỗ cho nhiều xe ở nhiều bãi (Saga). Cùng Idempotency-Key -> trả lại saga cũ.
-  const sagas = makeSagas({ pool, reg, timeoutMs: reserveMs });
+  const sagas = makeSagas({ pool, reg, timeoutMs: reserveMs,
+    ...(commandMode === 'broker' && { commandFlow, leader }) });
   app.locals.sagas = sagas;
   app.post('/api/group-reservations', need('USER'), async (req, res) => {
     const key = req.get('idempotency-key');
