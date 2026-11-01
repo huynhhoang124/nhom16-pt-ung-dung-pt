@@ -101,9 +101,9 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
     const name = req.body?.username;
     if (typeof name !== 'string' || !name) return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
     const db = users.for(name);
-    if (await auth.loginBuckets.blocked(db, name)) return res.status(429).json({ error: 'TOO_MANY_ATTEMPTS' });
+    if (!(await auth.loginBuckets.take(db, name))) return res.status(429).json({ error: 'TOO_MANY_ATTEMPTS' });
     const out = await auth.login(db, name, req.body?.password);
-    if (!out) { await auth.loginBuckets.hit(db, name); return res.status(401).json({ error: 'INVALID_CREDENTIALS' }); }
+    if (!out) return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
     await auth.loginBuckets.reset(db, name);
     res.json(out);
   });

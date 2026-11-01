@@ -31,23 +31,23 @@ function makeMemoryLimiter({ max = 5, windowMs = 15 * 60_000 } = {}) {
 }
 
 // PD-21: token bucket theo username trong bảng login_buckets (pool = phân mảnh users của username đó).
-// Dung lượng max token, nạp lại đều max token mỗi windowMs; mỗi lần sai trừ 1 trong một câu SQL nguyên tử.
+// Dung lượng max token, nạp lại đều max token mỗi windowMs. Mỗi lần thử GIỮ 1 token trước khi kiểm mật khẩu, trong một câu
+// SQL nguyên tử (nhiều request đồng thời qua nhiều Aggregator không lọt quá max); đăng nhập đúng thì xoá bucket (trả token).
 function makeLoginBuckets({ max = 5, windowMs = 15 * 60_000 } = {}) {
   const rate = max / (windowMs / 1000);   // token mỗi giây
   const now = 'LEAST($2::real, login_buckets.tokens + EXTRACT(EPOCH FROM now() - login_buckets.updated_at)::real * $3::real)';
   return {
-    async blocked(pool, username) {
-      const r = await pool.query(`SELECT ${now} AS tokens FROM login_buckets WHERE username = $1`, [username, max, rate]);
-      return r.rows.length > 0 && Number(r.rows[0].tokens) < 1;
-    },
-    async hit(pool, username) {
+    // true = được thử (đã trừ 1 token); false = hết token, bị khoá
+    async take(pool, username) {
       const r = await pool.query(
         `INSERT INTO login_buckets(username, tokens, updated_at) VALUES ($1, $2::real - 1, now())
-         ON CONFLICT (username) DO UPDATE SET tokens = GREATEST(${now} - 1, 0), updated_at = now()
+         ON CONFLICT (username) DO UPDATE SET tokens = ${now} - 1, updated_at = now() WHERE ${now} >= 1
          RETURNING tokens`, [username, max, rate]);
-      return Number(r.rows[0].tokens);
+      return r.rows.length > 0;
     },
     reset: (pool, username) => pool.query('DELETE FROM login_buckets WHERE username = $1', [username]),
+    // Bucket không đụng tới quá windowMs đã nạp đầy = như chưa có: xoá để bảng không phình vì username bịa
+    cleanup: (pool) => pool.query(`DELETE FROM login_buckets WHERE updated_at < now() - ($1::real * interval '1 millisecond')`, [windowMs]),
   };
 }
 
