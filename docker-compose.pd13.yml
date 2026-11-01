@@ -1,0 +1,122 @@
+
+services:
+  parking-a:
+    networks:
+      default:
+        aliases:
+          - parking-a
+
+  parking-a-2:
+    profiles:
+      - pd13
+
+    image: nhom16/parking-node
+
+    environment:
+      INTERNAL_KEY: ${INTERNAL_KEY:?Missing INTERNAL_KEY}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://parking:parking@rabbitmq/%2F}
+      RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
+      JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      LEASE_TTL_S: "5"
+      ZONE: bac
+      ENABLE_TEST_FAULTS: "0"
+      NODE_URL: http://parking-a-2:8001
+
+      PARKING_ID: A
+      PORT: "8001"
+      SLOTS: "CAR:1:10,CAR:2:10,MOTO:1:20"
+      DATABASE_URL: ${A_DATABASE_URL:-postgres://postgres:dev@db-a/parking}
+      READ_DATABASE_URL: ${A_READ_DATABASE_URL:-}
+
+    ports:
+      - "8101:8001"
+
+    depends_on:
+      db-a:
+        condition: service_healthy
+
+    networks:
+      default:
+        aliases:
+          - parking-a
+
+  parking-b:
+    networks:
+      default:
+        aliases:
+          - parking-b
+
+  parking-b-2:
+    profiles:
+      - pd13
+    image: nhom16/parking-node
+
+    environment:
+      INTERNAL_KEY: ${INTERNAL_KEY:?Missing INTERNAL_KEY}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://parking:parking@rabbitmq/%2F}
+      RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
+      JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      LEASE_TTL_S: "5"
+      ZONE: bac
+      ENABLE_TEST_FAULTS: "0"
+      NODE_URL: http://parking-b-2:8002
+
+      PARKING_ID: B
+      PORT: "8002"
+      SLOTS: "CAR:1:10,CAR:2:10,CAR:3:10,MOTO:1:30"
+      DATABASE_URL: ${B_DATABASE_URL:-postgres://postgres:dev@db-b/parking}
+      READ_DATABASE_URL: ${B_READ_DATABASE_URL:-}
+
+    ports:
+      - "8102:8002"
+
+    depends_on:
+      db-b:
+        condition: service_healthy
+
+    networks:
+      default:
+        aliases:
+          - parking-b
+
+  parking-c:
+    networks:
+      default:
+        aliases:
+          - parking-c
+
+  parking-c-2:
+    profiles:
+      - pd13
+    image: nhom16/parking-node
+
+    environment:
+      INTERNAL_KEY: ${INTERNAL_KEY:?Missing INTERNAL_KEY}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://parking:parking@rabbitmq/%2F}
+      RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
+      JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+      LEASE_TTL_S: "5"
+      ZONE: bac
+      ENABLE_TEST_FAULTS: "0"
+      NODE_URL: http://parking-c-2:8003
+
+      PARKING_ID: C
+      PORT: "8003"
+      SLOTS: "CAR:1:10,CAR:2:5,MOTO:1:15"
+      DATABASE_URL: ${C_DATABASE_URL:-postgres://postgres:dev@db-c/parking}
+      READ_DATABASE_URL: ${C_READ_DATABASE_URL:-}
+
+    ports:
+      - "8103:8003"
+
+    depends_on:
+      db-c:
+        condition: service_healthy
+
+    networks:
+      default:
+        aliases:
+          - parking-c

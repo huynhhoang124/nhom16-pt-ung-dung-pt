@@ -1,3 +1,6 @@
+> Bằng chứng lịch sử 22/10/2026. Xem [lần kiểm chứng 01/11/2026](pd-08-cap-nhat-2026-11-01.md)
+> cho service đã tích hợp trực tiếp từ dev; các giới hạn dependency trong bản cũ không còn là trạng thái PD-02 hiện tại.
+
 # Bằng chứng PD-08 — 22/10/2026
 
 ## Môi trường và phạm vi

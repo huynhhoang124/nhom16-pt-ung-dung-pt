@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, message } from './api.js';
+import './DeadLetters.css';
 
 export default function DeadLetters() {
   const [items,setItems]=useState([]),[offset,setOffset]=useState(0),[selected,setSelected]=useState(null);
@@ -16,10 +17,10 @@ export default function DeadLetters() {
     if(edit){try{body={type,payload:JSON.parse(payload)};}catch{setNote('Dữ liệu phải là JSON hợp lệ.');return;}}
     setBusy(true);
     const r=await api(`/api/admin/dlq/${selected.id}/replay`,{method:'POST',body});
-    setNote(r.ok?`Đã lưu yêu cầu đẩy lại ${r.data.messageId}. Trạng thái ${r.data.status}; chưa xác nhận xử lý nghiệp vụ.`:message(r.data));
+    setNote(r.ok?`Đã lưu yêu cầu đẩy lại ${r.data.messageId}. Theo dõi trạng thái trong bảng; broker confirm chưa xác nhận xử lý nghiệp vụ.`:message(r.data));
     setBusy(false);if(r.ok)setSelected(null);load();
   }
-  return <section className="card">
+  return <section className="card dead-letters">
     <h3>Lệnh lỗi</h3>
     <p>Dữ liệu nhạy cảm được che. Đẩy lại giữ khoá chống trùng; sửa dữ liệu chỉ áp dụng cho lệnh bị từ chối trước nghiệp vụ.</p>
     <div className="scroll"><table><thead><tr><th>ID</th><th>Bãi</th><th>Loại</th><th>Lý do</th><th>Trạng thái</th><th>Thao tác</th></tr></thead>
@@ -27,7 +28,7 @@ export default function DeadLetters() {
     {!items.length&&<p>Không có lệnh lỗi trong trang này.</p>}
     <button disabled={!offset} onClick={()=>setOffset(Math.max(0,offset-20))}>Trang trước</button>{' '}
     <button disabled={items.length<20} onClick={()=>setOffset(offset+20)}>Trang sau</button>
-    {selected&&<form className="form" onSubmit={replay}>
+    {selected&&<form className="dlq-editor" onSubmit={replay}>
       <h4>Lệnh #{selected.id}</h4>
       <p>Khoá: {selected.messageId??'—'} · {selected.routingKey} · {selected.reason}</p>
       <pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{JSON.stringify(selected.payload,null,2)}</pre>

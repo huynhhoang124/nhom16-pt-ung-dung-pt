@@ -1,0 +1,22 @@
+# Isolated PD-08 runtime tests; fault hook is scoped to one synthetic message ID.
+services:
+  rabbitmq:
+    ports: !override ["127.0.0.1:5673:5672", "127.0.0.1:15673:15672"]
+  db-a:
+    ports: ["127.0.0.1:15432:5432"]
+  db-agg:
+    ports: ["127.0.0.1:15433:5432"]
+  parking-a:
+    image: pd08/parking-node-test
+    environment:
+      NODE_ENV: test
+      RETRY_TEST_MESSAGE_ID: pd08-runtime:retry
+      RETRY_TEST_FAILURES: "2"
+  parking-b:
+    image: pd08/parking-node-test
+  parking-c:
+    image: pd08/parking-node-test
+  aggregator:
+    image: pd08/aggregator-test
+    environment:
+      COMMAND_TTL_MS: "60000"

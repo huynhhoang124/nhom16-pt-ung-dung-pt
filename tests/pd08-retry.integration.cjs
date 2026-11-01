@@ -10,10 +10,11 @@ const {mountReplayClaim}=require('../parking-node/src/replay-claim');
 const express=require('../aggregator-service/node_modules/express'),jwt=require('../aggregator-service/node_modules/jsonwebtoken');
 const {withDeadline,makeRetryOrDead,testFailures}=require('../parking-node/src/command-retry');
 const {randomUUID}=require('node:crypto');
-const source=process.env.PD02_SOURCE_ROOT;
+const source=path.join(root,'parking-node/src');
+const enabled=Boolean(process.env.PD08_AMQP_URL&&process.env.PD08_DATABASE_URL);
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 async function wait(fn,ms=25000){const start=Date.now();while(Date.now()-start<ms){const out=await fn();if(out)return out;await sleep(100);}throw new Error('wait timeout');}
-test('PD08 broker + PostgreSQL integration with separate PD02 checkout', {skip:!source,timeout:80000},async t=>{
+test('PD08 broker + PostgreSQL integration using the merged local inbox', {skip:!enabled,timeout:80000},async t=>{
   const {makeCommandProcessor,startCommandConsumer}=require(path.join(source,'commands'));
   const {init}=require(path.join(source,'db'));
   const url=process.env.PD08_AMQP_URL,db=process.env.PD08_DATABASE_URL;

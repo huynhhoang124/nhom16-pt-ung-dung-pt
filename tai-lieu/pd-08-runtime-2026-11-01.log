@@ -1,0 +1,18 @@
+ Container pd08-nov01-parking-a-1 Recreate
+ Container pd08-nov01-parking-a-1 Recreated
+ Container pd08-nov01-parking-a-1 Starting
+ Container pd08-nov01-parking-a-1 Started
+TC57 live retry intervals ms: 2011 10296 ; command TTL=60000
+▶ PD08 real service entrypoints: TC57, TC58 and deadline after DB lock
+  ✔ TC57: live index retries after 2s and 10s; same ID/context, one effect, no cross-parking route (13774.1705ms)
+  ✔ TC58: actual DLQ worker persists schema failure; ADMIN edits/replays; inbox records one effect (847.3287ms)
+  ✔ deadline elapses while SQL waits for a slot lock: transaction fully rolls back, no late effect (902.7394ms)
+✔ PD08 real service entrypoints: TC57, TC58 and deadline after DB lock (17911.5537ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 18227.1736

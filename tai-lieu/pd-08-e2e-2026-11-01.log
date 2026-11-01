@@ -1,0 +1,36 @@
+﹣ TC52 HTTP broker contract: pending PD-03 request-reply and command lookup (314.8787ms) # PD-03 not implemented; TC52 currently verified at broker level
+✔ cô lập dữ liệu: node bãi A không biết địa chỉ DB của bãi khác (580.2624ms)
+✔ TC01 tra cứu tổng hợp 3 bãi (12.7949ms)
+✔ TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh (145.2623ms)
+✔ TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai (543.93ms)
+✔ TC09 20 request đồng thời cùng một slot (Postgres thật): đúng 1 thành công (129.7647ms)
+✔ 10 lần gửi đồng thời CÙNG một Idempotency-Key: chỉ 1 reservation, mọi phản hồi cùng id (50.6079ms)
+✔ TC27 hai lần trả tiền song song khác key cho cùng một phiên (Postgres thật): đúng 1 thành công (570.9671ms)
+✔ TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> RabbitMQ -> Aggregator -> Socket.IO (1098.4374ms)
+✔ TC37 notification dừng: vẫn đặt chỗ được, bật lại nhận đúng thông báo tồn (14415.8763ms)
+✔ TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B trả dữ liệu cũ; bật lại thì ONLINE (36932.4437ms)
+✔ DB bãi C khởi động lại: node C không sập, DB về thì tự kết nối lại và ghi được (1670.3523ms)
+✔ TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật lại thì được xử lý hết (8547.8325ms)
+✔ Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết (18661.3794ms)
+﹣ TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùng key -> đúng 1 lượt đặt (0.2465ms) # SKIP
+﹣ TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200 (0.6786ms) # SKIP
+﹣ TC44 HA: xe vào qua Aggregator 1, socket Aggregator 2 nhận SLOT_UPDATED (0.1904ms) # SKIP
+﹣ TC46: Staff thao tác khi Aggregator sập (0.1062ms) # SKIP
+﹣ TC48 cụm RabbitMQ: tắt nút rabbitmq, chuyển nút < 10s, outbox về 0 và Aggregator nhận sự kiện (0.2082ms) # SKIP
+﹣ TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), outbox giữ tin; bật lại thì xả về 0 (0.1071ms) # SKIP
+✔ PD-02 PostgreSQL: 10 concurrent DB clients deduplicate and preserve transaction invariants (2913.7854ms)
+✔ TC52 PD-02 broker: 10 concurrent messages with one messageId create one reservation and 10 identical replies (4142.2123ms)
+✔ TC53 PD-02 broker: crash after COMMIT before ack, restart, redelivery replays without another effect (13963.9304ms)
+﹣ TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd -> tự động hiện trên API danh sách bãi trong <= 2s (0.7534ms) # SKIP
+﹣ TC64 phân hoạch mạng node <-> etcd: mất lease nhưng HTTP còn sống -> trạng thái chuyển DEGRADED (0.2901ms) # SKIP
+﹣ TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> Aggregator nhận ngay không cần restart (0.204ms) # SKIP
+﹣ TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm leader mới trong <= 7s, metric = 1 (0.1749ms) # SKIP
+﹣ TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token cũ -> bị node từ chối STALE_LEADER, metric tăng (0.1851ms) # SKIP
+ℹ tests 28
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 12
+ℹ todo 0
+ℹ duration_ms 105146.7741

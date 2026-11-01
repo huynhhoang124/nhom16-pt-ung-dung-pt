@@ -1,3 +1,7 @@
+> Cập nhật 01/11/2026: tài liệu này giữ thiết kế ban đầu. Trạng thái dependency,
+> hợp đồng TTL hiện tại và cách chạy không cần patch nằm ở [runbook](pd-08-retry-dlq.md)
+> và [bằng chứng mới](pd-08-cap-nhat-2026-11-01.md). PD-02 đã merge; runtime đã nối trực tiếp.
+
 # PD-08 — Thiết kế retry và quản trị DLQ
 
 Đây là thiết kế ban đầu; trạng thái cuối xem [runbook](pd-08-retry-dlq.md). Ngày kiểm tra:

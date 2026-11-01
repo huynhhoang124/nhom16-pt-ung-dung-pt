@@ -47,3 +47,13 @@ test('business 409 returns normally; no retry classification is invoked',async()
   const wrapped=withDeadline(async()=>({code:409,body:{error:'TIME_CONFLICT'}}),{internalKey:'key',parkingId:'A',now:()=>1});
   assert.equal((await wrapped(msg())).code,409);
 });
+
+
+test('expired redelivery may return a committed inbox result, never admit an unprocessed ID', async () => {
+  let calls = 0;
+  const options = {internalKey:'key',parkingId:'A',now:()=>100,pool:{query:async()=>({rowCount:1})}};
+  const wrapped = withDeadline(async()=>{calls++;return {code:201};},options);
+  assert.equal((await wrapped(msg(50))).code,201);assert.equal(calls,1);
+  options.pool.query=async()=>({rowCount:0});
+  await assert.rejects(wrapped(msg(50)),{code:'COMMAND_EXPIRED'});assert.equal(calls,1);
+});

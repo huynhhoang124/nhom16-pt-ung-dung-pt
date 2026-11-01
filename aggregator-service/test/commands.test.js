@@ -145,3 +145,16 @@ test('channel error invalidates publisher and does not become unhandled EventEmi
   const p = pub.send('A', 'reserve', {}); const check = rejects(p, 'PUBLISH_UNKNOWN_RESULT');
   await tick(); b.connections[0].ch.emit('error', new Error('channel failure')); await check; await pub.close();
 });
+
+
+test('persisted issuedAt/deadlineAt are honored on republish, never reset to factory TTL', async(t)=>{
+  const b=broker(),pub=makeCommands('amqp://test',{connect:b.connect,signingKey:'key',ttlMs:60000});t.after(()=>pub.close());
+  const issuedAt=Date.now()-12000,deadlineAt=issuedAt+60000;
+  const p=pub.send('A','reserve',{}, {messageId:'u:persisted',issuedAt,deadlineAt,actor:{userId:'u',role:'USER'}});
+  await tick();const wire=b.sent[0],body=JSON.parse(wire[2]);
+  assert.equal(body.issuedAt,issuedAt);assert.equal(body.deadlineAt,deadlineAt);
+  assert.ok(Number(wire[3].expiration)<=48000&&Number(wire[3].expiration)>47000);
+  ack(wire);await p;
+  await rejects(pub.send('A','reserve',{}, {issuedAt:Date.now()-2000,deadlineAt:Date.now()-1000}),'COMMAND_EXPIRED');
+  assert.equal(b.sent.length,1);
+});

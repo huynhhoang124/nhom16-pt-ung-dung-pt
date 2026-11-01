@@ -1,5 +1,6 @@
 const express = require('express');
 const s = require('./slots');
+const { checkFencing, withFencing, parseToken } = require('./fencing');
 const { normalizePlate, isPlate } = require('./plate');
 const { invalidRule } = require('./pricing');
 const { savePricing } = require('./db');
@@ -18,7 +19,7 @@ const STAFF_WRITE = [/^\/slots\/[^/]+\/(enter|exit|maintenance|unmaintenance)$/,
 // jwtPublicKey: khoá công khai RS256 của Aggregator; có thì nhân viên bãi này gọi thẳng được (PT-05).
 // corsOrigins: trang web nào được gọi thẳng node từ trình duyệt.
 function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`,
-  jwtPublicKey, corsOrigins = ['http://localhost:3000'], metricsExtra = [], readPool = pool }) {
+  jwtPublicKey, corsOrigins = ['http://localhost:3000'], metricsExtra = [], readPool = pool, regClient = null }) {
   // readPool: bản sao chỉ đọc (PT-02) cho các truy vấn đọc thuần; mặc định = bản chính
   const app = express();
   app.use(withRequestId);
@@ -54,8 +55,36 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     next();
   });
 
+  // PD-10: fencing token chống leader cũ (split-brain). Chỉ tin header khi có khoá nội bộ (Aggregator gửi):
+  // nhân viên có JWT không được tự đặt token, nếu không gửi token rất lớn là chặn được leader thật.
+  // Lệnh ghi: token được kiểm trong CÙNG giao dịch với lệnh ghi (tx ở slots.js gọi fenceIn).
+  // Lệnh đọc: không có gì để bảo vệ, chỉ kiểm để leader cũ sớm biết mình đã mất quyền.
+  app.use('/api', async (req, res, next) => {
+    const token = req.get('x-fencing-token');
+    if (req.get('x-internal-key') !== internalKey || token === undefined || token === '') return next();
+    if (parseToken(token) === null) return res.status(400).json({ error: 'INVALID_FENCING_TOKEN' });
+    const job = req.get('x-fencing-job') || 'default';
+    if (req.method === 'GET') {
+      const check = await checkFencing(pool, job, token);
+      if (!check.ok) return res.status(check.code).json({ error: check.error, job, token });
+      return next();
+    }
+    withFencing({ job, token }, next);
+  });
+
   const send = (res, r) => res.status(r.code).json(r.body);
   mountReplayClaim(app,{pool,internalKey});
+
+  // PD-09 / TC64: Giả lập lỗi đứt kết nối etcd (chỉ cho phép khi bật cờ test ENABLE_TEST_FAULTS=1 hoặc FAULT_INJECTION=1)
+  app.post('/api/test/fault/etcd-partition', async (req, res) => {
+    const enabled = process.env.ENABLE_TEST_FAULTS === '1' || process.env.FAULT_INJECTION === '1';
+    if (!enabled) {
+      return res.status(403).json({ error: 'FAULT_INJECTION_DISABLED' });
+    }
+    const ms = Number(req.body?.ms || 6000);
+    await regClient?.simulatePartition?.(ms);
+    res.json({ ok: true, durationMs: ms });
+  });
 
   app.get('/api/availability', async (_req, res) => res.json(await s.availability(readPool, parkingId)));
   const type = (req) => (['CAR', 'MOTO'].includes(req.query.type) ? req.query.type : undefined);
@@ -153,7 +182,9 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     if (!Array.isArray(rules) || !rules.length) return res.status(400).json({ error: 'body must be a non-empty array of rules' });
     const bad = rules.map(invalidRule).find(Boolean);
     if (bad) return res.status(400).json({ error: bad });
-    await savePricing(pool, rules);
+    // PD-10: ghi trong tx() để fencing token của leader được kiểm trong cùng giao dịch
+    const fenced = await s.tx(pool, (c) => savePricing(c, rules).then(() => null));
+    if (fenced) return send(res, fenced);
     res.json(await s.listPricing(pool));
   });
 

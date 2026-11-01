@@ -4,14 +4,21 @@ const route = b => `cmd.${b.parkingId}.${b.type}`;
 const error = code => Object.assign(new Error(code), { code });
 
 // PD-02 integration: wrap its processor; no second business transaction here.
-function withDeadline(processCommand, { internalKey, parkingId, now = Date.now, beforeDispatch } = {}) {
+function withDeadline(processCommand, { internalKey, parkingId, pool, now = Date.now, beforeDispatch } = {}) {
   return async m => {
+    if (m.content.length > 10240) throw error('INVALID_COMMAND_SIZE');
+    if (m.content.length > 10240) throw error('INVALID_COMMAND_SIZE');
     let b;
     try { b = JSON.parse(m.content); } catch { throw error('INVALID_JSON'); }
     if (!b || !trusted(internalKey,b,m.properties)) throw error('UNTRUSTED_COMMAND');
     if (b.parkingId !== parkingId || !/^[A-Za-z0-9_-]{1,64}$/.test(b.type ?? '')) throw error('INVALID_ENVELOPE');
     if (!Number.isSafeInteger(b.deadlineAt) || !Number.isSafeInteger(b.issuedAt) || b.deadlineAt < b.issuedAt) throw error('INVALID_DEADLINE');
-    if (now() >= b.deadlineAt) throw error('COMMAND_EXPIRED');
+    if (now() >= b.deadlineAt) {
+      // A previously committed inbox result is safe to return after its deadline.
+      // A new effect still fails the DB clock guards inside the processor.
+      const prior = pool && await pool.query("SELECT 1 FROM inbox_messages WHERE message_id=$1 AND processed_at IS NOT NULL", [m.properties.messageId]);
+      if (!prior?.rowCount) throw error('COMMAND_EXPIRED');
+    }
     // Broker keeps retry.N as fields.routingKey. Only a signed envelope determines destination.
     const key = route(b);
     if (m.fields.routingKey !== key && !(/^retry\.[12]$/.test(m.fields.routingKey) && m.properties.headers?.['x-original-routing-key'] === key)) throw error('INVALID_ROUTING');

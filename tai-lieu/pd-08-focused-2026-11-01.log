@@ -1,0 +1,29 @@
+✔ retry 2s then 10s then dead preserves identity and immutable deadline (3.1688ms)
+✔ publish failure never reports safe ack; no hot retry or lost source (0.6104ms)
+✔ invalid schema goes dead, expired goes expired, independent of x-death (0.3615ms)
+✔ deadline guards execution and authenticated retry routing; untrusted body rejected (0.775ms)
+✔ test hook is off by default in production and scoped to one ID (0.4278ms)
+✔ business 409 returns normally; no retry classification is invoked (0.2431ms)
+✔ expired redelivery may return a committed inbox result, never admit an unprocessed ID (0.3198ms)
+✔ signed envelope: property authority, identity, metadata and producer/consumer canonical contract (7.643ms)
+▶ inbox transaction: replay, key reuse, savepoint, rollback, permissions, replies and retention
+  ✔ same command returns exact saved status/body and creates a reply for each delivery (78.0273ms)
+  ✔ same key with changed payload/type is rejected without changing the original inbox (9.9497ms)
+  ✔ business conflict is stored and replayed after savepoint rollback (32.2295ms)
+  ✔ outbox failure rolls back inbox, slot update, reservation and slot event together (33.4509ms)
+  ✔ cancel and pay share inbox transaction and enforce signed owner identity (82.4019ms)
+  ✔ reply relay keeps returned/unavailable replies pending; marks sent only after publish succeeds (15.2211ms)
+  ✔ retention deletes only committed inbox results older than seven days, leaves outbox untouched (4.6767ms)
+✔ inbox transaction: replay, key reuse, savepoint, rollback, permissions, replies and retention (2572.4178ms)
+✔ consumer serializes handlers despite prefetch 20, ack follows commit hook, and stop waits in-flight (7.1431ms)
+✔ temporary rollback reconnects with backoff, permanent envelope error dead-letters without hot requeue (78.1087ms)
+✔ reply publisher: mandatory return/nack/disconnect keep outbox pending; connection reused until loss (1.5564ms)
+✔ PD08 consumer acks only after confirmed transfer; transfer failure closes unacked source (61.1841ms)
+ℹ tests 20
+ℹ suites 0
+ℹ pass 20
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 3063.5287

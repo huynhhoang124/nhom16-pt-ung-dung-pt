@@ -1,7 +1,7 @@
 const { randomUUID } = require('node:crypto');
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
-const { signature } = require('./retry-contract');
+const { signature } = require('./command-signature');
 
 const EXCHANGE = 'parking.commands';
 const ATTEMPT_HEADER = 'x-command-publish-id';
@@ -15,7 +15,7 @@ function routingKey(parkingId, type) {
   return `cmd.${parkingId}.${type}`;
 }
 
-function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey, ttlMs, replyTo } = {}) {
+function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey = process.env.INTERNAL_KEY, ttlMs = signingKey ? 10000 : undefined, replyTo } = {}) {
   const connectAny = makeConnector(url, connect);
   let current;
   let opening;
@@ -85,7 +85,10 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
     }
     const headers = { ...opts.headers };
     const envelope = { type, parkingId, schemaVersion: opts.schemaVersion ?? headers.schemaVersion ?? 1, payload: body };
-    if (ttlMs !== undefined) {
+    if (opts.issuedAt !== undefined || opts.deadlineAt !== undefined) {
+      if (!Number.isSafeInteger(opts.issuedAt) || !Number.isSafeInteger(opts.deadlineAt) || opts.deadlineAt < opts.issuedAt) throw failure('INVALID_DEADLINE',400);
+      envelope.issuedAt=opts.issuedAt; envelope.deadlineAt=opts.deadlineAt;
+    } else if (ttlMs !== undefined) {
       if (!Number.isSafeInteger(ttlMs) || ttlMs<1 || ttlMs>3600000) throw failure('INVALID_TTL',400);
       envelope.issuedAt=Date.now(); envelope.deadlineAt=envelope.issuedAt+ttlMs;
     }
@@ -105,7 +108,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       ...(opts.expiration !== undefined && { expiration: String(opts.expiration) }),
     };
     if (properties.replyTo === undefined && replyTo !== undefined) properties.replyTo=replyTo;
-    if (ttlMs !== undefined) properties.expiration=String(Math.max(1,envelope.deadlineAt-Date.now()));
+    if (envelope.deadlineAt !== undefined) properties.expiration=String(Math.max(1,envelope.deadlineAt-Date.now()));
     if (signingKey) headers['x-command-signature']=signature(signingKey,envelope,properties);
     let state;
     let timer;
@@ -125,7 +128,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       const publishTimer = setTimeout(() => discard(state, new Error('Publisher confirm timeout')), timeoutMs);
       state.pending.set(attempt, { finish });
       if (state.dead) return finish(failure('BROKER_UNAVAILABLE', 503));
-      if (ttlMs !== undefined) {
+      if (envelope.deadlineAt !== undefined) {
         const remaining=envelope.deadlineAt-Date.now();
         if (remaining<=0) return finish(failure('COMMAND_EXPIRED',410));
         properties.expiration=String(remaining);

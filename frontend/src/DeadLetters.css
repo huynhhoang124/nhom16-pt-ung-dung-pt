@@ -1,0 +1,5 @@
+.dlq-editor { display: flex; flex-direction: column; gap: var(--space-3, 12px); margin-top: 1rem; min-width: 0; }
+.dlq-editor textarea { width: 100%; box-sizing: border-box; min-height: 10rem; resize: vertical; background: var(--card); color: var(--text); font: .9rem var(--font-mono, monospace); padding: .75rem; border: 1px solid var(--line); }
+.dlq-editor button { align-self: flex-start; }
+.dlq-editor p { overflow-wrap: anywhere; }
+.dead-letters { min-width: 0; }

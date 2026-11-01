@@ -1,0 +1,17 @@
+TC57 retry intervals ms: 2049 10025
+▶ PD08 broker + PostgreSQL integration using the merged local inbox
+  ✔ TC57: two transient errors, 2s + 10s, third delivery one committed effect (12235.8414ms)
+  ✔ TC58 backend: invalid schema -> durable DLQ -> ADMIN edit/replay -> one reservation (521.0353ms)
+  ✔ edited replay cannot bypass an existing inbox result under the original ID (155.062ms)
+  ✔ retry exhaustion reaches durable DLQ after two delays; business 409 never retries (12277.5821ms)
+  ✔ retry crosses total deadline: no renewal and no late reservation (2093.7757ms)
+  ✔ total deadline elapsed before dispatch: no late effect, forwarded to PD06 expired queue (257.2618ms)
+✔ PD08 broker + PostgreSQL integration using the merged local inbox (27814.5749ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 28532.9492

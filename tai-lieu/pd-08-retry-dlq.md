@@ -2,16 +2,12 @@
 
 ## Trạng thái và dependency
 
-Nhánh từ origin/dev có PD-01, không chép code PD-02 chưa merge (PR #48).
-Topology, worker DLQ, API ADMIN, UI và module retry đã triển khai. Consumer production
-trên dev chưa có: **chưa bật retry trong vòng đời node mặc định**. Không coi đây
-là tích hợp runtime hoàn chỉnh khi PD-02 vắng mặt.
-
-`parking-node/src/retry-integration.js` nối exports PD-02 qua dependency injection,
-dùng chính processor/transaction inbox của PD-02. Khi nhận PD-02, áp dụng
-`scripts/pd08-pd02-integration.patch` vào index (đã check apply trên commit
-238b77692f64b502b4ac5761c9b464dee3c91f5d). Không tự merge PD-02. Khi xử lý xung đột
-Aggregator, giữ HMAC, deadline và replyTo thống nhất, không khởi động hai consumer.
+Cập nhật 01/11/2026 từ origin/dev `eef361f`: PD-01 và PD-02 đã merge. Nhánh/PR
+PD-08 hiện hữu (#49) đã nhận dev mới nhất; retry được nối trực tiếp vào
+`parking-node/src/index.js`, dùng processor/inbox/transaction PD-02 đang có trong repo.
+Đã bỏ `retry-integration.js` và patch chờ tích hợp; TC57/TC58 không cần checkout
+PD-02 riêng hay ghép source candidate. Giữ nguyên lifecycle etcd, leader, fencing,
+LISTEN/relay và scheduled lock của các phần đã merge.
 
 PD-03 chưa có bảng commands: `markFailed(messageId,reason)` là hook idempotent,
 mặc định không cập nhật trạng thái người dùng. Không tạo bảng commands khác.
@@ -48,7 +44,10 @@ Hoàn tác bằng dừng worker mới, giữ nguyên queue/bảng có dữ liệ
 TTL per-message là thời gian ở một queue, khác deadline tuyệt đối. RabbitMQ bỏ
 expiration khi dead-letter. Aggregator ký issuedAt/deadlineAt trong body. Retry
 giữ nguyên deadline, bỏ expiration để không quay về sớm hơn delay queue 2/10 giây,
-ký lại properties đã đổi. Guard node kiểm tra deadline trước processor. Replay
+ký lại properties đã đổi. Guard node kiểm tra deadline trước processor, và bằng clock_timestamp() của DB sau
+INSERT inbox/chờ khóa, sau nghiệp vụ và ngay trước COMMIT. Quá hạn làm rollback
+toàn bộ hiệu lực/inbox/outbox mới. Bản giao lại có inbox đã COMMIT được trả kết quả
+cũ, không chạy lại nghiệp vụ. Replay
 được admin yêu cầu là lần yêu cầu mới có hạn mới; retry tự động không gia hạn.
 
 10 giây mặc định không đủ 2+10 giây rồi xử lý lần ba: hết hạn là đúng. TC57 dùng
@@ -59,10 +58,13 @@ RabbitMQ 3.13 thật xác nhận CC về đúng bãi/type, B/C không nhận. fi
 vẫn là retry.N; adapter xác thực HMAC rồi đối chiếu route gốc với body và chuẩn hoá
 trước khi gọi processor PD-02. Không bỏ xác thực hoặc tin actor client tự khai.
 
-**Chưa thống nhất với PD-06:** guard dùng đồng hồ tiến trình, kiểm tra trước
-processor; chưa kiểm tra đồng hồ DB sau mọi chờ khoá, chưa bảo đảm hạn COMMIT tuyệt
-đối/clock skew. Cần phối hợp guard trong transaction với PD-02/PD-06. Chưa tuyên bố
-đã giải quyết toàn bộ hết hạn/back-pressure. Thiết kế ban đầu ghi các điểm cần chốt.
+**Điểm còn cần thống nhất với PD-06:** bản trở về từ delay queue bị RabbitMQ bỏ
+expiration. Khi node còn offline, nó có thể nằm ở cmd.<bãi> qua deadline; guard DB
+ngăn hiệu lực muộn khi node nhận lại, nhưng chưa có cơ chế PD-06 cập nhật EXPIRED
+đúng thời điểm đó. Clock skew Aggregator/DB và khoảng giữa final check/COMMIT vẫn
+cần hợp đồng thời gian; không hứa deadline tuyệt đối tại COMMIT. Không thêm consumer
+cmd.expired hay triển khai thay toàn bộ TTL/back-pressure. Default 10 giây vẫn là
+10 giây, không tăng mặc định để làm TC57 vượt qua.
 
 ## Phân loại và confirm
 
@@ -125,15 +127,41 @@ npm test --prefix aggregator-service
 npm run build --prefix frontend
 ```
 
-Integration cần broker/DB riêng, queue A/B/C/dead trống và không consumer:
+TC57/TC58 trên entrypoint service thật (Compose project riêng, không cần source ngoài):
 
 ```powershell
-$env:PD02_SOURCE_ROOT='D:\pd-02-command-inbox\parking-node\src'
+# Lần đầu tạo .env từ .env.example; không ghi đè cấu hình đang dùng.
+$env:COMPOSE_PROJECT_NAME='pd08-test'
+$env:COMPOSE_FILE='docker-compose.yml;tests/pd08-compose.test.yml'
+docker compose build parking-a aggregator
+docker compose up -d --no-build --wait rabbitmq parking-a parking-b parking-c aggregator
+$env:PD08_RUNTIME='1'
+node --test tests/pd08-runtime.test.cjs
+```
+
+Override test dùng broker 5673/15673, DB A 15432, DB Aggregator 15433;
+COMMAND_TTL_MS=60000 cho TC57. NODE_ENV=test và RETRY_TEST_MESSAGE_ID chỉ trỏ
+`pd08-runtime:retry`, đúng hai lỗi giả lập; không bật hook trên B/C. Cấu hình
+production mặc định không có các biến lỗi này. Runtime test kiểm TC57, TC58 và
+hạn tổng 300 ms hết khi SQL đang chờ khóa slot: DB không có hiệu lực/inbox mới.
+
+Kiểm riêng retry cạn, DLQ duplicate, replay fence và deadline không reset bằng
+processor hiện có trong chính repo; cần dừng consumer service trước để không tranh test:
+
+```powershell
+docker compose stop parking-a parking-b parking-c aggregator
 $env:PD08_AMQP_URL='amqp://parking:parking@localhost:5673/%2F'
 $env:PD08_DATABASE_URL='postgres://postgres:dev@localhost:15432/parking'
 node --test tests/pd08-retry.integration.cjs
+# Khôi phục nếu tiếp tục chạy; không dùng -v.
+docker compose up -d --no-build parking-a parking-b parking-c aggregator
 ```
 
-Thiếu PD02_SOURCE_ROOT sẽ skip rõ ràng. Test dùng checkout PD-02 riêng; không chép
-vào PR. Chỉ dọn records test theo IDs/slot prefix, đóng consumer trước dọn, giữ
-volumes. Xem [bằng chứng](pd-08-bang-chung.md) và [ảnh UI](anh/pd08-dlq.png).
+Component test chỉ skip nếu không có URL DB/broker opt-in; không cần PD02_SOURCE_ROOT.
+Job CI `retry-dlq` tự dựng stack, chạy runtime TC57/TC58 rồi component test, giữ
+volumes khi cleanup. Không coi skip của test opt-in trong npm test là pass broker.
+Test cleanup chỉ ID/slot prefix do nó tạo, không purge queue/DB/volume. Nếu thử UI,
+build/up frontend và notification như README, đăng nhập admin demo, vào Quản trị →
+Lệnh lỗi; nhập payload mới đầy đủ khi sửa vì biển số cũ đã che. Xem
+[bằng chứng mới](pd-08-cap-nhat-2026-11-01.md); bằng chứng 22/10 được giữ làm lịch sử,
+không thay cho kết quả runtime hiện tại.
