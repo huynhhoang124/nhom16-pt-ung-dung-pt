@@ -16,13 +16,31 @@ const LOTS = [
 ];
 const NEW_LOTS = LOTS.filter((lot) => !lot.base);
 const DB_LIMITS = { command: ['postgres', '-c', 'shared_buffers=32MB'], mem_limit: '192m', shm_size: '64m' };
+const sync = (id) => id === 'a' || id === 'd';
+// Overlay 6 bãi ghi đè lệnh primary, không đặt synchronous_standby_names trên dòng lệnh,
+// để db-x-sync-config bật đồng bộ cho A, D bằng ALTER SYSTEM sau khi replica đã streaming.
+const primaryCommand = () => [...DB_LIMITS.command, '-c', 'wal_log_hints=on'];
+
+function syncConfigService(id) {
+  return {
+    profiles: ['ha', 'scale'],
+    image: 'postgres:16-alpine',
+    environment: { PGPASSWORD: 'dev' },
+    volumes: [`./postgres/configure-sync-${id}.sh:/configure-sync-${id}.sh:ro`],
+    entrypoint: ['/bin/sh', `/configure-sync-${id}.sh`],
+    depends_on: {
+      [`db-${id}`]: { condition: 'service_healthy' },
+      [`db-${id}-replica`]: { condition: 'service_healthy' },
+    },
+  };
+}
 
 function postgresService(id) {
   return {
     profiles: ['scale'],
     image: 'postgres:16-alpine',
     environment: { POSTGRES_PASSWORD: 'dev', POSTGRES_DB: 'parking' },
-    command: DB_LIMITS.command,
+    command: primaryCommand(id),
     healthcheck: {
       test: ['CMD-SHELL', 'pg_isready -U postgres -d parking'],
       interval: '3s',
@@ -31,7 +49,24 @@ function postgresService(id) {
     },
     mem_limit: '192m',
     shm_size: '64m',
-    volumes: [`db-${id}-data:/var/lib/postgresql/data`],
+    volumes: [`db-${id}-data:/var/lib/postgresql/data`,
+      './postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro'],
+  };
+}
+
+function replicaService(id) {
+  return {
+    profiles: ['ha', 'scale'],
+    image: 'postgres:16-alpine',
+    entrypoint: ['/bin/sh', '/replica-entrypoint.sh'],
+    environment: {
+      PGDATA: '/var/lib/postgresql/data', REPLICA_OF: `db-${id}`,
+      REPLICATION_PASSWORD: 'replica', APPLICATION_NAME: `db-${id}-replica`,
+    },
+    volumes: [`db-${id}-replica-data:/var/lib/postgresql/data`,
+      './postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro'],
+    healthcheck: { test: ['CMD-SHELL', 'pg_isready -U postgres'], interval: '3s', timeout: '3s', retries: 60 },
+    depends_on: { [`db-${id}`]: { condition: 'service_healthy', required: false } },
   };
 }
 
@@ -55,9 +90,11 @@ function parkingService({ id, zone, port, slots }) {
       NODE_URL: `http://toxiproxy:${port + 10000}`,
       SLOTS: slots,
       DATABASE_URL: `postgres://postgres:dev@db-${key}/parking`,
+      READ_DATABASE_URL: `postgres://postgres:dev@db-${key}-replica/parking`,
     },
     ports: [`${port}:${port}`],
-    depends_on: { [`db-${key}`]: { condition: 'service_healthy' } },
+    depends_on: { [`db-${key}`]: { condition: 'service_healthy' },
+      ...(sync(key) ? { [`db-${key}-sync-config`]: { condition: 'service_completed_successfully', required: false } } : {}) },
     mem_limit: '256m',
   };
 }
@@ -73,14 +110,23 @@ export function makeScaleCompose() {
   const volumes = {};
   for (const lot of LOTS) {
     const id = lot.id.toLowerCase();
+    services[`db-${id}-replica`] = replicaService(id);
+    if (sync(id)) services[`db-${id}-sync-config`] = syncConfigService(id);
     if (lot.base) {
-      services[`db-${id}`] = { ...DB_LIMITS };
-      services[`parking-${id}`] = { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: lot.zone } };
-      continue;
+      services[`db-${id}`] = { ...DB_LIMITS, command: primaryCommand(id) };
+      services[`parking-${id}`] = { environment: {
+        ETCD_ENDPOINTS: ENDPOINTS, ZONE: lot.zone,
+        READ_DATABASE_URL: `postgres://postgres:dev@db-${id}-replica/parking`,
+      }, ...(sync(id) ? { depends_on: {
+        [`db-${id}`]: { condition: 'service_healthy' },
+        [`db-${id}-sync-config`]: { condition: 'service_completed_successfully', required: false },
+      } } : {}) };
+    } else {
+      services[`db-${id}`] = postgresService(id);
+      services[`parking-${id}`] = parkingService(lot);
+      volumes[`db-${id}-data`] = {};
+      volumes[`db-${id}-replica-data`] = {};
     }
-    services[`db-${id}`] = postgresService(id);
-    services[`parking-${id}`] = parkingService(lot);
-    volumes[`db-${id}-data`] = {};
   }
 
   services.toxiproxy = {
