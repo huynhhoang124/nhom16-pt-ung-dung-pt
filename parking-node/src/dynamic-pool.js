@@ -97,7 +97,14 @@ async function makeDynamicPool({
       const pingInterval = Math.min(1000, Math.max(500, Math.floor(watchWindowMs / 2)));
       heartbeatTimer = setInterval(async () => {
         try {
-          await client.get(epochKey).string();
+          // Đọc cả primary và epoch rồi đồng bộ: watcher lỗi/đứt thì heartbeat vẫn bám đúng primary mới sau failover,
+          // không để lastEtcdContact tươi mà currentEpoch/currentUrl còn cũ
+          const [primary, epoch] = await Promise.all([client.get(primaryKey).string(), client.get(epochKey).string()]);
+          if (epoch && Number(epoch) !== currentEpoch) {
+            log.info?.(`[dynamic-pool] Heartbeat: epoch ${currentEpoch} -> ${epoch}`);
+            currentEpoch = Number(epoch);
+          }
+          if (primary && primary !== currentUrl) wrapper.switchPrimary(primary);
           lastEtcdContact = Date.now();
         } catch (err) {
           log.warn?.('[dynamic-pool] Heartbeat etcd thất bại', { error: err.message });
