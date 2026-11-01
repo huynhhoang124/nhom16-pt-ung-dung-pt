@@ -1,0 +1,156 @@
+PD-02 evidence — 2026-10-22, isolated Docker project pd02-inbox, vhost /
+Full Docker e2e (before adding the separately verified skipped PD-03 HTTP scaffold):
+✔ cô lập dữ liệu: node bãi A không biết địa chỉ DB của bãi khác (1301.4561ms)
+✔ TC01 tra cứu tổng hợp 3 bãi (21.228ms)
+✔ TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh (171.88ms)
+✔ TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai (1058.953ms)
+✔ TC09 20 request đồng thời cùng một slot (Postgres thật): đúng 1 thành công (182.514ms)
+✔ 10 lần gửi đồng thời CÙNG một Idempotency-Key: chỉ 1 reservation, mọi phản hồi cùng id (67.2941ms)
+✔ TC27 hai lần trả tiền song song khác key cho cùng một phiên (Postgres thật): đúng 1 thành công (815.7636ms)
+✔ TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> RabbitMQ -> Aggregator -> Socket.IO (1098.8502ms)
+✔ TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B trả dữ liệu cũ; bật lại thì ONLINE (21533.4926ms)
+✔ DB bãi C khởi động lại: node C không sập, DB về thì tự kết nối lại và ghi được (3800.7751ms)
+✔ TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật lại thì được xử lý hết (12945.7863ms)
+✔ Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết (18596.9904ms)
+﹣ TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùng key -> đúng 1 lượt đặt (0.2532ms) # SKIP
+✔ PD-02 PostgreSQL: 10 concurrent DB clients deduplicate and preserve transaction invariants (1971.2989ms)
+✔ TC52 PD-02 broker: 10 concurrent messages with one messageId create one reservation and 10 identical replies (7867.3024ms)
+✔ TC53 PD-02 broker: crash after COMMIT before ack, restart, redelivery replays without another effect (20421.8163ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 15
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 92360.5374
+parking-node full unit/integration regression:
+
+> parking-node@1.0.0 test
+> node --test "test/*.test.js"
+
+✔ PT-03 nối cụm RabbitMQ: nút đầu chết thì sang nút kế; lần sau bắt đầu từ nút đang sống (2.8314ms)
+✔ HTTP: health mở, API cần khoá nội bộ, luồng đặt/vào/ra/huỷ (7428.9951ms)
+✔ bảng giá: xem, sửa (kiểm dữ liệu), seed không ghi đè giá đã sửa (6714.2602ms)
+✔ TC29–TC32 QR ở cổng: đúng thì vào/ra được; sửa ký tự 401; QR bãi khác 403; dùng lại 409 (4418.946ms)
+✔ NV-01 HTTP: kiểm giờ đến / thời lượng; đặt trước rồi xem lịch slot (3971.8046ms)
+✔ PT-05 nhân viên gọi thẳng node bằng JWT: chỉ bãi mình, chỉ thao tác được phép; CORS cho trang web (4027.4812ms)
+✔ GS-04 /metrics: không cần khoá; có thời gian request, outbox chưa gửi, số chỗ theo loại (3894.8775ms)
+﹣ PostgreSQL: concurrent duplicate transactions, same-slot contention, SQL failure and rollback (1.0543ms) # SKIP
+✔ signed envelope: property authority, identity, metadata and producer/consumer canonical contract (6.9908ms)
+▶ inbox transaction: replay, key reuse, savepoint, rollback, permissions, replies and retention
+  ✔ same command returns exact saved status/body and creates a reply for each delivery (160.8743ms)
+  ✔ same key with changed payload/type is rejected without changing the original inbox (39.1816ms)
+  ✔ business conflict is stored and replayed after savepoint rollback (95.4541ms)
+  ✔ outbox failure rolls back inbox, slot update, reservation and slot event together (116.765ms)
+  ✔ cancel and pay share inbox transaction and enforce signed owner identity (392.0698ms)
+  ✔ reply relay keeps returned/unavailable replies pending; marks sent only after publish succeeds (61.5171ms)
+  ✔ retention deletes only committed inbox results older than seven days, leaves outbox untouched (13.9099ms)
+✔ inbox transaction: replay, key reuse, savepoint, rollback, permissions, replies and retention (6427.7106ms)
+✔ consumer serializes handlers despite prefetch 20, ack follows commit hook, and stop waits in-flight (86.9722ms)
+✔ temporary rollback reconnects with backoff, permanent envelope error dead-letters without hot requeue (62.3571ms)
+✔ reply publisher: mandatory return/nack/disconnect keep outbox pending; connection reused until loss (9.4023ms)
+✔ PT-05 kiểm JWT RS256 bằng khoá công khai: đúng / sai khoá / sửa nội dung / hết hạn / đổi alg (73.3845ms)
+✔ biển số: chuẩn hoá và kiểm định dạng (3.3119ms)
+✔ TC24 tính phí: các mốc biên theo thời gian (3.8145ms)
+✔ TC24 tính phí: qua đêm theo giờ Việt Nam (1.3344ms)
+✔ quy tắc giá: kiểm dữ liệu gửi lên (0.4309ms)
+✔ QR: ký rồi kiểm đúng; sửa 1 ký tự, sai khoá, hết hạn đều bị từ chối (3.3838ms)
+✔ PT-02 đọc bản sao; bản sao lỗi -> đọc bản chính và bỏ qua bản sao một lúc (67.5244ms)
+✔ broker lỗi: không đánh dấu gì; broker khoẻ lại: gửi đủ theo thứ tự, không gửi lặp (6324.764ms)
+✔ broker lỗi giữa chừng: dừng ở tin lỗi, lần sau gửi tiếp đúng thứ tự (6303.4966ms)
+✔ không chạy chồng khi lần trước chưa xong (5114.6554ms)
+✔ seed tạo đủ slot, chạy init lần 2 không nhân đôi (5879.0119ms)
+✔ TC15 SLOTS: đúng số slot từng loại/tầng, mã ô tô A01.., xe máy AM01..; init lần 2 không nhân đôi (6500.9207ms)
+✔ TC16 tra cứu theo loại xe: byType và lọc type=MOTO (5167.5666ms)
+✔ đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện (3716.7605ms)
+✔ TC08 gửi lại cùng requestId: trả bản cũ, vẫn 1 reservation, không thêm sự kiện (3616.6115ms)
+✔ TC03 người thứ hai đặt cùng slot: 409, không sinh reservation/sự kiện (3333.7269ms)
+✔ ràng buộc DB ex_no_overlap: chèn thẳng một khung giờ chồng lên khung đang giữ -> lỗi 23P01 (3735.1703ms)
+✔ TC20 đặt trước: hai khung giờ chồng nhau trên cùng slot -> cái sau 409 TIME_CONFLICT; slot vẫn AVAILABLE (3118.6252ms)
+✔ TC21 hai khung nối tiếp (10–12, 12–14) đều được; huỷ lượt sau không nhả chỗ lượt trước đang giữ (2916.4484ms)
+✔ TC22 activateDue: gần đến giờ thì giữ chỗ + phát sự kiện; xe vào chỉ dùng lượt đang giữ; xe ra -> DONE (3641.7044ms)
+✔ TC23 đến giờ mà slot còn xe (xe trước ở quá giờ) -> chuyển lượt đặt sang slot trống cùng loại (3042.6674ms)
+✔ xe vãng lai không được vào slot sắp có người đặt (trong 2 giờ) (3208.5382ms)
+✔ lịch slot theo ngày (giờ VN) (3538.5655ms)
+✔ xe vào/ra: RESERVED -> OCCUPIED -> AVAILABLE, reservation thành USED, version tăng (3044.4103ms)
+✔ xe vào không đặt trước (AVAILABLE -> OCCUPIED); slot bảo trì không đặt được (3419.0054ms)
+✔ TC17 vào bằng đặt chỗ rồi ra: đúng 1 phiên, lấy biển số + user từ đặt chỗ, có exitedAt (3081.6597ms)
+✔ TC25 xe ra: phiên có phí theo bảng giá của bãi; xem phí tạm tính khi xe còn trong bãi (3327.7059ms)
+✔ TC28 chưa trả tiền thì không cho ra (402, kèm số tiền); thu tiền mặt thì ra được; slot không đổi khi 402 (3006.5531ms)
+✔ TC26 trả 2 lần cùng key: chỉ ghi nhận 1 lần, lần 2 trả lại kết quả cũ; key khác thì 409 ALREADY_PAID (3253.0702ms)
+✔ key thanh toán đã dùng cho phiên khác: 422, không trả lại kết quả của phiên kia, phiên này vẫn chưa trả (3332.3466ms)
+✔ chưa đến phí (gửi dưới 5 phút) thì không cho trả (3132.7327ms)
+✔ TC18 cùng biển số vào lần 2 khi chưa ra: 409, slot thứ hai không bị chiếm (3722.5397ms)
+✔ huỷ: chỉ chủ reservation huỷ được; slot về AVAILABLE; huỷ lần 2 -> 404 (3246.7897ms)
+✔ hết hạn: reservation quá giờ -> EXPIRED, slot AVAILABLE; chưa quá giờ thì giữ nguyên (2889.513ms)
+✔ availability, danh sách slot và reservation của user (3644.8533ms)
+✔ TC38 gỡ slot đang có xe / đang có lượt đặt -> 409; slot trống thì gỡ được, không còn trong danh sách và tổng số (3210.1401ms)
+✔ TC39 thêm slot mới / bật lại slot đã gỡ; trùng mã 409; đổi tầng-loại khi slot rảnh (3096.4966ms)
+✔ UX-02 thống kê: lượt xe, doanh thu đã trả, TG gửi TB, lượt theo giờ VN, lấp đầy hiện tại (3361.031ms)
+✔ NV-08 warnExpiring: báo 1 lần khi lượt đang giữ chỗ sắp hết hạn; không đổi version slot (3192.5151ms)
+ℹ tests 59
+ℹ suites 0
+ℹ pass 58
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 113965.6129
+aggregator-service full regression, quiet rerun:
+
+> aggregator-service@1.0.0 test
+> node --test "test/*.test.js"
+
+✔ administrative endpoint publishes unknown parking, preserves old routes, and maps publish outcomes (145.6583ms)
+﹣ real RabbitMQ: concurrent mandatory returns, routed confirm, and reconnect (1.1479ms) # SKIP
+﹣ real isolated RabbitMQ: cmd.A reject reaches durable cmd.expired (0.2412ms) # SKIP
+﹣ isolated RabbitMQ: policy routing can change with a command already queued, without recreating cmd.C (0.9197ms) # SKIP
+✔ routing key rejects wildcards, dots and empty segments without restricting parking registry (2.6368ms)
+✔ envelope and properties preserved; only resolve after individual publisher confirm (6.8054ms)
+✔ concurrent duplicate business IDs: return and out-of-order confirms match the exact attempt (2.2151ms)
+✔ nack is unavailable, non-NO_ROUTE return is not 404 (1.5987ms)
+✔ disconnect settles all in-flight sends as unknown; next send reconnects without automatic replay (2.3905ms)
+✔ connection failure and stalled connect are 503 before publish; connector tries next broker (29.4983ms)
+✔ stalled setup is retired; late connection cannot replace a reconnected channel (32.1304ms)
+✔ confirm timeout / closed channel callback / publish throw are unknown, never 404 (29.9378ms)
+✔ channel error invalidates publisher and does not become unhandled EventEmitter error (1.3165ms)
+✔ TC11 tin trùng và tin đến sai thứ tự bị bỏ nhờ version (1.6393ms)
+✔ slotsFromCache chỉ lấy đúng bãi, sắp theo mã (12.099ms)
+✔ TC13 đối soát: cache cũ được cập nhật theo DB bãi; chạy lại lần 2 không đổi gì (idempotent) (4692.3974ms)
+✔ health check: OFFLINE chỉ sau 3 lần lỗi liên tiếp; sống lại thì ONLINE ngay, báo onChange (3714.4116ms)
+✔ TC01/TC04 tra cứu song song: bãi chậm bị bỏ qua, vẫn trả kết quả các bãi còn lại kịp thời (4192.4883ms)
+✔ TC40 mạch mở: lỗi liên tiếp đủ ngưỡng thì OFFLINE ngay, request sau bị từ chối tức thì; health check đóng mạch (1909.0237ms)
+✔ TC41 retry 1 lần cứu được lỗi thoáng qua: GET và đặt chỗ (có Idempotency-Key) (1866.8858ms)
+✔ TC42 xe vào/ra không idempotent: lỗi thì KHÔNG retry, trả nguyên lỗi của node (1342.2872ms)
+✔ GS-04 /metrics của Aggregator: trạng thái và số lần lỗi từng bãi (1344.6664ms)
+✔ PT-01 X-Instance và nạp bãi do bản Aggregator khác thêm (dùng chung DB) (1289.4126ms)
+✔ resolveUrl: tên -> IP (request thật không phải tra DNS); IP giữ nguyên; tra lỗi thì giữ tên (33.29ms)
+✔ đăng nhập: sai mật khẩu 401, đúng thì có token (6326.2905ms)
+✔ đặt chỗ qua Aggregator: cần đăng nhập + Idempotency-Key; retry an toàn; key không dùng chéo giữa người (4283.1913ms)
+✔ TC04 bãi OFFLINE: ghi bị từ chối ngay (503); chi tiết bãi trả bản cache cũ có stale=true (4094.8323ms)
+✔ TC12 node treo khi đang ghi: 504 TIMEOUT_UNKNOWN_RESULT (không biết đã đặt hay chưa) (3885.6818ms)
+✔ nhân viên chỉ thao tác bãi của mình; lịch sử và huỷ của người dùng (4199.2691ms)
+✔ TC19 lịch sử gửi xe: tra biển số gom từ mọi bãi, bãi treo báo thiếu; USER chỉ thấy của mình (4073.9217ms)
+✔ quản trị: xem trạng thái node, thêm bãi mới (không sửa code) (3727.0876ms)
+✔ TC33–TC35 đăng ký, đổi mật khẩu, khoá tạm khi sai mật khẩu nhiều lần (4531.3621ms)
+✔ NV-04 người dùng trả tiền qua Aggregator: cần Idempotency-Key, bấm lại cùng key không trả lần 2 (3715.0956ms)
+✔ NV-09 quản lý slot qua Aggregator: nhân viên chỉ bãi mình, người dùng không được (4508.7281ms)
+✔ GS-03 mã truy vết: X-Request-Id từ client đi qua Aggregator -> node -> sự kiện outbox; trả lại trong response (4015.5518ms)
+✔ UX-01 toạ độ bãi: thêm bãi kèm lat/lng, /api/parkings trả toạ độ; toạ độ sai -> 400 (4332.4545ms)
+✔ UX-02 thống kê gom các bãi: bãi treo báo thiếu; STAFF chỉ thấy bãi mình; USER bị chặn (5144.4561ms)
+✔ PT-05 Aggregator ký RS256 -> node tự kiểm được bằng khoá công khai (không cần Aggregator) (45.406ms)
+✔ UX-04 cổng quét QR qua Aggregator: nhân viên bãi mình vào/ra được; bãi khác 403 (5809.6403ms)
+✔ PT-07 saga thành công: đặt ở 2 bãi; gửi lại cùng key trả saga cũ, không đặt lần hai (6007.3632ms)
+✔ TC52 saga: bãi B OFFLINE -> chỗ đã giữ ở A được trả lại (bù trừ), saga FAILED (4834.8816ms)
+✔ TC53 Aggregator chết giữa saga: khởi động lại thì bù trừ nốt (huỷ chỗ đã giữ) (4955.0996ms)
+ℹ tests 42
+ℹ suites 0
+ℹ pass 39
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 3
+ℹ todo 0
+ℹ duration_ms 90417.0689
+Earlier aggregator run while Docker builds/e2e ran concurrently hit a pre-existing 400ms HTTP test deadline (504 vs 201). Focused retry and full rerun passed without changing HTTP timeouts or assertions.
+Additional observed checks: notification-service 2/2 pass; frontend production build pass; HTTP PD-03 scaffold skipped explicitly until PD-03 exists. Test stack stopped without deleting volumes; original parking-a restored after crash test.

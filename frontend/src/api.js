@@ -83,6 +83,7 @@ const MESSAGES = {
   QR_EXPIRED: 'Mã QR đã hết hạn.',
   IDEMPOTENCY_KEY_REUSED: 'Khoá yêu cầu đã được dùng cho thao tác khác.',
   BROKER_UNAVAILABLE: 'Kênh lệnh đang gián đoạn. Hãy thử lại cùng yêu cầu.',
+  COMMAND_PERSISTENCE_UNKNOWN: 'Chưa xác nhận được yêu cầu. Hãy thử lại cùng thao tác; mã yêu cầu được giữ nguyên.',
   COMMAND_EXPIRED: 'Lệnh đã hết hạn.',
   COMMAND_DEADLINE_BEFORE_SEND: 'Lệnh hết hạn trước khi được gửi.',
   QR_USED: 'Mã QR đã được dùng.',
@@ -92,7 +93,7 @@ const MESSAGES = {
 };
 export const message = (data) => MESSAGES[data?.error] ?? data?.error ?? 'Có lỗi xảy ra.';
 
-export const STATUS_LABEL = { AVAILABLE: 'Trống', RESERVED: 'Đã đặt', OCCUPIED: 'Có xe', MAINTENANCE: 'Bảo trì' };
+export const STATUS_LABEL = { AVAILABLE: 'Trống', RESERVED: 'Đã đặt', OCCUPIED: 'Có xe', MAINTENANCE: 'Bảo trì', DEGRADED: 'Suy giảm', ONLINE: 'Hoạt động', OFFLINE: 'Ngoại tuyến' };
 export const RESERVATION_LABEL = { ACTIVE: 'Đang hiệu lực', USED: 'Đã vào bãi', DONE: 'Hoàn tất', CANCELLED: 'Đã huỷ', EXPIRED: 'Hết hạn' };
 
 // Biển số lưu dạng chuẩn "30A12345" -> hiển thị "30A-123.45" (đuôi 5 số) / "30A-1234" (đuôi 4 số).

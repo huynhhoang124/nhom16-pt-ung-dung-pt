@@ -1,0 +1,19 @@
+# Isolated PD-03 test stack. No HA/etcd dependency is required for two Aggregators.
+services:
+  rabbitmq:
+    ports: !override
+      - "5673:5672"
+      - "15673:15672"
+  parking-a:
+    image: pd03-test/parking-node
+  parking-b:
+    image: pd03-test/parking-node
+  parking-c:
+    image: pd03-test/parking-node
+  aggregator:
+    image: pd03-test/aggregator
+  aggregator-2:
+    profiles: !override []
+    image: pd03-test/aggregator
+    ports:
+      - "8100:8000"

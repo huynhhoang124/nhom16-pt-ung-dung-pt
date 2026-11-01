@@ -15,7 +15,7 @@ function routingKey(parkingId, type) {
   return `cmd.${parkingId}.${type}`;
 }
 
-function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey } = {}) {
+function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey = process.env.INTERNAL_KEY } = {}) {
   const connectAny = makeConnector(url, connect);
   let current;
   let opening;
@@ -85,7 +85,13 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
     }
     const headers = { ...opts.headers };
     const envelope = { type, parkingId, schemaVersion: opts.schemaVersion ?? headers.schemaVersion ?? 1, payload: body };
-    for (const k of ['issuedAt','deadlineAt']) if (opts[k] !== undefined) envelope[k]=opts[k];
+    if (opts.issuedAt !== undefined || opts.deadlineAt !== undefined) {
+      if (!Number.isSafeInteger(opts.issuedAt) || !Number.isSafeInteger(opts.deadlineAt) || opts.deadlineAt < opts.issuedAt) {
+        throw failure('INVALID_COMMAND', 400);
+      }
+      envelope.issuedAt = opts.issuedAt;
+      envelope.deadlineAt = opts.deadlineAt;
+    }
     for (const field of ['causationId', 'fencingToken', 'hlc', 'traceparent', 'actor']) {
       const value = opts[field] ?? headers[field];
       if (value !== undefined) envelope[field] = headers[field] = value;
@@ -101,6 +107,8 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       ...(opts.replyTo !== undefined && { replyTo: opts.replyTo }),
       ...(opts.expiration !== undefined && { expiration: String(opts.expiration) }),
     };
+    // Only trusted server code supplies signingKey/actor; HTTP never accepts a client actor.
+    if (signingKey) properties.headers['x-command-signature'] = signature(signingKey, JSON.parse(content), properties);
     let state;
     let timer;
     try {
@@ -119,12 +127,13 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       const publishTimer = setTimeout(() => discard(state, new Error('Publisher confirm timeout')), timeoutMs);
       state.pending.set(attempt, { finish });
       if (state.dead) return finish(failure('BROKER_UNAVAILABLE', 503));
+      // A recovered durable intent keeps its original deadline; reconnect never grants fresh TTL.
       if (opts.deadlineAt !== undefined) {
-        const remaining=opts.deadlineAt-Date.now();
-        if (!Number.isSafeInteger(remaining)||remaining<=0) return finish(failure('COMMAND_DEADLINE_BEFORE_SEND',410));
-        properties.expiration=String(remaining);
+        const remaining = opts.deadlineAt - Date.now();
+        if (remaining <= 0) return finish(failure('COMMAND_DEADLINE_BEFORE_SEND', 410));
+        properties.expiration = String(remaining);
       }
-      if (signingKey) headers['x-command-signature']=signature(signingKey,envelope,properties);
+      if (signingKey) headers['x-command-signature'] = signature(signingKey, envelope, properties);
       try {
         // RabbitMQ sends basic.return BEFORE the confirm for an unroutable mandatory message.
         // Individual confirm callbacks avoid waitForConfirms() mixing concurrent sends.

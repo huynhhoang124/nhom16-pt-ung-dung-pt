@@ -1,0 +1,158 @@
+PD-03 verification - 2026-11-01 (Asia/Bangkok)
+
+Existing branch/PR: hung-pd-03-request-reply / #52 (no duplicate branch or PR).
+Latest dev integrated: 4cf3e267cf50e71c7382221deee95bc2ce2f207d, via merge preserving published history.
+PD-01 and PD-02 are in dev; PD-08 #49 and PD-02 follow-up #66 are not merged.
+User explicitly waived waiting for Huynh design approval in this chat.
+No Issue comment posted, no claim of approval by Huynh.
+
+Implementation:
+- Direct PD-02 inbox hook, same transaction for business/result/enriched signed reply outbox; removed patch dependency.
+- Durable command ID = messageId = correlationId = userId:Idempotency-Key; payload/type/parking mismatch 422.
+- Durable publish intent, lease recovery before/after publish, UNKNOWN retained if acceptance cannot be disproved.
+- Per-instance durable quorum reply queues TTL 60000; shared durable recovery queue without TTL, bound before publishing.
+- DB result persisted before reply ack, accepted duplicate can retry notification after a post-commit failure.
+- One 100ms waiter sweep; HTTP 202 on reply timeout; owner/admin lookup; user-only Socket.IO; slot max-version cache.
+- Frontend 202 tracker, same-key retry, polling after socket loss/reload, uncertain INSERT retry remains available.
+- Additive migration preserves old command results; legacy PENDING without publish metadata is UNKNOWN, not republished.
+- COMMAND_MODE=broker default; HTTP fallback preserved. New CI job runs real broker entrypoints with 2 Aggregators.
+- No implementation of PD-08 retry/DLQ, PD-06 expiry consumer, complete fencing/HLC/tracing.
+
+Local verification:
+Focused command flow/HTTP/reply-envelope tests: 15 passed, 0 failed.
+Parking Node full suite: 77 passed, 1 opt-in PostgreSQL skipped (real PostgreSQL exercised in Docker E2E).
+Aggregator full suite final: 72 passed, 3 AMQP opt-in skipped.
+Notification: 2/2 passed.
+Frontend: 4/4 passed; production build passed (108 modules).
+Syntax checks and git diff --check passed.
+
+Initial failures retained honestly:
+- First Aggregator run alongside Parking Node had 1 existing health-check timeout (OFFLINE vs ONLINE).
+  Added test-concurrency=2 to Aggregator npm test; all original assertions/timeouts kept. Full rerun passed.
+- First HTTP Docker E2E lacked PD02_AMQP_URL for the isolated broker, so two PD-02 AMQP tests hit the unrelated
+  default 5672 endpoint and got ACCESS_REFUSED. No messages were accepted there. Set URL to 5673; full rerun passed.
+- Frontend uncertain-persistence contract changed to allow manual same-key retry; updated its old assertion from
+  waiting for 201 to immediate unknown 503 plus eventual DONE in the tracker. Final four tests passed.
+
+Actual Docker stack: pd03-review-1101; tests/pd03-compose.test.yml; separate images/volumes/network.
+Broker host ports 5673/15673; Aggregators 8000/8100; no HA/coord/chaos profile.
+RABBITMQ_URL remains internal rabbitmq/%2F; vhost /; public parking/parking demo credentials only.
+Build parking-a, aggregator, frontend, notification; up --no-build --wait passed.
+
+Management snapshot after tests:
+parking.replies: direct, durable.
+agg.replies.1: durable quorum, arguments x-queue-type=quorum, x-message-ttl=60000; 1 consumer; ready=0.
+agg.replies.2: durable quorum, arguments x-queue-type=quorum, x-message-ttl=60000; 1 consumer; ready=0.
+agg.replies.recovery: durable quorum, arguments x-queue-type=quorum, no TTL; 2 consumers; ready=0.
+
+Commands (PowerShell):
+$env:COMPOSE_PROJECT_NAME='pd03-review-1101'
+$env:COMPOSE_FILE='docker-compose.yml;tests/pd03-compose.test.yml'
+$env:PD02_AMQP_URL='amqp://parking:parking@localhost:5673/%2F'
+$env:COMMAND_MODE='http'
+node --test tests/e2e.test.mjs
+$env:COMMAND_MODE='broker'
+docker compose up -d --no-build --wait aggregator aggregator-2
+$env:PD03_BROKER='1'
+$env:PD03_AMQP_URL='amqp://parking:parking@localhost:5673/%2F'
+node --test tests/command-flow.e2e.mjs
+$env:PD03_HTTP_COMMANDS='1'
+node --test tests/command-inbox-http.test.mjs
+
+TTL limit: original issuedAt/deadlineAt retained, AMQP expiration is only remaining lifetime.
+PD-06 has not integrated EXPIRED from cmd.expired; DLQ terminal integration also awaits PD-08.
+An uncertain publish is not marked failed just because its deadline elapsed. No end-to-end expiry guarantee claimed.
+
+--- Full final HTTP fallback E2E ---
+﹣ TC52 HTTP broker contract: request-reply, command lookup and one effect (303.4968ms) # Enable PD03_HTTP_COMMANDS=1 with COMMAND_MODE=broker; HTTP fallback is not broker evidence
+✔ cô lập dữ liệu: node bãi A không biết địa chỉ DB của bãi khác (487.5136ms)
+✔ TC01 tra cứu tổng hợp 3 bãi (17.2689ms)
+✔ TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh (159.4795ms)
+✔ TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai (763.3312ms)
+✔ TC09 20 request đồng thời cùng một slot (Postgres thật): đúng 1 thành công (180.5289ms)
+✔ 10 lần gửi đồng thời CÙNG một Idempotency-Key: chỉ 1 reservation, mọi phản hồi cùng id (77.0113ms)
+✔ TC27 hai lần trả tiền song song khác key cho cùng một phiên (Postgres thật): đúng 1 thành công (813.0507ms)
+✔ TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> RabbitMQ -> Aggregator -> Socket.IO (1127.2328ms)
+✔ TC37 notification dừng: vẫn đặt chỗ được, bật lại nhận đúng thông báo tồn (17417.8034ms)
+✔ TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B trả dữ liệu cũ; bật lại thì ONLINE (36947.8221ms)
+✔ DB bãi C khởi động lại: node C không sập, DB về thì tự kết nối lại và ghi được (3478.583ms)
+✔ TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật lại thì được xử lý hết (6665.5192ms)
+✔ Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết (13313.7883ms)
+﹣ TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùng key -> đúng 1 lượt đặt (0.2333ms) # SKIP
+﹣ TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200 (0.1002ms) # SKIP
+﹣ TC44 HA: xe vào qua Aggregator 1, socket Aggregator 2 nhận SLOT_UPDATED (0.0607ms) # SKIP
+﹣ TC46: Staff thao tác khi Aggregator sập (0.05ms) # SKIP
+﹣ TC48 cụm RabbitMQ: tắt nút rabbitmq, chuyển nút < 10s, outbox về 0 và Aggregator nhận sự kiện (0.0531ms) # SKIP
+﹣ TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), outbox giữ tin; bật lại thì xả về 0 (0.0462ms) # SKIP
+✔ PD-02 PostgreSQL: 10 concurrent DB clients deduplicate and preserve transaction invariants (1840.6837ms)
+✔ TC52 PD-02 broker: 10 concurrent messages with one messageId create one reservation and 10 identical replies (5460.4177ms)
+✔ TC53 PD-02 broker: crash after COMMIT before ack, restart, redelivery replays without another effect (11241.674ms)
+﹣ TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd -> tự động hiện trên API danh sách bãi trong <= 2s (0.2932ms) # SKIP
+﹣ TC64 phân hoạch mạng node <-> etcd: mất lease nhưng HTTP còn sống -> trạng thái chuyển DEGRADED (0.1219ms) # SKIP
+﹣ TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> Aggregator nhận ngay không cần restart (0.1ms) # SKIP
+﹣ TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm leader mới trong <= 7s, metric = 1 (0.113ms) # SKIP
+﹣ TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token cũ -> bị node từ chối STALE_LEADER, metric tăng (0.2198ms) # SKIP
+ℹ tests 28
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 12
+ℹ todo 0
+ℹ duration_ms 100867.4637
+
+--- Real broker request-reply and sender SIGKILL ---
+TC51 response ms: 568
+▶ PD03 broker request-reply on the actual service entrypoints
+  ✔ TC51 201 <=3s, correlation/trace preserved, owner/admin only, immediate slot version (826.3783ms)
+  ✔ TC52 ten HTTP requests same key -> same command/result and one reservation (807.0492ms)
+  ✔ TC54 node stopped 5s -> 202 then Socket.IO terminal (8423.9138ms)
+  ✔ cancel and pay use broker and preserve old response payloads (3031.6703ms)
+TC62 terminal on surviving aggregator: DONE
+  ✔ TC62 sender SIGKILL before reply -> aggregator-2 persists terminal result (16646.1708ms)
+✔ PD03 broker request-reply on the actual service entrypoints (34697.8477ms)
+ℹ tests 6
+ℹ suites 0
+ℹ pass 6
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 34918.1236
+
+--- Standalone HTTP TC52 over broker ---
+✔ TC52 HTTP broker contract: request-reply, command lookup and one effect (1123.0405ms)
+ℹ tests 1
+ℹ suites 0
+ℹ pass 1
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1262.411
+
+--- parking full unit summary ---
+✔ NV-08 warnExpiring: báo 1 lần khi lượt đang giữ chỗ sắp hết hạn; không đổi version slot (4009.7375ms)
+ℹ tests 78
+ℹ suites 0
+ℹ pass 77
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 1
+ℹ todo 0
+ℹ duration_ms 179676.9692
+
+--- aggregator full unit summary ---
+✔ PD-10 khôi phục saga mang token lúc lên leader: node đã thấy token mới hơn thì từ chối, mất quyền thì dừng (13824.3897ms)
+ℹ tests 75
+ℹ suites 0
+ℹ pass 72
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 3
+ℹ todo 0
+ℹ duration_ms 263381.2356
+
+Post-test: all 12 services restored/running, reply ready backlog 0. Standalone TC52 reservation cancelled; its two known terminal commands/inbox/reply records cleaned with guarded IDs. commands count=0. Isolated stack stopped successfully; all volumes retained. Existing unrelated RabbitMQ/airflow/Superset were not changed by this task.
+
+Final migration refinement: legacy tables also receive defaults for status/created_at/updated_at. Targeted additive migration test passed 1/1 after this SQL refinement; verifies old results retained and fresh insert PENDING/QUEUED with uncertain=false. Fresh-table runtime defaults are unchanged from the live-tested stack.

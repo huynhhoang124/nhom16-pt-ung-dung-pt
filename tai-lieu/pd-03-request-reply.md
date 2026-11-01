@@ -1,113 +1,110 @@
-# PD-03 — Request–reply và theo dõi trạng thái lệnh
+# PD-03 – Request–reply và theo dõi trạng thái lệnh
 
-## Dependency và trạng thái bàn giao
+Theo Issue #20, kế hoạch giai đoạn 2 bản 1.4 mục 5.2–5.4/5.9 và phụ lục C.
+[Thiết kế cuối cùng](pd-03-design.md). Người dùng đã miễn bước chờ duyệt trong chat;
+không có bằng chứng Huynh duyệt thiết kế trong Issue, không tự đăng bình luận.
 
-Nhánh PD-03 bắt đầu từ origin/dev 0f8eae8 (PD-01 đã merge). PD-02 #48 và PD-08 #49
-chưa merge tại thời điểm thực hiện. Không chép consumer/inbox/retry vào PR PD-03.
-Vì vậy bản dev đơn lẻ **chưa có node consumer để chạy broker đầu-cuối**; PR cần
-giữ draft đến khi nhận dependency và tích hợp hook node dưới đây.
+## Dependency và phạm vi
 
-Thiết kế ở [pd-03-design.md](pd-03-design.md). Issue #20 chưa có bằng chứng Huynh
-duyệt; người dùng đã yêu cầu tiếp tục không chờ trong chat. Không tự đăng bình luận,
-không tuyên bố Huynh đã duyệt. Nhánh dùng hung-pd-03-request-reply do ref hung hiện
-có chặn tên hung/pd-03-request-reply; không đổi/xoá ref hung của người khác.
+PD-01/PD-02 đã merge vào dev. Nhánh/PR #52 hiện hữu đã nhận dev mới tại `4cf3e26`,
+giữ lifecycle discovery/config/leader, scheduled jobs và relay của các phần đã merge.
+Đã bỏ `scripts/pd03-pd02-reply.patch`; hook enrichReply được gọi trực tiếp trong
+processor inbox, trước INSERT outbox và COMMIT. Test dùng entrypoint thật trong repo,
+không cần checkout PD-02 riêng hoặc ghép candidate.
+
+PD-08 #49 và bản sửa relay/backoff PD-02 #66 chưa merge. Không lấy code các PR đó.
+PD-03 chuẩn bị deadline đã lưu và reply ký xác thực; khi nhận PD-08 phải giữ nguyên
+issuedAt/deadlineAt khi retry và nối kết quả thất bại có bằng chứng. Chưa có consumer
+EXPIRED của PD-06 hoặc tích hợp terminal từ DLQ; không tuyên bố hoàn tất TTL toàn hệ thống.
 
 ## Định danh và trạng thái
 
-commandId = messageId = correlationId = `<JWT userId>:<Idempotency-Key>`.
-Khoá duy nhất toàn bộ bãi/loại lệnh của một user. Hash SHA-256 canonical gồm bãi,
-type, actor server và payload; payload/type/bãi khác cùng key trả 422
-IDEMPOTENCY_KEY_REUSED. Retry không tạo row/ID/deadline mới. Actor từ JWT server,
-không lấy userId/role trong payload client. Cancel cũ thiếu key dùng cancel-<reservationId>.
+`commandId = messageId = correlationId = <userId>:<Idempotency-Key>` duy nhất toàn
+bộ bãi/loại lệnh trong DB Aggregator chung. Key 1–64 ký tự, full ID tối đa 128.
+Hash bãi/type/actor server/payload; retry cùng nội dung trả cùng ID/kết quả,
+dùng key cho nội dung khác trả 422 IDEMPOTENCY_KEY_REUSED. Hủy thiếu key dùng
+`cancel-<reservationId>` để tương thích client cũ. Actor do JWT server xác lập.
 
-States chính: PENDING, DONE, FAILED, EXPIRED. Kết quả nghiệp vụ 2xx→DONE; 4xx/5xx
-do node trả bền vững→FAILED. FAILED_TO_SEND là `status=FAILED`, failure_phase=SEND,
-publish_state=REJECTED, kèm sendStatus trong API, không thêm trạng thái chính khác.
+| Trạng thái | Ý nghĩa |
+|---|---|
+| PENDING | Intent đã lưu; có thể đang gửi, đã confirm hoặc chưa rõ kết quả publish |
+| DONE | Reply nghiệp vụ thành công đã được ghi DB |
+| FAILED | Lỗi nghiệp vụ đã lưu, hoặc gửi bị từ chối chắc chắn |
+| EXPIRED | Dành cho bằng chứng hết hạn từ PD-06; không suy ra từ HTTP timeout |
 
-Chỉ lỗi chắc chắn trước publish/mandatory return/nack mới FAILED_TO_SEND. Mất confirm,
-disconnect sau publish hoặc khôi phục lease SENDING giữ PENDING/UNKNOWN. Dù lần
-publish tiếp theo bị từ chối, command đã uncertain vẫn không được gọi là chắc chắn
-chưa gửi. Một retry đã biết bị từ chối được reset chính row đó khi user gửi lại,
-còn hạn, giữ nguyên ID/deadline. Không cấp key mới để né kết quả chưa xác định.
+FAILED_TO_SEND là `status=FAILED`, `failure_phase=SEND`, `publish_state=REJECTED`,
+trả thêm sendStatus; không thêm trạng thái chính thứ năm. Chỉ dùng khi chưa từng
+có publish không rõ kết quả. Disconnect/mất confirm giữ PENDING/UNKNOWN, không
+cho tạo ID mới. Retry chủ động lỗi gửi chắc chắn, còn deadline, mở lại cùng row/ID.
+Reply terminal nghiệp vụ không bị duplicate/xung đột ghi đè.
 
-INSERT PENDING và intent trước publish; worker SELECT FOR UPDATE SKIP LOCKED rồi
-COMMIT SENDING/lease trước I/O broker. Crash trước publish hoặc sau gửi/trước ghi
-confirm được khôi phục cùng ID sau lease. Inbox PD-02 chặn hiệu lực trùng. Không
-giữ transaction DB qua network publish. Candidate tests và unit kiểm tra các cửa sổ.
+Ghi intent trước publish. Worker claim bằng DB lease rồi I/O ngoài transaction;
+crash trước/sau publish được phục hồi cùng ID/deadline, inbox PD-02 chặn lặp.
+Mất ACK DB sau INSERT trả 503 COMMAND_PERSISTENCE_UNKNOWN kèm ID và unknown=true:
+frontend vẫn theo dõi ID đó, không coi là chắc chắn chưa gửi.
 
-Nếu mất ACK DB sau INSERT, HTTP 503 COMMAND_PERSISTENCE_UNKNOWN mang commandId,
-unknown=true: có thể intent đã commit. Frontend vẫn theo dõi ID đó; không xem là
-FAILED_TO_SEND. Request chưa có reply sau REPLY_WAIT_MS trả 202, tuyệt đối không 504.
+## Queue, instance và failover
 
-## Queue phản hồi và failover
+AGGREGATOR_ID ưu tiên, fallback INSTANCE_ID, mặc định 1; Compose gán 1/2 riêng.
+Canonical ID dùng cho reply, events, x-instance, metric và leader. Lease DB ngăn
+hai tiến trình cùng ID; heartbeat 5 s, lease 15 s; restart sau SIGKILL có thể chờ
+lease tối đa khoảng 20 s. Đây không thay thế fencing PD-10.
 
-AGGREGATOR_ID ưu tiên, fallback INSTANCE_ID, cuối cùng 1. Cùng ID canonical dùng
-cho reply, event queues và header x-instance. Compose đặt instance 1/2 riêng.
-ID chỉ A–Z/a–z/0–9/_/-, tối đa 64; recovery là tên dành riêng. Lease DB 15 giây,
-heartbeat 5 giây ngăn trùng ID khi khởi động; sau crash restart có thể chờ hết lease
-tối đa khoảng 20 giây. Đây không thay thế fencing/leader PD-10.
+parking.replies direct durable. `agg.replies.<id>` durable quorum có
+`x-message-ttl=60000`, binding `agg.<id>`. Queue `agg.replies.recovery` durable quorum
+không TTL cũng bind từng `agg.<id>` trước khi cho publish. Mọi instance consume
+recovery cạnh tranh: sender chết thì instance còn lại vẫn cập nhật commands terminal.
+Queue riêng có thể tạo bản sao trong 60 s; DB dedup. Recovery giữ tin cả khi toàn
+bộ instance tắt quá 60 s; cần giám sát dung lượng, không có back-pressure PD-06 ở đây.
 
-parking.replies: direct, durable. Mỗi instance assert durable quorum
-agg.replies.<id>, x-message-ttl=60000, binding agg.<id>. Node replyTo là agg.<id>.
-Thêm agg.replies.recovery durable quorum **không TTL**, bind chính routing key
-agg.<id> trước khi instance được phép publish. Mọi instance consume recovery cạnh
-tranh, nên sender chết vẫn có bản khác cập nhật commands. Queue riêng có thể chứa
-duplicate trong 60 giây; DB dedup. Recovery giữ tin khi mọi instance tắt lâu hơn
-60 giây, không phụ thuộc queue riêng của instance đã chết. Cần giám sát dung lượng
-recovery khi toàn bộ consumer tắt; không làm thay back-pressure PD-06.
-
-Reply HMAC phải hợp lệ, khớp command/parking/type/actor/correlation. Cập nhật DB
-trước ack; duplicate đồng nhất không ghi đè terminal, reply conflict bị bỏ qua.
-Reply lạ/sai chữ ký không tạo command mới và không được dùng để nhận quyền.
-Node enrich slotCode/status/version và ký reply trong cùng transaction client
-inbox/nghiệp vụ/outbox. Cache chỉ nhận version cao hơn; sự kiện cũ không ghi đè.
-
-Pending Map đăng ký trước durable intent, nhiều waiter cho cùng ID. Một vòng quét
-100 ms dọn timeout/đọc terminal DB, không timer riêng mỗi HTTP request. Shutdown
-giải phóng waiter bằng 202, không khẳng định nghiệp vụ thất bại. PostgreSQL
-LISTEN/NOTIFY báo terminal tới các instance; Socket.IO emit COMMAND_RESULT chỉ
-phòng user từ DB. Mất notify/socket được bù bằng polling GET; notify không phải
-nguồn sự thật hoặc log thông báo bền vững.
+Consumer kiểm chữ ký HMAC, command/correlation/bãi/type/actor; lưu DB trước ack.
+Redelivery sau lỗi notify có thể phát lại COMMAND_RESULT, client đọc kết quả DB.
+Node thêm slot/status/version và ký trong cùng transaction inbox/outbox; cache chỉ
+nhận version cao hơn. PostgreSQL LISTEN/NOTIFY báo các instance; socket chỉ emit
+đến user_id lấy từ commands, không broadcast kết quả nghiệp vụ.
 
 ## API và frontend
 
-COMMAND_MODE=broker mặc định; http giữ nguyên đường cũ để dự phòng/đo so sánh.
-Chuyển reserve POST, cancel DELETE, pay POST ONLINE, giữ permission/shape nghiệp vụ.
-Kết quả broker thêm commandId; HTTP fallback giữ mã/body cũ, không ghi bảng commands.
-
 ```text
-POST   /api/parkings/:id/reservations   Idempotency-Key bắt buộc
-DELETE /api/parkings/:id/reservations/:rid   key tuỳ chọn (fallback ổn định)
-POST   /api/me/sessions/:id/:sid/pay    Idempotency-Key bắt buộc
-GET    /api/commands/:commandId
+POST   /api/parkings/:id/reservations       Idempotency-Key bắt buộc
+DELETE /api/parkings/:id/reservations/:rid   key tùy chọn, fallback ổn định
+POST   /api/me/sessions/:id/:sid/pay         Idempotency-Key bắt buộc
+GET    /api/commands/:commandId             owner hoặc ADMIN
 ```
 
-Có reply trả đúng mã 201/200/409/... cùng body nghiệp vụ + commandId. Chưa có:
+Có kết quả trong REPLY_WAIT_MS: trả mã/body nghiệp vụ 201/200/409/... và commandId.
+Chưa có: HTTP 202, Location trỏ GET và `{commandId,status:PENDING,publishState}`.
+Một pending Map với vòng quét 100 ms; shutdown trả 202 cho waiter, không khẳng định
+thất bại. GET từ bất kỳ instance đọc DB chung, người khác 404, chưa đăng nhập 401;
+không trả payload/actor/chữ ký nội bộ.
 
-```json
-{"commandId":"<userId>:<key>","status":"PENDING","publishState":"AWAITING_RESULT"}
-```
+Frontend commandRequest hiện Đang xử lý sau 202, nhận COMMAND_RESULT và polling
+GET khi mất socket/reload. Nếu ACK lưu intent chưa rõ, form cho thử lại cùng key trong khi tracker vẫn theo dõi ID. Giữ key cho cùng thao tác đang chờ; tracker lưu ID/key/
+fingerprint theo user, không lưu payload hoặc result nhạy cảm. traceparent hợp lệ
+được giữ qua command, reply outbox và reply; không tạo span của PD-24.
 
-HTTP 202 có Location trỏ GET tương ứng. GET từ bất kỳ instance đọc DB chung,
-trả status/result/statusCode/publishState, chỉ owner hoặc ADMIN; người khác 404,
-không có token 401. Không trả request_hash, actor nội bộ hoặc chữ ký.
+## Schema và nâng cấp
 
-Frontend commandRequest chờ terminal, hiện Đang xử lý khi nhận 202 hoặc persistence
-unknown, giữ key cho retry cùng thao tác. Lưu ID/key/fingerprint theo user, không
-lưu payload/biển số/result vào tracker localStorage. Tải lại trang/reconnect socket
-vẫn đọc GET, có một polling loop khi socket bỏ lỡ sự kiện. Banner terminal có nút
-đóng. Đổi payload là thao tác khác/key mới; server vẫn kiểm hash độc lập. Traceparent
-HTTP hợp lệ được giữ qua command/outbox/reply, correlationId không đổi. Không làm
-thay toàn bộ tracing PD-24.
+commands: id, parking_id, type, user_id, status, result JSONB, created_at, updated_at;
+bổ sung status_code, request_hash, payload/actor/envelope JSONB, correlation_id,
+reply_to, publish_state, publish_owner/lease, next_publish_at, attempts, uncertain,
+failure_phase, last_error, reply_hash, slot JSONB. Index pending publish và user.
+aggregator_instances giữ id/owner/lease_until. Không thay schema inbox PD-02.
 
-## Schema, cấu hình và tích hợp node
+Init tạo bảng mới hoặc ADD COLUMN IF NOT EXISTS cho commands tối thiểu đã có;
+không drop/ghi đè kết quả. Row PENDING cũ thiếu metadata giữ UNKNOWN/uncertain,
+không tự publish vì không chứng minh được trước đó đã gửi hay chưa. Phải đối chiếu
+inbox/nguồn gửi trước khi phục hồi những row legacy đó. Migration chạy lặp được.
 
-Migration additive trong aggregator schema.sql: commands có các cột kế hoạch
-id/parking_id/type/user_id/status/result/created_at/updated_at; bổ sung status_code,
-request_hash, payload/actor/envelope JSONB, correlation_id, reply_to, publish_state,
-publish_owner/lease, next_publish_at, attempts, uncertain, failure_phase, last_error,
-reply_hash, slot JSONB. Index pending publish và lịch sử theo user. Bảng
-aggregator_instances giữ lease ID. Không DROP/đổi dữ liệu cũ; không tạo lại inbox.
+Vhost tiếp tục `/`, URI `/%2F`; INTERNAL_KEY thống nhất backend, không commit secret.
+Queue reply cũ khác args: không xóa để né PRECONDITION_FAILED. Dừng publisher liên
+quan, kiểm kê ready/unacked/binding, chuyển có confirm sang đích durable, đối chiếu
+ID/count trước cutover trong cửa sổ bảo trì. Export definitions không sao lưu payload.
+
+Hoàn tác bằng COMMAND_MODE=http cho yêu cầu mới; giữ DB/queues/intents và ít nhất
+một worker broker để xả backlog có kiểm soát. Không DROP commands hoặc purge queue.
+
+## Cấu hình và kiểm thử
 
 ```dotenv
 COMMAND_MODE=broker
@@ -116,55 +113,44 @@ REPLY_WAIT_MS=3000
 COMMAND_TTL_MS=10000
 ```
 
-Vhost tiếp tục `/`, URI `/%2F`, cùng INTERNAL_KEY giữa node/Aggregator. Không commit
-secret thật. Node PD-02 đã có reply outbox/relay; sau nhận dependency áp dụng:
+COMMAND_MODE mặc định broker theo chỉ thị hiện tại và phụ lục C. CI `command-broker`
+kiểm đường broker trên mỗi PR; CI E2E cũ vẫn chạy COMMAND_MODE=http. TTL per-message
+lấy phần deadline còn lại; republish không cấp lại 10 s. PD-06 chưa có: cmd.expired
+và lỗi DLQ chưa cập nhật terminal đầu-cuối; timeout reply không đổi PENDING thành
+EXPIRED, chưa có cam kết deadline tại COMMIT/clock skew.
 
 ```powershell
-git apply --check scripts/pd03-pd02-reply.patch
-git apply scripts/pd03-pd02-reply.patch
-```
-
-Patch chỉ gọi enrichReply trước INSERT outbox trong processor PD-02, không mở
-transaction khác. Kiểm tra apply trên PD-02 commit 238b77692f64b502b4ac5761c9b464dee3c91f5d.
-Khi nhận PD-08, dùng adapter/lifecycle retry-integration của PD-08. Giải quyết xung
-đột publisher bằng giữ HMAC và deadline **đã lưu**, không tạo deadline mới trong
-factory mỗi lần worker publish. Candidate test đã dùng cả ba phần theo hợp đồng này.
-
-Không xoá volume/queue để né PRECONDITION_FAILED. Nếu agg.replies.<id> cũ sai args,
-dừng publisher liên quan, kiểm kê/export, chuyển có confirm tới recovery durable,
-đối chiếu IDs trước thay queue trong cửa sổ bảo trì. Không xoá queue còn tin.
-Rollback: COMMAND_MODE=http, giữ DB/queues/intents và worker phục hồi được kiểm soát;
-không DROP commands hoặc purge reply queues.
-
-## TTL/PD-06 và giới hạn
-
-TTL tổng ký trong envelope: issuedAt/deadlineAt, không đổi khi worker republish.
-Publisher chỉ gửi expiration phần thời gian còn lại. Retry PD-08 bỏ expiration
-trên delay queue nhưng giữ deadline ký; không tự cấp lại 10 giây. Chỉ intent QUEUED
-chưa từng publish chắc chắn quá hạn mới FAILED_TO_SEND/410. SENDING/UNKNOWN hết hạn
-vẫn phải chờ bằng chứng node/PD-06, không suy thất bại từ đồng hồ Aggregator.
-
-PD-06 chưa có: không thêm consumer cmd.expired, chưa tích hợp EXPIRED/FAILED từ
-expired/DLQ thành trạng thái commands. Guard sau chờ khoá DB/clock skew của PD-08
-chưa hoàn chỉnh; không tuyên bố giải quyết hết hạn toàn hệ thống. Kết quả nghiệp vụ
-muộn vẫn được tiếp nhận nếu được xử lý hợp lệ trước hạn; terminal đã xác nhận không
-bị ghi đè. Những điểm chưa thống nhất này được giữ rõ cho PD-06/PD-08 phối hợp.
-
-## Kiểm thử
-
-```powershell
+npm ci --prefix parking-node
+npm ci --prefix aggregator-service
+npm ci --prefix frontend
+npm ci --prefix notification-service
 npm test --prefix parking-node
 npm test --prefix aggregator-service
 npm test --prefix frontend
 npm run build --prefix frontend
-# Docker legacy regression: set COMMAND_MODE=http cho cả compose và test
+
+# Stack riêng, hai Aggregator; broker 5673/15673, aggregator-2 ở 8100.
+$env:COMPOSE_PROJECT_NAME='pd03-review-1101'
+$env:COMPOSE_FILE='docker-compose.yml;tests/pd03-compose.test.yml'
+docker compose build parking-a aggregator frontend notification
+$env:COMMAND_MODE='http'
+$env:PD02_AMQP_URL='amqp://parking:parking@localhost:5673/%2F'
+docker compose up -d --no-build --wait
 node --test tests/e2e.test.mjs
-# Broker candidate phải có PD-02 + PD-08 + patch enrich reply, hai Aggregator
+$env:COMMAND_MODE='broker'
+docker compose up -d --no-build --wait
 $env:PD03_BROKER='1'
+$env:PD03_AMQP_URL='amqp://parking:parking@localhost:5673/%2F'
 node --test tests/command-flow.e2e.mjs
+$env:PD03_HTTP_COMMANDS='1'
+node --test tests/command-inbox-http.test.mjs
+docker compose stop   # giữ volume
 ```
 
-Broker test cần port 8100 của aggregator-2 và AMQP localhost:5673 (override bằng
-PD03_AMQP_URL). Compose project/file lấy từ environment để stop/start đúng stack.
-Thiếu PD03_BROKER=1 sẽ skip rõ ràng. Xem [bằng chứng thật](pd-03-evidence.md),
-[HTTP log](pd-03-http-e2e.log), [broker log](pd-03-broker-e2e.log).
+Tạo .env từ .env.example chỉ lần đầu, không ghi đè cấu hình đang dùng. COMPOSE_FILE
+trên Linux dùng dấu `:` thay `;`. TC51 đo response thật <=3 s và đọc trace/correlation
+trên reply; TC52 kiểm 10 HTTP request/1 hiệu lực; TC54 dừng bãi 5 s; TC62 SIGKILL
+sender trước reply và yêu cầu aggregator-2 đọc DONE thật, có Socket.IO.
+Kết quả mới trong [pd-03-review-2026-11-01.txt](pd-03-review-2026-11-01.txt).
+Các pd-03-*-e2e.log/evidence.md và ảnh ngày 22/10 là bằng chứng lịch sử trên candidate,
+không thay cho kết quả entrypoint thật mới.

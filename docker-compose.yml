@@ -24,9 +24,12 @@ x-node-env: &node-env
   INTERNAL_KEY: ${INTERNAL_KEY:?Thiếu INTERNAL_KEY (chạy cp .env.example .env)}
   RABBITMQ_URL: *amqp
   RESERVATION_MINUTES: ${RESERVATION_MINUTES:-15}
-  COMMAND_MODE: ${COMMAND_MODE:-broker}
   JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}          # PT-05: nhân viên gọi thẳng node khi Aggregator sập
   CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3000}
+  ETCD_ENDPOINTS: ${ETCD_ENDPOINTS:-}
+  ZONE: ${ZONE:-bac}
+  LEASE_TTL_S: ${LEASE_TTL_S:-5}
+  ENABLE_TEST_FAULTS: ${ENABLE_TEST_FAULTS:-0}
 
 services:
   rabbitmq:
@@ -44,12 +47,16 @@ services:
     <<: *rabbit
     profiles: [ha]
     hostname: rabbitmq-2
-    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro, "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"]
+    entrypoint: ["/bin/sh", "/join-wait.sh"]      # lần đầu chờ nút gốc rồi mới vào cụm (xem rabbitmq/join-wait.sh)
+    command: ["rabbitmq-server"]
+    volumes: [rabbitmq-2-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro, ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro, "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"]
   rabbitmq-3:
     <<: *rabbit
     profiles: [ha]
     hostname: rabbitmq-3
-    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro, "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"]
+    entrypoint: ["/bin/sh", "/join-wait.sh"]      # lần đầu chờ nút gốc rồi mới vào cụm (xem rabbitmq/join-wait.sh)
+    command: ["rabbitmq-server"]
+    volumes: [rabbitmq-3-data:/var/lib/rabbitmq, ./rabbitmq/enabled_plugins:/etc/rabbitmq/enabled_plugins:ro, ./rabbitmq/cluster.conf:/etc/rabbitmq/conf.d/20-cluster.conf:ro, ./rabbitmq/quorum.conf:/etc/rabbitmq/conf.d/30-quorum.conf:ro, ./rabbitmq/join-wait.sh:/join-wait.sh:ro, ./rabbitmq/definitions.conf:/etc/rabbitmq/conf.d/40-definitions.conf:ro, "${RABBITMQ_DEFINITIONS_FILE:-./rabbitmq/definitions.json}:/etc/rabbitmq/definitions.json:ro"]
 
   db-a:                                           # PT-02: bản chính của bãi A, có user 'replicator' cho bản sao
     <<: *pg
@@ -72,19 +79,19 @@ services:
     image: nhom16/parking-node
     # READ_DATABASE_URL: chỉ đặt (trong .env) khi bật profile ha. Trỏ tới bản sao không tồn tại thì lần đọc phải chờ
     # kết nối hỏng mới rơi về bản chính -> chậm. Để trống = đọc bản chính.
-    environment: { <<: *node-env, READ_DATABASE_URL: "${A_READ_DATABASE_URL:-}", PARKING_ID: A, PORT: 8001, SLOTS: "CAR:1:10,CAR:2:10,MOTO:1:20", DATABASE_URL: "${A_DATABASE_URL:-postgres://postgres:dev@db-a/parking}" }   # A_DATABASE_URL: failover (runbook-failover.md)
+    environment: { <<: *node-env, NODE_URL: "http://parking-a:8001", READ_DATABASE_URL: "${A_READ_DATABASE_URL:-}", PARKING_ID: A, PORT: 8001, SLOTS: "CAR:1:10,CAR:2:10,MOTO:1:20", DATABASE_URL: "${A_DATABASE_URL:-postgres://postgres:dev@db-a/parking}" }   # A_DATABASE_URL: failover (runbook-failover.md)
     ports: ["8001:8001"]
     depends_on: { db-a: { condition: service_healthy } }
   parking-b:
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, PARKING_ID: B, PORT: 8002, SLOTS: "CAR:1:10,CAR:2:10,CAR:3:10,MOTO:1:30", DATABASE_URL: "postgres://postgres:dev@db-b/parking" }
+    environment: { <<: *node-env, NODE_URL: "http://parking-b:8002", PARKING_ID: B, PORT: 8002, SLOTS: "CAR:1:10,CAR:2:10,CAR:3:10,MOTO:1:30", DATABASE_URL: "postgres://postgres:dev@db-b/parking" }
     ports: ["8002:8002"]
     depends_on: { db-b: { condition: service_healthy } }
   parking-c:
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, PARKING_ID: C, PORT: 8003, SLOTS: "CAR:1:10,CAR:2:5,MOTO:1:15", DATABASE_URL: "postgres://postgres:dev@db-c/parking" }
+    environment: { <<: *node-env, NODE_URL: "http://parking-c:8003", PARKING_ID: C, PORT: 8003, SLOTS: "CAR:1:10,CAR:2:5,MOTO:1:15", DATABASE_URL: "postgres://postgres:dev@db-c/parking" }
     ports: ["8003:8003"]
     depends_on: { db-c: { condition: service_healthy } }
 
@@ -105,6 +112,9 @@ services:
       DEMO_PASSWORD: ${DEMO_PASSWORD:-123456}
       JWT_PRIVATE_KEY_B64: ${JWT_PRIVATE_KEY_B64:-}    # có cặp khoá -> ký RS256 (node tự kiểm); không có -> HS256
       JWT_PUBLIC_KEY_B64: ${JWT_PUBLIC_KEY_B64:-}
+      ETCD_ENDPOINTS: ${ETCD_ENDPOINTS:-}
+      ZONE: ${ZONE:-bac}
+      ENABLE_TEST_FAULTS: ${ENABLE_TEST_FAULTS:-0}
       NODES: >-
         [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875,"publicUrl":"http://localhost:8001"},
          {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002"},
@@ -113,12 +123,15 @@ services:
     depends_on: { db-agg: { condition: service_healthy } }
 
   # --- PT-01: bản Aggregator thứ hai (docker compose --profile ha up -d). Cùng tên mạng "aggregator" nên nginx
-  #     tự chia tải giữa 2 bản; không mở cổng ra ngoài. Demo: docker compose stop aggregator -> web vẫn chạy. ---
+  #     tự chia tải giữa 2 bản. Cổng 8010 chỉ để test TC44 nối socket thẳng vào bản 2.
+  #     Demo: docker compose stop aggregator -> web vẫn chạy. ---
   aggregator-2:
     profiles: [ha]
     image: nhom16/aggregator
     environment: { <<: *agg-env, INSTANCE_ID: "2", AGGREGATOR_ID: "2" }
     networks: { default: { aliases: [aggregator] } }
+    ports:
+    - "8010:8000"
     depends_on: { db-agg: { condition: service_healthy } }
 
   # NV-08: dịch vụ thông báo (nghe parking.events, gửi user.notifications); tắt thì hệ thống vẫn chạy
@@ -138,7 +151,7 @@ services:
     profiles: [extra]
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, PARKING_ID: D, PORT: 8004, SLOT_COUNT: 10, DATABASE_URL: "postgres://postgres:dev@db-d/parking" }
+    environment: { <<: *node-env, NODE_URL: "http://parking-d:8004", PARKING_ID: D, PORT: 8004, SLOT_COUNT: 10, DATABASE_URL: "postgres://postgres:dev@db-d/parking" }
     ports: ["8004:8004"]
     depends_on: { db-d: { condition: service_healthy } }
 
@@ -162,7 +175,83 @@ services:
     ports: ["3001:3000"]
     depends_on: [prometheus]
 
+  # --- PD-09: Cụm etcd 3 nút (docker compose --profile coord up -d) ---
+  etcd-1:
+    image: quay.io/coreos/etcd:v3.5.15
+    profiles: [coord]
+    hostname: etcd-1
+    environment:
+      ETCD_NAME: etcd-1
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd-1:2380
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd-1:2379
+      ETCD_INITIAL_CLUSTER_TOKEN: nhom16-etcd-cluster
+      ETCD_INITIAL_CLUSTER: etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "100"
+    ports: ["2379:2379"]
+    volumes:
+      - etcd-1-data:/etcd-data
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  etcd-2:
+    image: quay.io/coreos/etcd:v3.5.15
+    profiles: [coord]
+    hostname: etcd-2
+    environment:
+      ETCD_NAME: etcd-2
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd-2:2380
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd-2:2379
+      ETCD_INITIAL_CLUSTER_TOKEN: nhom16-etcd-cluster
+      ETCD_INITIAL_CLUSTER: etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "100"
+    ports: ["22379:2379"]
+    volumes:
+      - etcd-2-data:/etcd-data
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
+  etcd-3:
+    image: quay.io/coreos/etcd:v3.5.15
+    profiles: [coord]
+    hostname: etcd-3
+    environment:
+      ETCD_NAME: etcd-3
+      ETCD_DATA_DIR: /etcd-data
+      ETCD_LISTEN_PEER_URLS: http://0.0.0.0:2380
+      ETCD_LISTEN_CLIENT_URLS: http://0.0.0.0:2379
+      ETCD_INITIAL_ADVERTISE_PEER_URLS: http://etcd-3:2380
+      ETCD_ADVERTISE_CLIENT_URLS: http://etcd-3:2379
+      ETCD_INITIAL_CLUSTER_TOKEN: nhom16-etcd-cluster
+      ETCD_INITIAL_CLUSTER: etcd-1=http://etcd-1:2380,etcd-2=http://etcd-2:2380,etcd-3=http://etcd-3:2380
+      ETCD_INITIAL_CLUSTER_STATE: new
+      ETCD_AUTO_COMPACTION_MODE: revision
+      ETCD_AUTO_COMPACTION_RETENTION: "100"
+    ports: ["32379:2379"]
+    volumes:
+      - etcd-3-data:/etcd-data
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+
 volumes:
+  etcd-1-data:
+  etcd-2-data:
+  etcd-3-data:
   db-a-replica-data:
   rabbitmq-data:
   rabbitmq-2-data:

@@ -12,41 +12,44 @@ const save = (pool, saga) => pool.query(
 
 const view = (row) => ({ id: row.id, status: row.status, steps: row.steps, createdAt: row.created_at, updatedAt: row.updated_at });
 
-function makeSagas({ pool, reg, timeoutMs = 3000 }) {
+// timeoutMs: hàm trả timeout hiện tại (PD-11 đổi được qua etcd khi đang chạy)
+function makeSagas({ pool, reg, timeoutMs = () => 3000 }) {
   // Gọi node; trả { status, body } hoặc { status: 0 } nếu không gọi được / timeout (không rõ kết quả).
-  async function call(parkingId, path, opts) {
+  async function call(parkingId, path, opts, fence) {
     const n = reg.get(parkingId);
     if (!n) return { status: 404, body: { error: 'PARKING_NOT_FOUND' } };
     if (n.status === 'OFFLINE') return { status: 503, body: { error: 'PARKING_OFFLINE' } };
     try {
-      const r = await reg.call(n, path, { ms: timeoutMs, ...opts });
+      const r = await reg.call(n, path, { ms: timeoutMs(), ...fence, ...opts });
       return { status: r.status, body: await r.json() };
     } catch {
       return { status: 0 };
     }
   }
 
-  const reserveStep = (saga, i) => {
+  const reserveStep = (saga, i, fence) => {
     const s = saga.steps[i];
     return call(s.parkingId, '/api/reservations', {
       method: 'POST', retry: true,   // an toàn: requestId idempotent
       body: { requestId: `${saga.id}:${i}`, userId: saga.userId, slotCode: s.slotCode, licensePlate: s.licensePlate },
-    });
+    }, fence);
   };
 
-  async function compensate(saga) {
+  async function compensate(saga, fence) {
     saga.status = 'COMPENSATING';
     await save(pool, saga);
     for (let i = saga.steps.length - 1; i >= 0; i--) {
       const s = saga.steps[i];
       if (s.state === 'UNKNOWN') {                      // hỏi lại bằng chính khoá cũ để biết đã tạo hay chưa
-        const r = await reserveStep(saga, i);
+        const r = await reserveStep(saga, i, fence);
+        if (r.body?.error === 'STALE_LEADER') return saga;   // PD-10: đã mất quyền leader, leader mới làm tiếp
         if (r.status === 200 || r.status === 201) Object.assign(s, { state: 'DONE', reservationId: r.body.id });
         else if (r.status === 409 || r.status === 400) s.state = 'FAILED';
         else continue;                                   // vẫn không rõ: để lần khôi phục sau
       }
       if (s.state !== 'DONE') continue;
-      const r = await call(s.parkingId, `/api/reservations/${encodeURIComponent(s.reservationId)}`, { method: 'DELETE' });
+      const r = await call(s.parkingId, `/api/reservations/${encodeURIComponent(s.reservationId)}`, { method: 'DELETE' }, fence);
+      if (r.body?.error === 'STALE_LEADER') return saga;
       if (r.status === 200 || r.status === 404) s.state = 'COMPENSATED';
       await save(pool, saga);
     }
@@ -83,14 +86,20 @@ function makeSagas({ pool, reg, timeoutMs = 3000 }) {
     return { replayed: false, saga: view((await pool.query('SELECT * FROM sagas WHERE id=$1', [saga.id])).rows[0]) };
   }
 
-  // Khởi động lại: bù trừ mọi saga dở dang.
-  async function recover(staleMs = 60_000) {
+  // Khởi động lại: bù trừ mọi saga dở dang. PD-10: leader truyền fencingToken lúc lên leader và isActive;
+  // mất quyền leader thì dừng ngay, lệnh đang gửi mang token cũ nên node từ chối nếu leader mới đã ghi.
+  async function recover(staleMs = 60_000, { fencingToken, isActive = () => true } = {}) {
     // Chỉ saga đứng yên quá `staleMs`: nhiều bản Aggregator dùng chung bảng, saga mới cập nhật là của bản khác đang chạy.
     const rows = (await pool.query(
       `SELECT * FROM sagas WHERE status IN ('RUNNING','COMPENSATING') AND updated_at < now() - make_interval(secs => $1)
        ORDER BY created_at`, [staleMs / 1000])).rows;
-    for (const row of rows) await compensate({ id: row.id, userId: row.user_id, status: row.status, steps: row.steps });
-    return rows.length;
+    let done = 0;
+    for (const row of rows) {
+      if (!isActive()) break;
+      await compensate({ id: row.id, userId: row.user_id, status: row.status, steps: row.steps }, fencingToken ? { fencingToken } : undefined);
+      done++;
+    }
+    return done;
   }
 
   const get = async (id, userId) =>

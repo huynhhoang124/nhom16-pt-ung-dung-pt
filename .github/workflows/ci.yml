@@ -39,8 +39,11 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: "**/package-lock.json" }
       - run: cp .env.example .env
+      - run: node scripts/gen-keys.mjs   # PT-05: khoá RS256 để chạy TC46 (nhân viên gọi thẳng node khi Aggregator sập)
       - run: npm ci
         working-directory: frontend   # e2e dùng socket.io-client của frontend
+      - run: npm ci
+        working-directory: aggregator-service   # PD-02 e2e broker publisher / amqplib
       - run: docker compose up -d --build --wait
         env: { COMMAND_MODE: http }
       - run: node --test tests/e2e.test.mjs
@@ -49,3 +52,28 @@ jobs:
         run: docker compose logs --no-color --tail 200
       - if: always()
         run: docker compose down
+
+  command-broker:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      COMPOSE_PROJECT_NAME: pd03-ci
+      COMPOSE_FILE: docker-compose.yml:tests/pd03-compose.test.yml
+      COMMAND_MODE: broker
+      PD03_BROKER: '1'
+      PD03_AMQP_URL: amqp://parking:parking@localhost:5673/%2F
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: npm, cache-dependency-path: '**/package-lock.json' }
+      - run: cp .env.example .env
+      - run: npm ci --prefix aggregator-service && npm ci --prefix frontend
+      - run: docker compose build parking-a aggregator notification frontend
+      - run: docker compose up -d --no-build --wait
+      - run: node --test tests/command-flow.e2e.mjs
+      - run: PD03_HTTP_COMMANDS=1 node --test tests/command-inbox-http.test.mjs
+      - if: failure()
+        run: docker compose logs --no-color --tail 100
+      - if: always()
+        run: docker compose stop
