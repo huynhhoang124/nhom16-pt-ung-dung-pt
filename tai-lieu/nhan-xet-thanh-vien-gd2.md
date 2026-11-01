@@ -58,7 +58,7 @@ PD-09, PD-11, PD-10 đã merge. PD-14b chưa PR. PD-07 chưa làm.
 6. **PD-09 (lỗi mới) – node sập khi không nối được etcd lúc khởi động.** [index.js:73](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/2b9cb9d/parking-node/src/index.js#L73) gọi `log.warn`, nhưng [log.js:17](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/2b9cb9d/parking-node/src/log.js#L17) chỉ có `info` và `error`. Kết quả: `TypeError: log.warn is not a function`, container thoát với mã 1.
    - Gặp khi `.env` có `ETCD_ENDPOINTS` mà etcd chưa chạy. Đây đúng là tình huống PD-09 phải chịu được.
    - Các chỗ `log.warn?.(...)` ở `registry.js`, `config.js`, `discovery.js` không sập nhưng cảnh báo bị nuốt mất.
-   - Sửa: thêm `warn` vào `log.js` của cả node và aggregator.
+   - ✅ Huynh đã sửa hộ trong [`734860a`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/commit/734860a): thêm `log.warn` vào `log.js` của node và aggregator, kèm test. Luận không cần sửa gì; lần sau thêm hàm log mới thì nhớ kiểm `log.js`.
 7. **PD-14b – TC69 là test giả.** [app.js:120](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/088def2/parking-node/src/app.js#L120) thấy header `x-test-simulate-stale-epoch` thì trả `409` luôn, không đụng DB. → TC69 phải bật lại primary cũ thật rồi ghi qua node.
    - TC69 chạy ngay sau TC68 thì lỗi (`status 0`), vì node A chưa nối lại xong. → Chờ node A sẵn sàng trước khi gửi.
 
