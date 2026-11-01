@@ -58,17 +58,18 @@ async function startFlaky(failures) {
   return { server, url, state };
 }
 
-async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400 } = {}) {
+async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400, zone = 'bac', peerUrl } = {}) {
   const pool = await pglitePool();
   await pool.query(fs.readFileSync(path.join(__dirname, '../src/schema.sql'), 'utf8'));
   await seedUsers(pool, 'pw');
-  const reg = makeRegistry({ internalKey: KEY, timeoutMs, failThreshold: 3 });
-  for (const [id, url] of Object.entries(nodes)) {
+  const reg = makeRegistry({ internalKey: KEY, timeoutMs, failThreshold: 3, zone });
+  for (const [id, value] of Object.entries(nodes)) {
+    const { url, zone: nodeZone } = typeof value === 'string' ? { url: value } : value;
     await pool.query('INSERT INTO parking_nodes(parking_id, name, api_url) VALUES ($1,$2,$3)', [id, `Bãi ${id}`, url]);
-    reg.add({ parking_id: id, name: `Bãi ${id}`, api_url: url });
+    reg.add({ parking_id: id, name: `Bãi ${id}`, api_url: url, zone: nodeZone });
   }
   const cache = new Map();
-  const app = makeApp({ pool, reg, cache, auth: makeAuth('secret'), reserveTimeoutMs });
+  const app = makeApp({ pool, reg, cache, auth: makeAuth('secret'), reserveTimeoutMs, zone, peerUrl });
   const { server, url } = await listen(app);
 
   const call = async (p, { method = 'GET', token, body, key } = {}) => {

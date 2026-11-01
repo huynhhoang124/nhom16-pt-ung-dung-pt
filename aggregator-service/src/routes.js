@@ -8,14 +8,15 @@ const { mountMetrics } = require('./metrics');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
-function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, config, leader }) {
+function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, config, leader,
+  zone = process.env.ZONE ?? 'bac', peerUrl = process.env.REGIONAL_PEER_URL }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
   app.use(withRequestId);
   // PT-01: cho biết request rơi vào bản Aggregator nào (demo cân bằng tải / tắt một bản)
   const instance = process.env.INSTANCE_ID ?? '1';
   app.use((_req, res, next) => { res.set('x-instance', `aggregator-${instance}`); next(); });
-  mountMetrics(app, { reg, leader, instance });   // GET /metrics; nginx không chuyển /metrics ra ngoài
+  const crossZone = mountMetrics(app, { reg, leader, instance });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
   // PD-11: timeout ghi đọc lại mỗi lần gọi (đổi qua etcd là áp dụng ngay cho đặt chỗ, saga, trả tiền)
@@ -120,15 +121,48 @@ function makeApp({ pool, reg, cache, auth, commands, reserveTimeoutMs = 3000, co
   });
 
   // Nghiệp vụ 1: tra cứu toàn hệ thống (scatter–gather, kết quả một phần khi có bãi lỗi)
-  const availability = () => reg.gather((n) => reg.json(n, '/api/availability'));
-  app.get('/api/parkings/availability', async (_req, res) => res.json(await availability()));
+  const localAvailability = async () => Promise.all(reg.ordered()
+    .filter((n) => (n.zone ?? zone) === zone).map(async (n) => {
+      if (n.status === 'OFFLINE') return { parkingId: n.id, status: 'OFFLINE' };
+      try { return { parkingId: n.id, status: n.status, ...(await reg.json(n, '/api/availability')) }; }
+      catch { return { parkingId: n.id, status: 'OFFLINE' }; }
+    }));
+  const availability = async (scope) => {
+    const local = localAvailability();
+    if (scope === 'zone') {
+      const parkings = await local;
+      return { parkings, failed: parkings.filter((p) => p.status === 'OFFLINE').map((p) => p.parkingId) };
+    }
+    const remoteNodes = reg.ordered().filter((n) => (n.zone ?? zone) !== zone);
+    if (!remoteNodes.length) return local;
+    const remote = async () => {
+      if (!peerUrl) return remoteNodes.map((n) => ({ parkingId: n.id, status: 'OFFLINE' }));
+      crossZone.inc();
+      try {
+        const response = await fetch(`${peerUrl}/api/parkings/availability?scope=zone`, {
+          signal: AbortSignal.timeout(config ? config.get('timeoutMs', 2000) : 2000),
+        });
+        if (!response.ok) throw new Error('Vùng khác không phản hồi');
+        const data = await response.json();
+        if (!Array.isArray(data.parkings) || !Array.isArray(data.failed)) throw new Error('Dữ liệu vùng không hợp lệ');
+        const byId = new Map(data.parkings.map((p) => [p.parkingId, p]));
+        return remoteNodes.map((n) => data.failed.includes(n.id) ? { parkingId: n.id, status: 'OFFLINE' }
+          : byId.get(n.id) ?? { parkingId: n.id, status: 'OFFLINE' });
+      } catch { return remoteNodes.map((n) => ({ parkingId: n.id, status: 'OFFLINE' })); }
+    };
+    const [here, there] = await Promise.all([local, remote()]);
+    return [...here, ...there];
+  };
+  app.get('/api/parkings/availability', async (req, res) => res.json(await availability(req.query.scope)));
   // ?type=CAR|MOTO: số chỗ tính theo loại xe đó; ?available=true: chỉ bãi đang chạy còn chỗ.
   app.get('/api/parkings/search', async (req, res) => {
     const { type } = req.query;
     if (type && !['CAR', 'MOTO'].includes(type)) return res.status(400).json({ error: 'type must be CAR or MOTO' });
-    let all = await availability();
+    const result = await availability(req.query.scope);
+    let all = req.query.scope === 'zone' ? result.parkings : result;
     if (type) all = all.map((p) => (p.status !== 'OFFLINE' ? { ...p, ...(p.byType?.[type] ?? { available: 0, total: 0 }) } : p));
-    res.json(req.query.available === 'true' ? all.filter((p) => p.status !== 'OFFLINE' && p.available > 0) : all);
+    all = req.query.available === 'true' ? all.filter((p) => p.status !== 'OFFLINE' && p.available > 0) : all;
+    res.json(req.query.scope === 'zone' ? { parkings: all, failed: result.failed } : all);
   });
 
   // Chi tiết bãi. Bãi OFFLINE: trả bản cache cuối cùng, gắn stale=true (chấp nhận cũ để vẫn sẵn sàng).
