@@ -4,6 +4,7 @@
 # không dùng static_configs [aggregator:8000]: mỗi lần lấy sẽ trúng một bản ngẫu nhiên, số đếm nhảy lung tung.
 global:
   scrape_interval: 5s
+  evaluation_interval: 5s   # PD-25: luật cảnh báo đánh giá mỗi 5 s (mặc định 1 phút, demo chờ lâu)
 scrape_configs:
   - job_name: parking
     static_configs:
