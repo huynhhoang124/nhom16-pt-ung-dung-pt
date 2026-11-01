@@ -102,8 +102,10 @@ function parkingService({ id, zone, port, slots }) {
 export function makeScaleCompose() {
   const services = {
     'db-agg': { ...DB_LIMITS },
-    aggregator: { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
-    'aggregator-2': { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
+    aggregator: { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac', REGIONAL_PEER_URL: 'http://aggregator-nam:8000' } },
+    'aggregator-2': { profiles: ['ha', 'scale'], environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac', REGIONAL_PEER_URL: 'http://aggregator-nam:8000' } },
+    'aggregator-nam-1': { environment: { ETCD_ENDPOINTS: ENDPOINTS } },
+    'aggregator-nam-2': { environment: { ETCD_ENDPOINTS: ENDPOINTS } },
   };
   const volumes = {};
   for (const lot of LOTS) {

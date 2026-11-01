@@ -23,6 +23,12 @@ test('PD-12 sinh đúng ba bãi Nam với DB, node, zone và lease etcd riêng',
     assert.equal(volumes[`db-${key}-data`] !== undefined, true);
   }
   assert.equal(services.aggregator.environment.ZONE, 'bac');
+  assert.equal(services.aggregator.environment.REGIONAL_PEER_URL, 'http://aggregator-nam:8000');
+  assert.deepEqual(services['aggregator-2'].profiles, ['ha', 'scale']);
+  for (const id of ['aggregator-nam-1', 'aggregator-nam-2']) {
+    assert.match(services[id].environment.ETCD_ENDPOINTS, /etcd-3:2379/);
+  }
+  assert.equal(services['parking-d'].environment.NODE_URL, 'http://toxiproxy:18004');
   assert.equal(services['parking-a'].environment.ZONE, 'bac');
   for (const id of ['a', 'b', 'c', 'agg', 'd', 'e', 'f']) {
     assert.equal(services[`db-${id}`].mem_limit, '192m');
