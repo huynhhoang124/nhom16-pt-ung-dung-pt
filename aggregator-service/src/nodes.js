@@ -25,7 +25,7 @@ async function resolveUrl(url) {
   return u.href.replace(/\/$/, '');
 }
 
-function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config }) {
+function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config, leader }) {
   const nodes = new Map();
 
   const getTimeout = () => (config ? config.get('timeoutMs', timeoutMs) : (typeof timeoutMs === 'function' ? timeoutMs() : timeoutMs));
@@ -86,12 +86,25 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   };
 
   // Timeout dùng AbortSignal.timeout: bộ đếm của runtime, không phụ thuộc giờ hệ thống bị chỉnh.
-  const raw = (n, path, { method = 'GET', body, ms } = {}) => {
+  // fencingToken: việc của leader (khôi phục saga) truyền token lúc lên leader, để vẫn gửi token đó sau khi mất quyền
+  // và node từ chối khi đã thấy token mới hơn; không truyền thì lấy token hiện tại.
+  const raw = (n, path, { method = 'GET', body, ms, job, fencingToken } = {}) => {
     const effectiveMs = ms ?? getTimeout();
+    const token = fencingToken ?? leader?.getToken?.();
+    const fencingHeaders = token ? {
+      'x-fencing-token': String(token),
+      'x-fencing-job': job || 'reconcile',
+    } : {};
+
     return fetch((n.target ?? n.url) + path, {
       method,
-      // gửi tiếp mã truy vết sang node (GS-03)
-      headers: { 'content-type': 'application/json', 'x-internal-key': internalKey, ...(requestId() && { 'x-request-id': requestId() }) },
+      // gửi tiếp mã truy vết sang node (GS-03) và fencing token (PD-10)
+      headers: {
+        'content-type': 'application/json',
+        'x-internal-key': internalKey,
+        ...(requestId() && { 'x-request-id': requestId() }),
+        ...fencingHeaders,
+      },
       body: body && JSON.stringify(body),
       signal: AbortSignal.timeout(effectiveMs),
     });
@@ -107,13 +120,21 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   // nhiều client không dồn vào cùng lúc), và CHỈ khi thao tác idempotent: GET (mặc định) hoặc ghi có
   // Idempotency-Key (người gọi truyền retry: true). Xe vào/ra không idempotent nên không bao giờ tự retry.
   // Cả 2 lần thử nằm trong CÙNG ngân sách `ms`: retry không kéo dài thời gian chờ của người dùng.
-  async function call(n, path, { method = 'GET', body, ms, retry = method === 'GET' } = {}) {
+  async function call(n, path, { method = 'GET', body, ms, retry = method === 'GET', job, fencingToken } = {}) {
     const effectiveMs = ms ?? getTimeout();
     const deadline = Date.now() + effectiveMs;
     for (let attempt = 0; ; attempt++) {
       let res;
       try {
-        res = await raw(n, path, { method, body, ms: Math.max(1, deadline - Date.now()) });
+        res = await raw(n, path, { method, body, ms: Math.max(1, deadline - Date.now()), job, fencingToken });
+        if (res.status === 409) {
+          try {
+            const data = await res.clone().json();
+            if (data?.error === 'STALE_LEADER') {
+              leader?.demote?.();
+            }
+          } catch { /* ignore */ }
+        }
         if (res.status < 500) { n.fails = 0; return res; }
       } catch (e) {
         res = e;

@@ -3,6 +3,7 @@
 
 const { calcFee, fromRow } = require('./pricing');
 const { requestId } = require('./log');
+const { fenceIn } = require('./fencing');
 
 // Dừng giao dịch với kết quả nghiệp vụ (409, 404...) thay vì lỗi hệ thống.
 class Abort {
@@ -13,6 +14,9 @@ async function tx(pool, fn) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
+    // PD-10: lệnh của leader (có fencing token) kiểm token trong CÙNG giao dịch với lệnh ghi
+    const fence = await fenceIn(c);
+    if (!fence.ok) throw new Abort(fence.code, { error: fence.error, job: fence.job, token: fence.token });
     const out = await fn(c);
     await c.query('COMMIT');
     return out;
@@ -416,4 +420,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { reserveIn, endReservationIn, payIn, reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };
+module.exports = { tx, reserveIn, endReservationIn, payIn, reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };
