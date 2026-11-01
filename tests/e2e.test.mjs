@@ -825,6 +825,9 @@ const etcdGet = (k) => compose(`exec -T etcd-1 etcdctl get --print-value-only ${
 function resetA() {
   try {
     compose('start db-a');
+    // replica đã thành primary riêng: db-a còn synchronous_standby_names thì mọi lệnh ghi treo chờ standby không tồn tại
+    sql('db-a', 'ALTER SYSTEM RESET synchronous_standby_names');
+    sql('db-a', 'SELECT pg_reload_conf()');
     sql('db-a', 'UPDATE db_epoch SET epoch = 1');
     etcdPut('/nhom16/parking/A/db/epoch', 1);
     etcdPut('/nhom16/parking/A/db/primary', 'postgres://postgres:dev@db-a/parking');
