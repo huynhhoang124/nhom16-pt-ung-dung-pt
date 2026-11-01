@@ -33,6 +33,7 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
     try {
       const out = await commandFlow.execute({ parkingId: req.params.id, type, user: req.user, payload, key, traceparent });
       if (out.code === 202) res.set('location', `/api/commands/${encodeURIComponent(out.body.commandId)}`);
+      if (out.body.error === 'QUEUE_FULL') res.set('Retry-After', '1');
       res.status(out.code).json(out.body);
     } catch (e) {
       const extra = e.commandId ? { commandId: e.commandId, unknown: e.unknown } : {};
@@ -90,6 +91,7 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
       });
       res.status(202).json({ ...result, processed: false });
     } catch (e) {
+      if (e.code === 'QUEUE_FULL') res.set('Retry-After', '1');
       res.status(e.status ?? 500).json({ error: e.code ?? 'INTERNAL_ERROR' });
     }
   });
