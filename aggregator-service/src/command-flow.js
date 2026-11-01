@@ -16,12 +16,12 @@ const response = (row) => ({
 const ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const COMMAND_TYPES = ['reserve', 'cancel', 'pay'];
 // Lỗi chắc chắn chưa gửi được: đánh dấu FAILED ngay; lỗi khác coi như "không rõ đã gửi chưa" và thử lại sau.
-const DEFINITE_SEND_ERRORS = ['BROKER_UNAVAILABLE', 'PARKING_NOT_FOUND', 'PUBLISH_NACKED', 'INVALID_COMMAND',
+const DEFINITE_SEND_ERRORS = ['BROKER_UNAVAILABLE', 'PARKING_NOT_FOUND', 'QUEUE_FULL', 'INVALID_COMMAND',
   'COMMAND_DEADLINE_BEFORE_SEND'];
 const PUBLISH_BATCH = 20;   // giới hạn mỗi lượt để không chiếm event loop khi tồn nhiều lệnh
 
 function makeCommandFlow({
-  pool, publisher, instanceId, waitMs = 3000, ttlMs = 10000, leaseMs = 5000,
+  pool, publisher, instanceId, waitMs = 3000, ttlMs = 10000, leaseMs = 5000, config,
   now = Date.now, onResult = () => {}, afterClaim = async () => {}, afterPublish = async () => {},
 }) {
   if (!ID_RE.test(instanceId ?? '') || instanceId === 'recovery') throw fail('INVALID_AGGREGATOR_ID', 500);
@@ -88,7 +88,7 @@ function makeCommandFlow({
     const actor = { userId: user.sub, role: user.role, ...(user.parkingId && { parkingId: user.parkingId }) };
     const hash = createHash('sha256').update(canonical({ parkingId, type, actor, payload })).digest('hex');
     const issuedAt = now();
-    const envelope = { issuedAt, deadlineAt: issuedAt + ttlMs, ...(traceparent && { traceparent }) };
+    const envelope = { issuedAt, deadlineAt: issuedAt + (config?.get('commandTtlMs', ttlMs) ?? ttlMs), ...(traceparent && { traceparent }) };
     const waiter = wait(id);   // phải đăng ký chờ TRƯỚC khi ghi ý định, vì worker có thể gửi ngay sau đó
 
     try {

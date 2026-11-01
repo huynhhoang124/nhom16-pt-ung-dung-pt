@@ -74,6 +74,10 @@
         "x-single-active-consumer": true
       }
     },
+    { "name": "cmd.A.admin", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum", "x-single-active-consumer": true } },
+    { "name": "cmd.B.admin", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum", "x-single-active-consumer": true } },
+    { "name": "cmd.C.admin", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum", "x-single-active-consumer": true } },
+    { "name": "cmd.dead", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "quorum" } },
     {
       "name": "cmd.expired",
       "vhost": "/",
@@ -85,12 +89,15 @@
     }
   ],
   "bindings": [
+    { "source": "parking.commands", "vhost": "/", "destination": "cmd.A.admin", "destination_type": "queue", "routing_key": "cmd.A.*.admin", "arguments": {} },
+    { "source": "parking.commands", "vhost": "/", "destination": "cmd.B.admin", "destination_type": "queue", "routing_key": "cmd.B.*.admin", "arguments": {} },
+    { "source": "parking.commands", "vhost": "/", "destination": "cmd.C.admin", "destination_type": "queue", "routing_key": "cmd.C.*.admin", "arguments": {} },
     {
       "source": "parking.commands",
       "vhost": "/",
       "destination": "cmd.A",
       "destination_type": "queue",
-      "routing_key": "cmd.A.#",
+      "routing_key": "cmd.A.*",
       "arguments": {}
     },
     {
@@ -98,7 +105,7 @@
       "vhost": "/",
       "destination": "cmd.B",
       "destination_type": "queue",
-      "routing_key": "cmd.B.#",
+      "routing_key": "cmd.B.*",
       "arguments": {}
     },
     {
@@ -106,7 +113,7 @@
       "vhost": "/",
       "destination": "cmd.C",
       "destination_type": "queue",
-      "routing_key": "cmd.C.#",
+      "routing_key": "cmd.C.*",
       "arguments": {}
     },
     {
@@ -122,7 +129,7 @@
     {
       "vhost": "/",
       "name": "command-delivery",
-      "pattern": "^cmd\\.[A-F]$",
+      "pattern": "^cmd\\.[A-F](\\.admin)?$",
       "apply-to": "quorum_queues",
       "priority": 10,
       "definition": {

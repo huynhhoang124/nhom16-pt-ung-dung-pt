@@ -98,9 +98,9 @@ async function main() {
   // PD-03: COMMAND_MODE=broker gửi lệnh qua RabbitMQ và chờ phản hồi; mặc định http giữ đường cũ
   const instanceId = env('INSTANCE_ID', '1');
   const commandMode = env('COMMAND_MODE', 'http');
-  const commands = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'), { signingKey: env('INTERNAL_KEY', 'dev') });
+  const commands = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'), { signingKey: env('INTERNAL_KEY', 'dev'), config });
   const commandFlow = makeCommandFlow({
-    pool, publisher: commands, instanceId,
+    pool, publisher: commands, instanceId, config,
     waitMs: Number(env('REPLY_WAIT_MS', 3000)), ttlMs: Number(env('COMMAND_TTL_MS', 10000)),
   });
   const app = makeApp({

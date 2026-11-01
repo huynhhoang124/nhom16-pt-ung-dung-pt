@@ -36,7 +36,7 @@ function decodeCommand(m, parkingId, internalKey) {
     if (body[k] !== undefined && body[k] !== p[k]) throw new InvalidCommand('PROPERTY_MISMATCH');
   }
   if (p.type !== undefined && p.type !== body.type) throw new InvalidCommand('TYPE_MISMATCH');
-  if (m.fields?.routingKey && m.fields.routingKey !== `cmd.${parkingId}.${body.type}`) throw new InvalidCommand('ROUTING_MISMATCH');
+  if (m.fields?.routingKey && ![`cmd.${parkingId}.${body.type}`, `cmd.${parkingId}.${body.type}.admin`].includes(m.fields.routingKey)) throw new InvalidCommand('ROUTING_MISMATCH');
   for (const k of ['schemaVersion', 'actor', ...META]) {
     if (p.headers?.[k] !== undefined && canonical(p.headers[k]) !== canonical(body[k])) throw new InvalidCommand('HEADER_MISMATCH');
   }
@@ -148,13 +148,16 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
         const closed = new Promise((r) => { s.closed = r; });
         conn.on('error', () => end(s)); conn.on('close', () => end(s));
         if (stopped) { end(s); break; }
-        const ch = await conn.createChannel(); s.ch = ch;
+        s.channels = [];
+        for (const [queue, prefetch] of [[`cmd.${parkingId}`, 16], [`cmd.${parkingId}.admin`, 4]]) {
+        const ch = await conn.createChannel();
+        const entry = { ch }; s.channels.push(entry);
         ch.on('error', () => end(s)); ch.on('close', () => end(s));
-        await ch.checkQueue(`cmd.${parkingId}`); // Topology owned by definitions/policy, not redeclared here.
-        await ch.prefetch(20);
+        await ch.checkQueue(queue); // Topology owned by definitions/policy, not redeclared here.
+        await ch.prefetch(prefetch);
         if (stopped) { end(s); break; }
         if (s.dead) throw new Error('Command channel closed during setup');
-        const { consumerTag } = await ch.consume(`cmd.${parkingId}`, (m) => {
+        const { consumerTag } = await ch.consume(queue, (m) => {
           if (!m) { end(s); return; }
           // SAC chooses a consumer, NOT a serial async callback execution order.
           s.tail = s.tail.then(async () => {
@@ -174,8 +177,9 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
             }
           }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
         }, { noAck: false });
-        s.tag = consumerTag;
-        log.info?.('command consumer ready', { parkingId, consumerTag, prefetch: 20 });
+        entry.tag = consumerTag;
+        log.info?.('command consumer ready', { parkingId, consumerTag, prefetch });
+        }
         await closed;
       } catch (e) {
         log.error('command consumer reconnect', { parkingId, error: e.message });

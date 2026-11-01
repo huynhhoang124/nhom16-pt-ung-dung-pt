@@ -15,6 +15,7 @@ const DEFAULTS = {
   failThreshold: Number(process.env.FAIL_THRESHOLD || 3),
   reserveTimeoutMs: Number(process.env.RESERVE_TIMEOUT_MS || 3000),
   ttlMs: Number(process.env.COMMAND_TTL_MS || 5000),
+  commandTtlMs: Number(process.env.COMMAND_TTL_MS || 10000),
   replyWaitMs: Number(process.env.REPLY_WAIT_MS || 3000),
   healthIntervalMs: Number(process.env.HEALTH_INTERVAL_MS || 5000),
 };
@@ -24,6 +25,7 @@ const VALIDATORS = {
   failThreshold: (v) => Number.isInteger(v) && v >= 1 && v <= 20,
   reserveTimeoutMs: (v) => Number.isInteger(v) && v >= 100 && v <= 60000,
   ttlMs: (v) => Number.isInteger(v) && v >= 100 && v <= 60000,
+  commandTtlMs: (v) => Number.isInteger(v) && v >= 100 && v <= 60000,
   replyWaitMs: (v) => Number.isInteger(v) && v >= 100 && v <= 60000,
   healthIntervalMs: (v) => Number.isInteger(v) && v >= 500 && v <= 60000,
 };
