@@ -75,6 +75,22 @@ async function main() {
     });
   });
 
+  // PD-25: số đo cho Prometheus, viết tay dạng text (2 số, không cần thêm prom-client)
+  app.get('/metrics', (_req, res) => {
+    const st = manager.getStatus();
+    const lines = [
+      '# HELP failover_is_leader 1 nếu bản failover-manager này giữ khoá leader', '# TYPE failover_is_leader gauge',
+      `failover_is_leader{instance_id="${instanceId}"} ${st.isLeader ? 1 : 0}`,
+      '# HELP failover_total Số lần failover thành công do bản này thực hiện', '# TYPE failover_total counter',
+      ...st.parkings.map((p) => `failover_total{instance_id="${instanceId}",parking="${p.parkingId}"} ${p.failovers}`),
+      '# HELP failover_degraded_async 1 nếu bãi đồng bộ đã hạ xuống bất đồng bộ', '# TYPE failover_degraded_async gauge',
+      ...st.parkings.map((p) => `failover_degraded_async{instance_id="${instanceId}",parking="${p.parkingId}"} ${p.degradedToAsync ? 1 : 0}`),
+    ];
+    res.set('content-type', 'text/plain; version=0.0.4').send(`${lines.join('
+')}
+`);
+  });
+
   // Endpoints kiểm thử có kiểm soát lỗi
   if (enableTestFaults) {
     app.post('/api/test/failover/:parkingId', async (req, res) => {

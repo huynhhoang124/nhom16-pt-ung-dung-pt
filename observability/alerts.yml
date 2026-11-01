@@ -1,0 +1,42 @@
+# PD-25: luật cảnh báo. Ngưỡng theo SLO kênh lệnh: lệnh có kết quả trong 3 s (p95), không mất lệnh, luôn có leader.
+groups:
+  - name: nhom16
+    rules:
+      - alert: NodeDown
+        expr: up{job=~"parking|aggregator|failover-manager"} == 0
+        for: 30s
+        labels: { severity: critical }
+        annotations: { summary: "{{ $labels.job }} {{ $labels.instance }} không trả /metrics quá 30 s" }
+      - alert: ParkingNodeOffline
+        expr: min by (node) (parking_node_up) == 0
+        for: 30s
+        labels: { severity: critical }
+        annotations: { summary: "Aggregator thấy bãi {{ $labels.node }} OFFLINE quá 30 s" }
+      - alert: CommandQueueBacklog
+        expr: sum by (queue) (rabbitmq_detailed_queue_messages_ready{queue=~"cmd[.].*"}) > 100
+        for: 1m
+        labels: { severity: warning }
+        annotations: { summary: "Hàng đợi {{ $labels.queue }} tồn {{ $value }} lệnh quá 1 phút" }
+      - alert: CommandDeadLetters
+        expr: sum(increase(cmd_dead_total[5m])) > 0
+        labels: { severity: warning }
+        annotations: { summary: "Có lệnh quá delivery-limit vào cmd.dead trong 5 phút" }
+      - alert: CommandOldestPending
+        expr: max(cmd_oldest_age_seconds) > 10
+        for: 1m
+        labels: { severity: warning }
+        annotations: { summary: "Lệnh PENDING lâu nhất đã {{ $value }} s" }
+      - alert: NoAggregatorLeader
+        expr: sum(aggregator_is_leader) == 0
+        for: 30s
+        labels: { severity: critical }
+        annotations: { summary: "Không bản Aggregator nào giữ leader quá 30 s" }
+      - alert: FencingRejected
+        expr: sum(increase(fencing_rejected_total[5m])) > 0
+        labels: { severity: warning }
+        annotations: { summary: "Node từ chối lệnh của leader cũ (STALE_LEADER) trong 5 phút" }
+      - alert: CommandLatencyHigh
+        expr: histogram_quantile(0.95, sum by (le) (rate(command_duration_seconds_bucket[5m]))) > 3
+        for: 5m
+        labels: { severity: warning }
+        annotations: { summary: "p95 thời gian lệnh {{ $value }} s > 3 s" }

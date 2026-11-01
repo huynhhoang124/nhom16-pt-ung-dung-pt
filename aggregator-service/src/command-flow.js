@@ -63,6 +63,7 @@ function makeCommandFlow({
 
   async function signal(row) {
     if (!terminal(row)) return;
+    require('./metrics').observeCommand(row);   // PD-25: command_duration_seconds
     settle(row.id, row);
     onResult(row);
     await pool.query("SELECT pg_notify('command_results',$1)", [row.id]);

@@ -261,6 +261,7 @@ function makeFailoverManager({
       state.replicaUrl = null;
       state.primaryFailures = 0;
       log.info?.(`[failover-manager] === HOÀN TẤT FAILOVER BÃI ${state.parkingId}! ${oldPrimary} -> ${state.primaryUrl} (epoch ${nextEpoch}) ===`);
+      state.failovers = (state.failovers ?? 0) + 1;   // PD-25: failover_total
       return { ok: true, newPrimary: state.primaryUrl, epoch: nextEpoch };
     } catch (err) {
       log.error?.(`[failover-manager] Lỗi trong lúc thực hiện failover bãi ${state.parkingId}: ${err?.message || err}`);
@@ -356,6 +357,7 @@ function makeFailoverManager({
         replicaFailures: s.replicaFailures,
         degradedToAsync: s.degradedToAsync,
         isFailingOver: s.isFailingOver,
+        failovers: s.failovers ?? 0,
       })),
     };
   }

@@ -19,6 +19,7 @@ function makeExpiredHandler({ pool, notify = () => {}, log = console }) {
       if (r.rows[0]) notify(r.rows[0]);
     } else if (reason === 'delivery_limit') {
       ch.sendToQueue('cmd.dead', m.content, { ...m.properties, persistent: true });
+      require('./metrics').incCmdDead();
     } else {
       log.info?.('bỏ qua tin trong cmd.expired', { messageId: id, reason });
     }

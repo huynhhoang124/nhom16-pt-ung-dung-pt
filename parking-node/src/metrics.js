@@ -27,6 +27,9 @@ function makeRelayLagMetric(registry, client) {
 }
 
 
+// PD-25: tin lệnh RabbitMQ giao lại (consumer trước chết/nack trước khi ack). Module dùng chung, mỗi registry đăng ký lại.
+const cmdRedelivered = new client.Counter({ name: 'cmd_redelivered_total', help: 'Số tin lệnh được RabbitMQ giao lại', registers: [] });
+
 let fencingRejectedCounter = null;
 
 function incFencingRejected(job = 'default') {
@@ -38,6 +41,7 @@ function incFencingRejected(job = 'default') {
 function mountMetrics(app, { pool, parkingId, extra = [] }) {
   const registry = new client.Registry();
   registry.setDefaultLabels({ parking: parkingId });
+  registry.registerMetric(cmdRedelivered);
 
   // PD-10: Đếm số lệnh bị từ chối do stale fencing token
   fencingRejectedCounter = new client.Counter({
@@ -79,4 +83,4 @@ function mountMetrics(app, { pool, parkingId, extra = [] }) {
   });
 }
 
-module.exports = { mountMetrics, makeRelayLagMetric, incFencingRejected };
+module.exports = { mountMetrics, makeRelayLagMetric, incFencingRejected, incRedelivered: () => cmdRedelivered.inc() };

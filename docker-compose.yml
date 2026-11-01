@@ -253,8 +253,14 @@ services:
   prometheus:
     profiles: [obs]
     image: prom/prometheus:v2.55.1
-    volumes: [./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro]
+    volumes: [./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro, ./observability/alerts.yml:/etc/prometheus/alerts.yml:ro]
     ports: ["9090:9090"]
+  # PD-25: nhận cảnh báo từ Prometheus, giao diện :9093
+  alertmanager:
+    profiles: [obs]
+    image: prom/alertmanager:v0.27.0
+    volumes: [./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro]
+    ports: ["9093:9093"]
   grafana:
     profiles: [obs]
     image: grafana/grafana:11.3.0

@@ -214,6 +214,7 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
           if (s.dead) throw new Error('Command channel closed during setup');
           const { consumerTag } = await ch.consume(queue, (m) => {
             if (!m) { end(s); return; }
+            if (m.fields?.redelivered) require('./metrics').incRedelivered();   // PD-25
             // SAC chooses a consumer, NOT a serial async callback execution order.
             s.tail = s.tail.then(async () => {
               if (s.dead || stopped) return;
