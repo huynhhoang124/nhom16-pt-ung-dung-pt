@@ -954,8 +954,9 @@ test('TC-PD21 giới hạn đăng nhập phân tán: 5 lần sai rải qua 2 Agg
   const usersDb = process.env.SHARD ? 'db-users-1' : 'db-agg';   // user2 ở phân mảnh 1 (ring.js)
   const clear = () => sql(usersDb, "DELETE FROM login_buckets WHERE username='user2'");
   const tryLogin = (i, password) => (i % 2 ? agg2 : agg)('/api/auth/login', { method: 'POST', body: { username: 'user2', password } });
-  // Test trước (TC65, TC66) có thể vừa tắt/tạm dừng một bản Aggregator: chờ cả hai sống lại
-  await until('2 Aggregator sẵn sàng', async () => (await agg('/health')).status === 200 && (await agg2('/health')).status === 200, 30_000);
+  // TC65, TC66 tắt aggregator-2 khi xong: bật lại cho test này, xong thì trả về như cũ
+  compose('--profile ha up -d aggregator-2');
+  await until('2 Aggregator sẵn sàng', async () => (await agg('/health')).status === 200 && (await agg2('/health')).status === 200, 60_000);
   clear();
   try {
     for (let i = 0; i < 5; i++) assert.equal((await tryLogin(i, 'sai-mat-khau')).status, 401, `lần sai ${i + 1}`);
@@ -963,6 +964,7 @@ test('TC-PD21 giới hạn đăng nhập phân tán: 5 lần sai rải qua 2 Agg
     assert.equal((await tryLogin(6, process.env.DEMO_PASSWORD ?? '123456')).status, 429);
   } finally {
     clear();
+    compose('--profile ha stop aggregator-2');
   }
 });
 
