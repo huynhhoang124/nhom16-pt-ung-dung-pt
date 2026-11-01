@@ -27,7 +27,7 @@ groups:
         labels: { severity: warning }
         annotations: { summary: "Lệnh PENDING lâu nhất đã {{ $value }} s" }
       - alert: NoAggregatorLeader
-        expr: sum(aggregator_is_leader) == 0
+        expr: sum(aggregator_is_leader) == 0 or absent(aggregator_is_leader)   # absent: mất hết bản Aggregator
         for: 30s
         labels: { severity: critical }
         annotations: { summary: "Không bản Aggregator nào giữ leader quá 30 s" }

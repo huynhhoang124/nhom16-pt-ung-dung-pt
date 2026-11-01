@@ -86,9 +86,7 @@ async function main() {
       '# HELP failover_degraded_async 1 nếu bãi đồng bộ đã hạ xuống bất đồng bộ', '# TYPE failover_degraded_async gauge',
       ...st.parkings.map((p) => `failover_degraded_async{instance_id="${instanceId}",parking="${p.parkingId}"} ${p.degradedToAsync ? 1 : 0}`),
     ];
-    res.set('content-type', 'text/plain; version=0.0.4').send(`${lines.join('
-')}
-`);
+    res.set('content-type', 'text/plain; version=0.0.4').send(`${lines.join('\n')}\n`);
   });
 
   // Endpoints kiểm thử có kiểm soát lỗi
