@@ -4,18 +4,25 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const ENDPOINTS = 'http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379';
+// Cả 6 bãi trong một danh sách. A–C đã có service trong docker-compose.yml nên chỉ ghi đè (base: true);
+// D–F sinh đủ DB + node từ mẫu bên dưới. Bãi vùng Nam đi qua toxiproxy để giả lập trễ liên vùng.
 const LOTS = [
-  { id: 'D', port: 8004, slots: 'CAR:1:10,CAR:2:10' },
-  { id: 'E', port: 8005, slots: 'CAR:1:10,MOTO:1:10' },
-  { id: 'F', port: 8006, slots: 'CAR:1:10,MOTO:1:10' },
+  { id: 'A', zone: 'bac', base: true },
+  { id: 'B', zone: 'bac', base: true },
+  { id: 'C', zone: 'bac', base: true },
+  { id: 'D', zone: 'nam', port: 8004, slots: 'CAR:1:10,CAR:2:10' },
+  { id: 'E', zone: 'nam', port: 8005, slots: 'CAR:1:10,MOTO:1:10' },
+  { id: 'F', zone: 'nam', port: 8006, slots: 'CAR:1:10,MOTO:1:10' },
 ];
+const NEW_LOTS = LOTS.filter((lot) => !lot.base);
+const DB_LIMITS = { command: ['postgres', '-c', 'shared_buffers=32MB'], mem_limit: '192m', shm_size: '64m' };
 
 function postgresService(id) {
   return {
     profiles: ['scale'],
     image: 'postgres:16-alpine',
     environment: { POSTGRES_PASSWORD: 'dev', POSTGRES_DB: 'parking' },
-    command: ['postgres', '-c', 'shared_buffers=32MB'],
+    command: DB_LIMITS.command,
     healthcheck: {
       test: ['CMD-SHELL', 'pg_isready -U postgres -d parking'],
       interval: '3s',
@@ -28,7 +35,7 @@ function postgresService(id) {
   };
 }
 
-function parkingService({ id, port, slots }) {
+function parkingService({ id, zone, port, slots }) {
   const key = id.toLowerCase();
   return {
     profiles: ['scale'],
@@ -41,7 +48,7 @@ function parkingService({ id, port, slots }) {
       JWT_PUBLIC_KEY_B64: '${JWT_PUBLIC_KEY_B64:-}',
       CORS_ORIGIN: '${CORS_ORIGIN:-http://localhost:3000}',
       ETCD_ENDPOINTS: ENDPOINTS,
-      ZONE: 'nam',
+      ZONE: zone,
       LEASE_TTL_S: '${LEASE_TTL_S:-5}',
       PARKING_ID: id,
       PORT: port,
@@ -57,19 +64,18 @@ function parkingService({ id, port, slots }) {
 
 export function makeScaleCompose() {
   const services = {
-    'db-a': { command: ['postgres', '-c', 'shared_buffers=32MB'], mem_limit: '192m', shm_size: '64m' },
-    'db-b': { command: ['postgres', '-c', 'shared_buffers=32MB'], mem_limit: '192m', shm_size: '64m' },
-    'db-c': { command: ['postgres', '-c', 'shared_buffers=32MB'], mem_limit: '192m', shm_size: '64m' },
-    'db-agg': { command: ['postgres', '-c', 'shared_buffers=32MB'], mem_limit: '192m', shm_size: '64m' },
+    'db-agg': { ...DB_LIMITS },
     aggregator: { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
     'aggregator-2': { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
-    'parking-a': { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
-    'parking-b': { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
-    'parking-c': { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac' } },
   };
   const volumes = {};
   for (const lot of LOTS) {
     const id = lot.id.toLowerCase();
+    if (lot.base) {
+      services[`db-${id}`] = { ...DB_LIMITS };
+      services[`parking-${id}`] = { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: lot.zone } };
+      continue;
+    }
     services[`db-${id}`] = postgresService(id);
     services[`parking-${id}`] = parkingService(lot);
     volumes[`db-${id}-data`] = {};
@@ -81,7 +87,7 @@ export function makeScaleCompose() {
     command: ['-host=0.0.0.0', '-config=/config/scale.json'],
     ports: ['8474:8474'],
     volumes: ['./toxiproxy/scale.json:/config/scale.json:ro'],
-    depends_on: LOTS.map(({ id }) => `parking-${id.toLowerCase()}`),
+    depends_on: NEW_LOTS.map(({ id }) => `parking-${id.toLowerCase()}`),
     mem_limit: '64m',
   };
   services['region-latency'] = {
@@ -98,7 +104,7 @@ export function makeScaleCompose() {
 }
 
 export function makeProxyConfig() {
-  return LOTS.map(({ id, port }) => ({
+  return NEW_LOTS.filter((lot) => lot.zone === 'nam').map(({ id, port }) => ({
     name: `parking-${id.toLowerCase()}`,
     listen: `0.0.0.0:${port + 10000}`,
     upstream: `parking-${id.toLowerCase()}:${port}`,

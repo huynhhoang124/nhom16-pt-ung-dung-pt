@@ -59,6 +59,7 @@ async function main() {
     internalKey: env('INTERNAL_KEY', 'dev'),
     config,
     leader,
+    zone: env('ZONE', 'bac'),
     timeoutMs: config.get('timeoutMs'),
     failThreshold: config.get('failThreshold'),
   });

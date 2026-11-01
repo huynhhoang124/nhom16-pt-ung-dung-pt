@@ -202,3 +202,17 @@ test('PD-09 discovery: bãi nạp từ DB với hasLease: false giữ nguyên me
 
   disc.client.close();
 });
+
+test('PD-12 ưu tiên vùng: Aggregator vùng Nam gọi D, E, F trước rồi mới A, B, C', async () => {
+  const reg = makeRegistry({ internalKey: 'dev', zone: 'nam' });
+  for (const [id, zone] of [['A', 'bac'], ['D', 'nam'], ['B', 'bac'], ['F', 'nam'], ['C', 'bac'], ['E', 'nam']]) {
+    const n = reg.add({ parking_id: id, api_url: `http://parking-${id.toLowerCase()}`, zone });
+    n.fails = 0;
+    reg.setStatus(n, 'ONLINE');
+  }
+  assert.deepEqual(reg.ordered().map((n) => n.id), ['D', 'E', 'F', 'A', 'B', 'C']);
+  const called = [];
+  await reg.gather(async (n) => { called.push(n.id); return {}; });
+  assert.deepEqual(called, ['D', 'E', 'F', 'A', 'B', 'C']);
+  assert.deepEqual(makeRegistry({ internalKey: 'dev' }).ordered(), []);
+});

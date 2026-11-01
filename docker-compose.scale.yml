@@ -1,32 +1,5 @@
 {
   "services": {
-    "db-a": {
-      "command": [
-        "postgres",
-        "-c",
-        "shared_buffers=32MB"
-      ],
-      "mem_limit": "192m",
-      "shm_size": "64m"
-    },
-    "db-b": {
-      "command": [
-        "postgres",
-        "-c",
-        "shared_buffers=32MB"
-      ],
-      "mem_limit": "192m",
-      "shm_size": "64m"
-    },
-    "db-c": {
-      "command": [
-        "postgres",
-        "-c",
-        "shared_buffers=32MB"
-      ],
-      "mem_limit": "192m",
-      "shm_size": "64m"
-    },
     "db-agg": {
       "command": [
         "postgres",
@@ -48,17 +21,44 @@
         "ZONE": "bac"
       }
     },
+    "db-a": {
+      "command": [
+        "postgres",
+        "-c",
+        "shared_buffers=32MB"
+      ],
+      "mem_limit": "192m",
+      "shm_size": "64m"
+    },
     "parking-a": {
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
         "ZONE": "bac"
       }
     },
+    "db-b": {
+      "command": [
+        "postgres",
+        "-c",
+        "shared_buffers=32MB"
+      ],
+      "mem_limit": "192m",
+      "shm_size": "64m"
+    },
     "parking-b": {
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
         "ZONE": "bac"
       }
+    },
+    "db-c": {
+      "command": [
+        "postgres",
+        "-c",
+        "shared_buffers=32MB"
+      ],
+      "mem_limit": "192m",
+      "shm_size": "64m"
     },
     "parking-c": {
       "environment": {
