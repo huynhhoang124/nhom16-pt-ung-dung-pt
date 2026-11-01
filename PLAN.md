@@ -212,9 +212,9 @@ Nền: `feature/PD-14b-auto-failover-epoch` (Luận). Lấy `a613d05 c13fc62 512
 
 ### B9 – PD-21 Giới hạn đăng nhập phân tán (issue #39) – sau B4
 
-- [ ] Bảng `login_buckets(username PK, tokens REAL, updated_at TIMESTAMPTZ)` ở phân mảnh users.
-- [ ] `aggregator-service/src/auth.js`: thay `makeLimiter()` (đếm trong RAM) bằng một câu `UPDATE … RETURNING` nguyên tử: nạp lại token theo thời gian, sai thì trừ 1. Giới hạn 5 lần sai trong 15 phút.
-- [ ] Kiểm tra: 4 bản Aggregator, 5 lần sai rải đều → lần thứ 6 bị khoá (e2e). Có unit test.
+- [x] Bảng `login_buckets(username PK, tokens REAL, updated_at TIMESTAMPTZ)` ở phân mảnh users.
+- [x] `aggregator-service/src/auth.js`: thay `makeLimiter()` (đếm trong RAM) bằng một câu `UPDATE … RETURNING` nguyên tử: nạp lại token theo thời gian, sai thì trừ 1. Giới hạn 5 lần sai trong 15 phút.
+- [x] Kiểm tra: 4 bản Aggregator, 5 lần sai rải đều → lần thứ 6 bị khoá (e2e). Có unit test.
 - [ ] PR, merge.
 
 ### B10 – PD-25 Metrics, cảnh báo, dashboard (issue #43) – sau B2, B6

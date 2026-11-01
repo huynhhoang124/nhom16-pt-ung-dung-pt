@@ -948,6 +948,21 @@ test('TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự đ
   }
 );
 
+// --- PD-21: giới hạn đăng nhập dùng chung giữa các bản Aggregator (cần aggregator-2: profile ha) ---
+test('TC-PD21 giới hạn đăng nhập phân tán: 5 lần sai rải qua 2 Aggregator -> lần 6 bị 429 ở cả hai', { ...T, skip: !process.env.HA }, async () => {
+  const usersDb = process.env.SHARD ? 'db-users-1' : 'db-agg';   // user2 ở phân mảnh 1 (ring.js)
+  const clear = () => sql(usersDb, "DELETE FROM login_buckets WHERE username='user2'");
+  const tryLogin = (i, password) => (i % 2 ? agg2 : agg)('/api/auth/login', { method: 'POST', body: { username: 'user2', password } });
+  clear();
+  try {
+    for (let i = 0; i < 5; i++) assert.equal((await tryLogin(i, 'sai-mat-khau')).status, 401, `lần sai ${i + 1}`);
+    assert.equal((await tryLogin(5, process.env.DEMO_PASSWORD ?? '123456')).status, 429);
+    assert.equal((await tryLogin(6, process.env.DEMO_PASSWORD ?? '123456')).status, 429);
+  } finally {
+    clear();
+  }
+});
+
 // --- PD-16: phân mảnh users (SHARD=1, compose thêm docker-compose.shard.yml) ---
 test('TC73 phân mảnh users: tắt db-users-1 -> người ở phân mảnh 2 vẫn đăng nhập và đặt chỗ được', { ...T, skip: !process.env.SHARD }, async () => {
   const on = (db, u) => sql(db, `SELECT count(*) FROM users WHERE username='${u}'`) === '1';

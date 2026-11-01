@@ -206,6 +206,8 @@ async function main() {
           fencingToken: leader.getToken(), isActive: () => leader.isLeader(),
         }).catch((e) => log.error('Khôi phục saga lỗi', { error: e.message }));
       }
+      // PD-21: chỉ leader dọn bucket đăng nhập đã nạp đầy ở mọi phân mảnh users
+      for (const p of users.all()) auth.loginBuckets.cleanup(p).catch((e) => log.error('Dọn login_buckets lỗi', { error: e.message }));
       // Hook chuẩn bị sẵn cho PD-06 (dọn DLQ, lệnh hết hạn, tổng hợp thống kê)
     }, 30000);
   });

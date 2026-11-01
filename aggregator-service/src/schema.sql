@@ -15,6 +15,13 @@ CREATE TABLE IF NOT EXISTS users (
   parking_id    VARCHAR(8)                              -- STAFF chỉ thao tác được bãi của mình
 );
 
+-- PD-21: token bucket đăng nhập sai, nằm cùng phân mảnh với users -> mọi bản Aggregator dùng chung giới hạn
+CREATE TABLE IF NOT EXISTS login_buckets (
+  username   TEXT PRIMARY KEY,
+  tokens     REAL NOT NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
 -- UX-01: toạ độ để hiện bản đồ, tìm bãi gần nhất
 ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS lat DOUBLE PRECISION;
 ALTER TABLE parking_nodes ADD COLUMN IF NOT EXISTS lng DOUBLE PRECISION;

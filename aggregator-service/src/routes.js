@@ -96,14 +96,15 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
     }
   });
 
-  // Sai mật khẩu 5 lần / 15 phút theo username + IP thì khoá tạm (chống dò mật khẩu).
+  // PD-21: sai mật khẩu 5 lần / 15 phút theo username thì khoá tạm, đếm chung ở DB cho mọi bản Aggregator.
   app.post('/api/auth/login', async (req, res) => {
-    const key = `login|${req.body?.username}|${req.ip}`;
-    if (auth.limiter.blocked(key)) return res.status(429).json({ error: 'TOO_MANY_ATTEMPTS' });
-    const out = typeof req.body?.username === 'string' && req.body.username
-      ? await auth.login(users.for(req.body.username), req.body.username, req.body?.password) : null;
-    if (!out) { auth.limiter.hit(key); return res.status(401).json({ error: 'INVALID_CREDENTIALS' }); }
-    auth.limiter.reset(key);
+    const name = req.body?.username;
+    if (typeof name !== 'string' || !name) return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
+    const db = users.for(name);
+    if (!(await auth.loginBuckets.take(db, name))) return res.status(429).json({ error: 'TOO_MANY_ATTEMPTS' });
+    const out = await auth.login(db, name, req.body?.password);
+    if (!out) return res.status(401).json({ error: 'INVALID_CREDENTIALS' });
+    await auth.loginBuckets.reset(db, name);
     res.json(out);
   });
 
