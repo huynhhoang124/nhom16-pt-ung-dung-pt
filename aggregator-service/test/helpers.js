@@ -69,7 +69,7 @@ async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400,
     reg.add({ parking_id: id, name: `Bãi ${id}`, api_url: url, zone: nodeZone });
   }
   const cache = new Map();
-  const app = makeApp({ pool, reg, cache, auth: makeAuth('secret'), reserveTimeoutMs, zone, peerUrl });
+  const app = makeApp({ pool, reg, cache, auth: makeAuth('secret'), reserveTimeoutMs, commandMode: 'http', zone, peerUrl });
   const { server, url } = await listen(app);
 
   const call = async (p, { method = 'GET', token, body, key } = {}) => {
