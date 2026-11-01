@@ -19,7 +19,7 @@ async function pglitePool() {
     const r = params ? await db.query(sql, params) : (await db.exec(sql)).at(-1) ?? { rows: [] };
     return { rows: r.rows, rowCount: r.rows.length || r.affectedRows || 0 };
   };
-  return { query, connect: async () => ({ query, release() {} }) };
+  return { query, connect: async () => ({ query, release() {} }), end: () => db.close() };
 }
 
 const listen = (handler) => new Promise((resolve) => {
@@ -87,4 +87,4 @@ async function startAggregator(nodes, { timeoutMs = 400, reserveTimeoutMs = 400 
   return { pool, reg, cache, server, call, login, app };
 }
 
-module.exports = { startNode, startStub, startFlaky, startAggregator, KEY };
+module.exports = { pglitePool, listen, startNode, startStub, startFlaky, startAggregator, KEY };
