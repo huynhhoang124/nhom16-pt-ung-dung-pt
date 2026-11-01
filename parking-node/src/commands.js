@@ -5,7 +5,9 @@ const os = require('node:os');
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
 const { canonical, verifySignature } = require('./command-signature');
-const { reserveIn, endReservationIn, payIn } = require('./slots');
+const { enrichReply } = require('./reply-envelope');
+const { reserveIn, endReservationIn, confirmSagaIn, payIn } = require('./slots');
+const { checkFencing } = require('./fencing');
 const { normalizePlate, isPlate } = require('./plate');
 const { tokenFor } = require('./gate');
 
@@ -21,14 +23,26 @@ function decodeCommand(m, parkingId, internalKey) {
   try { body = JSON.parse(m.content.toString()); } catch { throw new InvalidCommand('INVALID_JSON'); }
   const p = m.properties ?? {};
   if (!object(body) || !verifySignature(internalKey, body, p)) throw new InvalidCommand('UNTRUSTED_COMMAND');
-  if (body.schemaVersion !== 1 || !['reserve', 'cancel', 'pay'].includes(body.type) || body.parkingId !== parkingId || !object(body.payload)) {
+  if (body.schemaVersion !== 1 || !['reserve', 'cancel', 'pay', 'confirm'].includes(body.type) || body.parkingId !== parkingId || !object(body.payload)) {
     throw new InvalidCommand('INVALID_ENVELOPE');
   }
   if (!object(body.actor) || !str(body.actor.userId, 64) || !/^[A-Za-z0-9_-]+$/.test(body.actor.userId) || !['USER', 'STAFF', 'ADMIN'].includes(body.actor.role)) {
     throw new InvalidCommand('INVALID_ACTOR');
   }
   const prefix = `${body.actor.userId}:`;
-  if (!str(p.messageId) || !p.messageId.startsWith(prefix) || !str(p.messageId.slice(prefix.length), 64) ||
+  const saga = body.payload.sagaId;
+  if (saga !== undefined && (!UUID.test(saga) || body.fencingToken === undefined ||
+      !['reserve', 'cancel', 'confirm'].includes(body.type) ||
+      p.messageId !== `${saga}:${body.payload.step}:${body.type}` ||
+      !Number.isInteger(body.payload.step) || body.payload.step < 0 || body.payload.step > 4 ||
+      (body.type === 'reserve' && body.payload.requestId !== undefined && body.payload.requestId !== p.messageId))) {
+    throw new InvalidCommand('INVALID_SAGA_COMMAND');
+  }
+  if (body.type === 'confirm' && saga === undefined) throw new InvalidCommand('INVALID_SAGA_COMMAND');
+  if (saga !== undefined && body.type !== 'reserve' && !UUID.test(body.payload.reservationId ?? '')) {
+    throw new InvalidCommand('INVALID_SAGA_COMMAND');
+  }
+  if (!str(p.messageId, 128) || (saga === undefined && (!p.messageId.startsWith(prefix) || !str(p.messageId.slice(prefix.length), 64))) ||
       !str(p.correlationId, 255) || !str(p.replyTo) || !/^[A-Za-z0-9._-]+$/.test(p.replyTo) ||
       (p.expiration !== undefined && !/^\d+$/.test(p.expiration))) throw new InvalidCommand('INVALID_PROPERTIES');
   for (const k of ['messageId', 'correlationId', 'replyTo', 'expiration']) {
@@ -54,6 +68,7 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
       (b.requestId !== undefined && b.requestId !== env.messageId) ||
       (b.paymentKey !== undefined && b.paymentKey !== env.messageId)) return error(403, 'IDENTITY_MISMATCH');
   if (actor.role === 'STAFF' && actor.parkingId !== parkingId) return error(403, 'FORBIDDEN');
+  if (b.sagaId && (!['USER', 'ADMIN'].includes(actor.role) || env.fencingToken === undefined)) return error(403, 'FORBIDDEN');
   if (env.type === 'reserve') {
     if (!['USER', 'ADMIN'].includes(actor.role)) return error(403, 'FORBIDDEN');
     if (!str(b.slotCode) || !str(b.licensePlate)) return error(400, 'INVALID_RESERVATION');
@@ -66,9 +81,11 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
     if (out.code < 300) out.body = { ...out.body, qrToken: tokenFor(qrSecret, parkingId, out.body) };
     return out;
   }
-  if (env.type === 'cancel') {
+  if (env.type === 'cancel' || env.type === 'confirm') {
     if (!UUID.test(b.reservationId ?? '')) return error(404, 'RESERVATION_NOT_ACTIVE');
-    return endReservationIn(c, parkingId, b.reservationId, 'CANCELLED', actor.role === 'USER' ? actor.userId : undefined);
+    if (env.type === 'confirm') return confirmSagaIn(c, b.reservationId, actor.userId, b.sagaId, b.step);
+    return endReservationIn(c, parkingId, b.reservationId, 'CANCELLED',
+      actor.role === 'USER' || b.sagaId ? actor.userId : undefined, b.sagaId, b.step);
   }
   if (!['USER', 'ADMIN'].includes(actor.role)) return error(403, 'FORBIDDEN');
   if (!UUID.test(b.sessionId ?? '')) return error(404, 'SESSION_NOT_FOUND');
@@ -83,9 +100,16 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
+      // Token và ghi nghiệp vụ nằm trong cùng giao dịch inbox.
+      const fence = await checkFencing(c, env.payload.sagaId ? 'reconcile' : 'default', env.fencingToken);
+      let out;
+      if (!fence.ok) {
+        // Không lưu lỗi token cũ vào inbox: leader mới phải được gửi lại cùng messageId.
+        await c.query('ROLLBACK');
+        return { code: fence.code, body: { error: fence.error }, messageId: env.messageId };
+      }
       const inserted = await c.query(`INSERT INTO inbox_messages(message_id, command_type, request_hash)
         VALUES ($1,$2,$3) ON CONFLICT (message_id) DO NOTHING RETURNING message_id`, [env.messageId, env.type, hash]);
-      let out;
       if (!inserted.rowCount) {
         const prior = (await c.query('SELECT command_type, request_hash, result, status_code FROM inbox_messages WHERE message_id=$1', [env.messageId])).rows[0];
         if (!prior) throw new Error('Inbox row disappeared');
@@ -104,6 +128,7 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         actor: env.actor, statusCode: out.code, result: out.body, ...metadata };
       const properties = { messageId: randomUUID(), correlationId: env.correlationId, type: 'COMMAND_RESULT',
         headers: { schemaVersion: 1, ...metadata, causationId: env.causationId ?? env.messageId } };
+      await enrichReply(c, env, payload, properties, internalKey);
       await c.query('INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties) VALUES ($1,$2,$3,$4)',
         [env.messageId, env.replyTo, payload, properties]);
       await c.query('COMMIT');

@@ -46,14 +46,20 @@ CREATE TABLE IF NOT EXISTS reservations (
   end_time      TIMESTAMPTZ NOT NULL,                 -- hết khung giờ đã đặt (NV-01)
   expire_time   TIMESTAMPTZ NOT NULL,                 -- quá giờ này chưa đến = no-show
   status        VARCHAR(12) NOT NULL DEFAULT 'ACTIVE'
-                CHECK (status IN ('ACTIVE','USED','DONE','CANCELLED','EXPIRED')),
+                CHECK (status IN ('PENDING_SAGA','ACTIVE','USED','DONE','CANCELLED','EXPIRED')),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (end_time > start_time),
   -- Lưới đỡ ở tầng DB: trên cùng một slot, các lượt đặt còn hiệu lực không được chồng giờ.
   -- Thay cho "mỗi slot 1 reservation ACTIVE" của bản cơ bản. DB cũ cần docker compose down -v.
   CONSTRAINT ex_no_overlap EXCLUDE USING gist
-    (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('ACTIVE','USED'))
+    (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('PENDING_SAGA','ACTIVE','USED'))
 );
+ALTER TABLE reservations DROP CONSTRAINT IF EXISTS reservations_status_check;
+ALTER TABLE reservations ADD CONSTRAINT reservations_status_check
+  CHECK (status IN ('PENDING_SAGA','ACTIVE','USED','DONE','CANCELLED','EXPIRED'));
+ALTER TABLE reservations DROP CONSTRAINT IF EXISTS ex_no_overlap;
+ALTER TABLE reservations ADD CONSTRAINT ex_no_overlap EXCLUDE USING gist
+  (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('PENDING_SAGA','ACTIVE','USED'));
 
 -- Vừa là lịch sử sự kiện, vừa là OUTBOX: ghi cùng giao dịch với dữ liệu, relay gửi lên broker sau
 ALTER TABLE reservations ADD COLUMN IF NOT EXISTS warned_at TIMESTAMPTZ;   -- NV-08: đã báo sắp hết giờ giữ chỗ

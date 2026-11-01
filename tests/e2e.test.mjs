@@ -712,6 +712,8 @@ test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm l
   { ...T, skip: !process.env.COORD },
   async () => {
     try {
+      // PD-19: 2 bản vùng Nam cũng tranh leader; tạm dừng để test chỉ có 2 bản vùng Bắc
+      if (SCALE) compose('stop aggregator-nam-1 aggregator-nam-2');
       // 1. Khởi động bản Aggregator thứ 2
       compose('--profile ha up -d aggregator-2');
       await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
@@ -749,6 +751,7 @@ test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm l
 
       console.log('TC65 - PASS: Chuyển giao Leader thành công khi Leader cũ dừng');
     } finally {
+      if (SCALE) compose('start aggregator-nam-1 aggregator-nam-2');
       compose('start aggregator');
       compose('--profile ha stop aggregator-2');
     }
@@ -759,6 +762,8 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
   { ...T, skip: !process.env.COORD },
   async () => {
     try {
+      // PD-19: 2 bản vùng Nam cũng tranh leader; tạm dừng để test chỉ có 2 bản vùng Bắc
+      if (SCALE) compose('stop aggregator-nam-1 aggregator-nam-2');
       // 1. Khởi động bản Aggregator thứ 2
       compose('--profile ha up -d aggregator-2');
       await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
@@ -807,6 +812,7 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
 
       console.log('TC66 - PASS: Node từ chối lệnh từ Leader cũ do Fencing Token cũ, bảo vệ chống split-brain');
     } finally {
+      if (SCALE) compose('start aggregator-nam-1 aggregator-nam-2');
       compose('--profile ha stop aggregator-2');
     }
   }
@@ -918,3 +924,39 @@ test('TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự đ
     }
   }
 );
+
+// --- PD-07: saga đặt nhiều bãi qua broker (COMMAND_MODE=broker cho cả compose và test) ---
+const BROKER = process.env.COMMAND_MODE === 'broker';
+const groupBooking = async (token, items) =>
+  agg('/api/group-reservations', { method: 'POST', token, key: `e2e-saga-${randomUUID()}`, body: { items } });
+
+test('TC75 saga 3 bãi qua broker: mọi bước giữ chỗ rồi xác nhận, saga COMPLETED', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const items = [];
+  for (const id of ['A', 'B', 'C']) items.push({ parkingId: id, slotCode: await freeSlot(id), licensePlate: plate() });
+  const r = await groupBooking(token, items);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.status, 'COMPLETED', JSON.stringify(r.body));
+  for (const [i, step] of r.body.steps.entries()) {
+    assert.ok(step.reservationId, `bước ${i} thiếu reservationId`);
+    undo.push(() => node(step.parkingId, `/api/reservations/${step.reservationId}`, { method: 'DELETE' }));
+    const st = sql(`db-${step.parkingId.toLowerCase()}`, `SELECT status FROM reservations WHERE id='${step.reservationId}'`);
+    assert.equal(st, 'ACTIVE', `bãi ${step.parkingId}`);
+  }
+});
+
+test('TC76 saga qua broker: bước 3 lỗi -> bù trừ 2 bước trước, không còn chỗ giữ', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const items = [
+    { parkingId: 'A', slotCode: await freeSlot('A'), licensePlate: plate() },
+    { parkingId: 'B', slotCode: await freeSlot('B'), licensePlate: plate() },
+    { parkingId: 'C', slotCode: 'KHONG-CO', licensePlate: plate() },
+  ];
+  const r = await groupBooking(token, items);
+  assert.equal(r.body.status, 'FAILED', JSON.stringify(r.body));
+  for (const step of r.body.steps.slice(0, 2)) {
+    assert.equal(step.state, 'COMPENSATED', JSON.stringify(step));
+    const st = sql(`db-${step.parkingId.toLowerCase()}`, `SELECT status FROM reservations WHERE id='${step.reservationId}'`);
+    assert.equal(st, 'CANCELLED');
+  }
+});

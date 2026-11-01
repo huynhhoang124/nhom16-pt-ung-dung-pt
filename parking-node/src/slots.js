@@ -99,9 +99,9 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     }
     if (!slot) throw new Abort(409, { error: 'SLOT_TAKEN' });
     const r = await c.query(
-      `INSERT INTO reservations(request_id, user_id, slot_id, license_plate, start_time, end_time, expire_time)
-       VALUES ($1,$2,$3,$4, $5::timestamptz, $5::timestamptz + make_interval(mins => $6), $5::timestamptz + make_interval(mins => $7)) RETURNING *`,
-      [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes]);
+      `INSERT INTO reservations(request_id, user_id, slot_id, license_plate, start_time, end_time, expire_time, status)
+       VALUES ($1,$2,$3,$4, $5::timestamptz, $5::timestamptz + make_interval(mins => $6), $5::timestamptz + make_interval(mins => $7), $8) RETURNING *`,
+      [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes, input.sagaId ? 'PENDING_SAGA' : 'ACTIVE']);
     if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', slot.version, licensePlate, { userId, reservationId: r.rows[0].id });
     return { code: 201, body: { ...r.rows[0], slot_code: slotCode } };
   }, async (e) => {
@@ -243,18 +243,20 @@ const listSessions = async (pool, { plate, userId, from, to } = {}) => (await po
    ORDER BY ps.entered_at DESC LIMIT 200`, [plate || null, userId || null, from || null, to || null])).rows;
 
 // Kết thúc một reservation ACTIVE (huỷ hoặc hết hạn): không xoá cứng, đổi status (dấu vết để đối soát).
-function endReservationIn(c, parkingId, id, status, userId) {
+function endReservationIn(c, parkingId, id, status, userId, sagaId, step) {
   return business(c, async () => {
     const r = await c.query(
-      `UPDATE reservations SET status=$2 WHERE id=$1 AND status='ACTIVE'
-       AND ($3::text IS NULL OR user_id=$3) RETURNING slot_id, license_plate, start_time, user_id`, [id, status, userId ?? null]);
+      `UPDATE reservations SET status=$2 WHERE id=$1 AND status IN ('ACTIVE','PENDING_SAGA')
+       AND ($3::text IS NULL OR user_id=$3)
+       AND ($4::text IS NULL OR request_id=$4 || ':' || $5::int || ':reserve')
+       RETURNING slot_id, license_plate, start_time, user_id`, [id, status, userId ?? null, sagaId ?? null, step ?? null]);
     if (!r.rowCount) throw new Abort(404, { error: 'RESERVATION_NOT_ACTIVE' });
     // Chỉ trả slot khi lượt này là lượt đang giữ chỗ (không còn lượt ACTIVE nào giờ sớm hơn).
     // Huỷ lượt đặt cho ngày mai không được nhả chỗ đang giữ cho người khác hôm nay.
     const s = await c.query(
       `UPDATE parking_slots SET status='AVAILABLE', version=version+1, updated_at=now()
        WHERE id=$1 AND status='RESERVED'
-         AND NOT EXISTS (SELECT 1 FROM reservations WHERE slot_id=$1 AND status='ACTIVE' AND start_time < $2)
+         AND NOT EXISTS (SELECT 1 FROM reservations WHERE slot_id=$1 AND status IN ('ACTIVE','PENDING_SAGA') AND start_time <= $2)
        RETURNING slot_code, version`, [r.rows[0].slot_id, r.rows[0].start_time]);
     if (s.rowCount) {
       await emit(c, parkingId, status, s.rows[0].slot_code, 'AVAILABLE', s.rows[0].version, r.rows[0].license_plate,
@@ -266,6 +268,16 @@ function endReservationIn(c, parkingId, id, status, userId) {
 
 function endReservation(pool, parkingId, id, status, userId) {
   return tx(pool, (c) => endReservationIn(c, parkingId, id, status, userId));
+}
+
+function confirmSagaIn(c, id, userId, sagaId, step) {
+  return business(c, async () => {
+    const r = await c.query(
+      `UPDATE reservations SET status='ACTIVE' WHERE id=$1 AND user_id=$2
+       AND status='PENDING_SAGA' AND request_id=$3 || ':' || $4::int || ':reserve' RETURNING id`, [id, userId, sagaId, step]);
+    if (!r.rowCount) throw new Abort(404, { error: 'RESERVATION_NOT_PENDING_SAGA' });
+    return { code: 200, body: { id, status: 'ACTIVE' } };
+  });
 }
 
 // Hết hạn theo đồng hồ DB của CHÍNH bãi này (một nguồn thời gian duy nhất, không tin giờ client).
@@ -428,4 +440,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { tx, reserveIn, endReservationIn, payIn, reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };
+module.exports = { tx, reserveIn, endReservationIn, confirmSagaIn, payIn, reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };

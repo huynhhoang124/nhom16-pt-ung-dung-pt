@@ -9,6 +9,10 @@ function mountMetrics(app, { reg, leader, instance = process.env.INSTANCE_ID ?? 
     labelNames: ['method', 'route', 'code'], buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5], registers: [registry],
   });
 
+  const crossZone = new client.Counter({
+    name: 'cross_zone_requests_total', help: 'Số request gửi sang Aggregator vùng khác', registers: [registry],
+  });
+
   // PD-10: Trạng thái leader của bản Aggregator này
   new client.Gauge({
     name: 'aggregator_is_leader',
@@ -38,6 +42,7 @@ function mountMetrics(app, { reg, leader, instance = process.env.INSTANCE_ID ?? 
     res.set('content-type', registry.contentType);
     res.end(await registry.metrics());
   });
+  return crossZone;
 }
 
 module.exports = { mountMetrics };
