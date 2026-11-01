@@ -14,15 +14,25 @@ async function tx(pool, fn) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
+    // PD-14b: DB không khớp epoch trên etcd (primary cũ sống lại) thì từ chối ghi
+    if (typeof pool.checkEpoch === 'function') await pool.checkEpoch(c);
     // PD-10: lệnh của leader (có fencing token) kiểm token trong CÙNG giao dịch với lệnh ghi
     const fence = await fenceIn(c);
     if (!fence.ok) throw new Abort(fence.code, { error: fence.error, job: fence.job, token: fence.token });
     const out = await fn(c);
+    // Kiểm lại trước COMMIT: giao dịch chậm qua lúc failover không được commit vào primary cũ
+    if (typeof pool.checkEpoch === 'function') await pool.checkEpoch(c);
     await c.query('COMMIT');
     return out;
   } catch (e) {
     await c.query('ROLLBACK');
     if (e instanceof Abort) return { code: e.code, body: e.body };
+    if (e.code === 'ETCD_UNREACHABLE' || e.status === 503) {
+      return { code: 503, body: { error: 'ETCD_UNREACHABLE', message: e.message, ...e.details } };
+    }
+    if (e.code === 'STALE_DB_EPOCH' || e.status === 409) {
+      return { code: 409, body: { error: 'STALE_DB_EPOCH', message: e.message, ...e.details } };
+    }
     throw e;
   } finally {
     c.release();

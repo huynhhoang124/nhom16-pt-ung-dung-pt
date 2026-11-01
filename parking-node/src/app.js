@@ -205,7 +205,8 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
 
   app.use((err, _req, res, _next) => {
     log.error('lỗi xử lý request', { error: err.message, stack: err.stack });
-    res.status(500).json({ error: 'INTERNAL_ERROR' });
+    const status = (typeof err.status === 'number' && err.status >= 400 && err.status < 600) ? err.status : 500;
+    res.status(status).json({ error: err.code || 'INTERNAL_ERROR', message: err.message });
   });
   return app;
 }
