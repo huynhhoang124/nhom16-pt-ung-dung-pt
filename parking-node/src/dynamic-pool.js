@@ -14,7 +14,8 @@ async function makeDynamicPool({
   log = console,
   poolFactory = (opts) => new Pool(opts),
   etcdClient = null,
-  watchWindowMs = Number(process.env.ETCD_WATCH_WINDOW_MS || 3000),
+  // Phải nhỏ hơn FAILOVER_WAIT_WINDOW_MS của failover-manager (6000). 3 s quá sát: máy tải nặng, etcd trả chậm -> 503 giả
+  watchWindowMs = Number(process.env.ETCD_WATCH_WINDOW_MS || 5000),
 } = {}) {
   // Tương thích ngược 100% khi không có etcd
   if (!etcdEndpoints && !etcdClient) {
