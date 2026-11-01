@@ -4,7 +4,7 @@
 //   node scripts/barrier.mjs A --qr <token> enter      (quét QR của đặt chỗ, NV-05)
 //   node scripts/barrier.mjs A A05 exit [cash]     (cash = thu tiền mặt rồi cho ra; chưa trả thì node trả 402 kèm số tiền)
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
-const PORTS = { A: 8001, B: 8002, C: 8003, D: 8004 };
+const PORTS = { A: 8001, B: 8002, C: 8003, D: 8004, E: 8005, F: 8006 };
 const args = process.argv.slice(2);
 const parkingId = args[0];
 // Quét QR: node scripts/barrier.mjs A --qr <token> <enter|exit>
@@ -14,7 +14,7 @@ const cash = action === 'exit' && arg === 'cash';
 const plate = action === 'enter' ? arg : undefined;
 
 if (!PORTS[parkingId] || !(slot || qr) || !['enter', 'exit'].includes(action)) {
-  console.log('Cách dùng: node scripts/barrier.mjs <A|B|C|D> <mã slot> enter [biển số]  |  ... exit [cash]');
+  console.log('Cách dùng: node scripts/barrier.mjs <A|B|C|D|E|F> <mã slot> enter [biển số]  |  ... exit [cash]');
   console.log('           node scripts/barrier.mjs <A|B|C|D> --qr <mã QR> <enter|exit>');
   process.exit(1);
 }
