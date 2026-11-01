@@ -93,7 +93,7 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
   return payIn(c, { sessionId: b.sessionId, method: 'ONLINE', paymentKey: env.messageId, userId: actor.userId });
 }
 
-function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}` }) {
+function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now }) {
   return async (m) => {
     const env = decodeCommand(m, parkingId, internalKey);
     const hash = createHash('sha256').update(canonical({ type: env.type, parkingId, actor: env.actor, payload: env.payload })).digest('hex');
@@ -117,6 +117,11 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
           ? { code: 422, body: { error: 'IDEMPOTENCY_KEY_REUSED' } }
           : { code: prior.status_code, body: prior.result };
         if (out.code == null || out.body == null) throw new Error('Incomplete inbox result');
+      } else if (Number.isSafeInteger(env.deadlineAt) && now() > env.deadlineAt) {
+        // PD-06: TTL của RabbitMQ chỉ tính lúc tin nằm trong queue; tin đã prefetch rồi chờ s.tail có thể quá hạn.
+        // Không áp dụng nữa, lưu kết quả 410 vào inbox để gửi lại cùng messageId cũng nhận đúng kết quả này.
+        out = { code: 410, body: { error: 'COMMAND_EXPIRED' } };
+        await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
       } else {
         out = await dispatch(c, env, { parkingId, reservationMinutes, qrSecret });
         // Normalize Date values once: first delivery and replay return identical JSON.

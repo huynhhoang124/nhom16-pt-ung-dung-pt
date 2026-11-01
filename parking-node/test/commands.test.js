@@ -216,3 +216,22 @@ test('PD-06 thiếu hàng đợi admin: ghi log một lần, consumer hàng thư
   assert.equal(infos.filter((m) => m.includes('quản trị')).length, 1);
   await consumer.stop();
 });
+
+test('PD-06 lệnh đã prefetch nhưng quá deadlineAt: không áp dụng, trả 410 và lưu vào inbox', async (t) => {
+  const pool = await makePool('A', 5); t.after(() => pool.db.close());
+  let clock = Date.now();
+  const run = makeCommandProcessor({ pool, parkingId: 'A', internalKey: KEY, now: () => clock });
+  const fresh = await run(message('fresh', 'reserve', undefined, { deadlineAt: clock + 10_000 }));
+  assert.equal(fresh.code, 201);
+  // tin thứ hai đã được giao (prefetch) nhưng chờ tin trước xử lý xong mới tới lượt, lúc đó đã quá hạn
+  const late = message('late', 'reserve', { slotCode: 'A02', licensePlate: '30A-123.45' }, { deadlineAt: clock + 1000 });
+  clock += 5000;
+  const out = await run(late);
+  assert.equal(out.code, 410);
+  assert.deepEqual(out.body, { error: 'COMMAND_EXPIRED' });
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM reservations')).n, 1);
+  assert.equal((await run(late)).code, 410);   // gửi lại cùng messageId: trả lại kết quả đã lưu
+  const replies = (await pool.query("SELECT payload FROM command_reply_outbox WHERE command_id LIKE '%:late'")).rows;
+  assert.equal(replies.length, 2);
+  assert.equal(replies[0].payload.statusCode, 410);
+});
