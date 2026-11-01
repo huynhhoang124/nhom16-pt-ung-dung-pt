@@ -129,18 +129,18 @@ Nền: `feature/PD-14a-db-replication-clean` (`23d9fbc 23d5ee0 3d53169`, Loan).
 ### B4 – PD-16 Phân mảnh `db-users` (issue #34) – sau B2
 
 - [ ] Thiết kế nửa trang vào #34.
-- [ ] `aggregator-service/src/ring.js`:
+- [x] `aggregator-service/src/ring.js`:
   - Băm `sha1(username.toLowerCase())`, lấy 4 byte đầu thành số trên vòng 2³².
   - 128 nút ảo mỗi phân mảnh.
   - Hàm `shardFor`, `addShard`, `removeShard`.
-- [ ] Compose: `db-users-1`, `db-users-2`, mỗi cái có replica (cùng mẫu B3). Biến `USERS_DATABASE_URLS` là danh sách URL phân cách bằng dấu phẩy.
-- [ ] Aggregator: mỗi phân mảnh một `Pool`, thêm hàm `usersPool(username)`. Chuyển sang pool theo người dùng:
+- [x] Compose: `db-users-1`, `db-users-2`, mỗi cái có replica (cùng mẫu B3). Biến `USERS_DATABASE_URLS` là danh sách URL phân cách bằng dấu phẩy.
+- [x] Aggregator: mỗi phân mảnh một `Pool`, thêm hàm `usersPool(username)`. Chuyển sang pool theo người dùng:
   - `users` (`auth.js`, kể cả `seedUsers`).
   - `commands` (B2).
   - `sagas` (`saga.js`).
   - Các bảng chung khác giữ ở `db-agg`.
-- [ ] `scripts/them-phan-manh.mjs`: ghi đôi → chép → đối chiếu số lượng và checksum → chuyển đọc → xoá bản cũ. Có `--dry-run`.
-- [ ] Kiểm tra:
+- [x] `scripts/them-phan-manh.mjs`: ghi đôi → chép → đối chiếu số lượng và checksum → chuyển đọc → xoá bản cũ. Có `--dry-run`.
+- [x] Kiểm tra:
   - TC72 (`aggregator-service/test/ring.test.js`): 10 000 username lệch ≤ 10%; thêm phân mảnh 3 thì 30–36% khoá phải chuyển.
   - TC73 (e2e): `stop db-users-1` → người ở phân mảnh 2 vẫn đăng nhập và đặt chỗ được.
   - e2e cũ đạt.
