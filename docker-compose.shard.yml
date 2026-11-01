@@ -1,5 +1,6 @@
 # PD-16: phân mảnh bảng users theo username (vòng băm ring.js). Bảng commands, sagas vẫn ở db-agg.
 # docker compose -f docker-compose.yml -f docker-compose.shard.yml up -d
+# Mọi bản Aggregator (kể cả aggregator-nam-* của profile scale) phải cùng USERS_DATABASE_URLS.
 # db-users-3 (profile shard3) chỉ dùng khi tập thêm phân mảnh: node scripts/them-phan-manh.mjs
 x-pg: &pg
   image: postgres:16-alpine
@@ -45,6 +46,13 @@ services:
     environment: { USERS_DATABASE_URLS: "${USERS_DATABASE_URLS:-postgres://postgres:dev@db-users-1/parking,postgres://postgres:dev@db-users-2/parking}" }
     depends_on: { db-users-1: { condition: service_healthy }, db-users-2: { condition: service_healthy } }
   aggregator-2:
+    environment: { USERS_DATABASE_URLS: "${USERS_DATABASE_URLS:-postgres://postgres:dev@db-users-1/parking,postgres://postgres:dev@db-users-2/parking}" }
+    depends_on: { db-users-1: { condition: service_healthy }, db-users-2: { condition: service_healthy } }
+
+  aggregator-nam-1:
+    environment: { USERS_DATABASE_URLS: "${USERS_DATABASE_URLS:-postgres://postgres:dev@db-users-1/parking,postgres://postgres:dev@db-users-2/parking}" }
+    depends_on: { db-users-1: { condition: service_healthy }, db-users-2: { condition: service_healthy } }
+  aggregator-nam-2:
     environment: { USERS_DATABASE_URLS: "${USERS_DATABASE_URLS:-postgres://postgres:dev@db-users-1/parking,postgres://postgres:dev@db-users-2/parking}" }
     depends_on: { db-users-1: { condition: service_healthy }, db-users-2: { condition: service_healthy } }
 

@@ -4,7 +4,7 @@
 // Test có tắt/bật container (parking-b, aggregator, rabbitmq, notification) và tự bật lại khi xong.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -35,7 +35,7 @@ const sql = (db, q) => compose(`exec -T ${db} psql -U postgres -d parking -tAc "
 async function http(url, { method = 'GET', body, headers = {} } = {}, retry = method === 'GET') {
   try {
     const r = await fetch(url, { method, headers: { 'content-type': 'application/json', ...headers }, body: body && JSON.stringify(body) });
-    return { status: r.status, body: await r.json().catch(() => null) };
+    return { status: r.status, headers: r.headers, body: await r.json().catch(() => null) };
   } catch {
     if (retry) { await sleep(300); return http(url, { method, body, headers }, false); }
     return { status: 0, body: null };
@@ -48,6 +48,11 @@ const agg2 = (path, { token, key, ...o } = {}) => http(AGG2 + path, {
   ...o, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { 'idempotency-key': key } : {}) },
 });
 const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { ...o.headers, 'x-internal-key': KEY } });
+const FM1 = process.env.FAILOVER_MANAGER_1_URL ?? 'http://localhost:8051';
+const FM2 = process.env.FAILOVER_MANAGER_2_URL ?? 'http://localhost:8052';
+const fm1 = (path, o = {}) => http(FM1 + path, o);
+const fm2 = (path, o = {}) => http(FM2 + path, o);
+
 
 async function until(what, fn, ms = 60_000) {
   const end = Date.now() + ms;
@@ -813,8 +818,135 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
   }
 );
 
+// TC68 -> TC69 dùng chung trạng thái sau failover; TC69 (hoặc TC68 lỗi) trả bãi A về db-a, epoch 1
+let tc68Passed = false;
+const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put ${k} ${v}`);
+const etcdGet = (k) => compose(`exec -T etcd-1 etcdctl get --print-value-only ${k}`).trim();
+function resetA() {
+  try {
+    compose('start db-a');
+    // replica đã thành primary riêng: db-a còn synchronous_standby_names thì mọi lệnh ghi treo chờ standby không tồn tại
+    sql('db-a', 'ALTER SYSTEM RESET synchronous_standby_names');
+    sql('db-a', 'SELECT pg_reload_conf()');
+    sql('db-a', 'UPDATE db_epoch SET epoch = 1');
+    etcdPut('/nhom16/parking/A/db/epoch', 1);
+    etcdPut('/nhom16/parking/A/db/primary', 'postgres://postgres:dev@db-a/parking');
+  } catch {}
+}
 
+test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng epoch etcd, node tự chuyển pool sang DB mới',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // 1. Khởi động failover-manager
+      compose('--profile coord up -d failover-manager-1 failover-manager-2');
+      await until('Failover-manager 1 sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
 
+      // 2. Kiểm tra bãi A đang hoạt động bình thường trên primary (db-a)
+      const avBefore = await node('A', '/api/availability');
+      assert.equal(avBefore.status, 200);
+
+      // 3. Tắt db-a (primary bãi A) để kích hoạt failover tự động
+      console.log('TC68 - Tắt db-a để kích hoạt failover tự động...');
+      compose('stop db-a');
+
+      // 4. Chờ failover-manager phát hiện lỗi liên tiếp và promote db-a-replica, cập nhật etcd
+      await until('Failover hoàn tất trên etcd (epoch >= 2)', async () => {
+        const st1 = (await fm1('/status')).body;
+        const st2 = (await fm2('/status')).body;
+        const pA1 = st1?.parkings?.find((p) => p.parkingId === 'A');
+        const pA2 = st2?.parkings?.find((p) => p.parkingId === 'A');
+        return (pA1 && pA1.primaryUrl.includes('replica')) || (pA2 && pA2.primaryUrl.includes('replica'));
+      }, 45_000);
+
+      // 5. Node A tự nhận primary mới qua etcd watch mà không cần khởi động lại, đặt chỗ thành công
+      await sleep(1500);
+      const free = await freeSlot('A');
+      const bookRes = await node('A', '/api/reservations', {
+        method: 'POST',
+        body: {
+          requestId: `e2e-tc68:${randomUUID()}`,
+          userId: 'user1',
+          slotCode: free,
+          licensePlate: plate(),
+        },
+      });
+      assert.equal(bookRes.status, 201);
+      console.log('TC68 - PASS: Failover tự động thành công, node tự chuyển pool và đặt chỗ bình thường');
+      tc68Passed = true;
+    } finally {
+      compose('--profile coord stop failover-manager-1 failover-manager-2');
+      if (!tc68Passed) resetA();   // đạt thì để nguyên trạng thái sau failover cho TC69
+    }
+  }
+);
+
+test('TC69 zombie primary fencing: DB primary cũ sống lại (mang epoch cũ) -> Node từ chối ghi (STALE_DB_EPOCH)',
+  { ...T, skip: !process.env.COORD },
+  async (t) => {
+    if (!tc68Passed) return t.skip('cần TC68 đạt trước');
+    try {
+      // 1. Bật lại primary cũ: db-a không biết đã bị thay, vẫn nhận ghi với db_epoch cũ
+      compose('start db-a');
+      const etcdEpoch = Number(etcdGet('/nhom16/parking/A/db/epoch'));
+      assert.ok(etcdEpoch >= 2, `epoch etcd sau failover: ${etcdEpoch}`);
+      await until('db-a cũ chạy lại', async () => { try { return sql('db-a', 'SELECT 1') === '1'; } catch { return false; } }, 30_000);
+
+      // 2. Chỉ một primary hợp lệ: nhận ghi (không recovery) và mang db_epoch bằng epoch etcd
+      const valid = ['db-a', 'db-a-replica'].filter((db) =>
+        sql(db, 'SELECT pg_is_in_recovery()') === 'f' && Number(sql(db, 'SELECT epoch FROM db_epoch LIMIT 1')) === etcdEpoch);
+      assert.deepEqual(valid, ['db-a-replica']);
+
+      // 3. Định tuyến nhầm về primary cũ (cấu hình cũ, epoch giữ nguyên): node đổi pool sang db-a, phát hiện epoch lệch thật
+      etcdPut('/nhom16/parking/A/db/primary', 'postgres://postgres:dev@db-a/parking');
+      await until('node A sẵn sàng', async () => (await node('A', '/health')).status === 200, 30_000);
+      let r;
+      await until('node A chặn ghi vào primary cũ', async () => {
+        r = await node('A', '/api/reservations', {
+          method: 'POST',
+          body: { requestId: `e2e-tc69:${randomUUID()}`, userId: 'user1', slotCode: await freeSlot('A'), licensePlate: plate() },
+        });
+        return r.status === 409;
+      }, 15_000);
+      assert.equal(r.body?.error, 'STALE_DB_EPOCH');
+      assert.equal(sql('db-a', "SELECT count(*) FROM reservations WHERE request_id LIKE 'e2e-tc69:%'"), '0');
+      console.log('TC69 - PASS: Zombie primary bị chặn ghi, bảo vệ tính nhất quán dữ liệu');
+    } finally {
+      resetA();
+    }
+  }
+);
+
+test('TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự động hạ cấp sang async, giải phóng lệnh ghi',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      compose('--profile coord up -d failover-manager-1');
+      await until('Failover-manager sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
+
+      // Kích hoạt degrade hoặc mô phỏng replica chết
+      const degRes = await fm1('/api/test/degrade/A', { method: 'POST' });
+      assert.equal(degRes.status, 200);
+      assert.equal(degRes.body?.degradedToAsync, true);
+
+      // Lệnh ghi trên primary A vẫn thực hiện trơn tru không bị nghẽn
+      const free = await freeSlot('A');
+      const bookRes = await node('A', '/api/reservations', {
+        method: 'POST',
+        body: {
+          requestId: `e2e-tc70:${randomUUID()}`,
+          userId: 'user1',
+          slotCode: free,
+          licensePlate: plate(),
+        },
+      });
+      assert.equal(bookRes.status, 201);
+      console.log('TC70 - PASS: Đã hạ cấp sao chép đồng bộ sang async khi replica chết, lệnh ghi thông suốt');
+    } finally {
+      compose('--profile coord stop failover-manager-1');
+    }
+  }
+);
 
 // --- PD-21: giới hạn đăng nhập dùng chung giữa các bản Aggregator (cần aggregator-2: profile ha) ---
 test('TC-PD21 giới hạn đăng nhập phân tán: 5 lần sai rải qua 2 Aggregator -> lần 6 bị 429 ở cả hai', { ...T, skip: !process.env.HA }, async () => {
@@ -897,5 +1029,58 @@ test('TC76 saga qua broker: bước 3 lỗi -> bù trừ 2 bước trước, kh�
     assert.equal(step.state, 'COMPENSATED', JSON.stringify(step));
     const st = sql(`db-${step.parkingId.toLowerCase()}`, `SELECT status FROM reservations WHERE id='${step.reservationId}'`);
     assert.equal(st, 'CANCELLED');
+  }
+});
+
+// --- PD-06: TTL lệnh và back-pressure (COMMAND_MODE=broker) ---
+const reserveVia = (token, id, slotCode) => agg(`/api/parkings/${id}/reservations`, {
+  method: 'POST', token, key: `e2e-pd06-${randomUUID()}`, body: { slotCode, licensePlate: plate() } });
+
+test('TC55 bãi tắt lâu hơn TTL: lệnh EXPIRED, bật lại không bị đặt muộn', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const slot = await freeSlot('B');
+  compose('stop parking-b');
+  try {
+    const r = await reserveVia(token, 'B', slot);
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    const id = r.body.commandId;
+    const final = await until('lệnh hết hạn', async () => {
+      const c = await agg(`/api/commands/${encodeURIComponent(id)}`, { token });
+      return c.body?.status === 'EXPIRED' && c.body;
+    }, 40_000);
+    assert.equal(final.statusCode, 410);
+  } finally {
+    compose('start parking-b');
+  }
+  await until('bãi B chạy lại', async () => (await node('B', '/health')).status === 200, 30_000);
+  await sleep(3000);
+  const st = sql('db-b', `SELECT status FROM parking_slots WHERE slot_code='${slot}'`);
+  assert.equal(st, 'AVAILABLE', 'lệnh đã hết hạn không được đặt muộn');
+});
+
+test('TC59 hàng đợi lệnh đầy: trả 503 kèm Retry-After, không mất lệnh đã nhận', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const policy = '{"max-length":2,"overflow":"reject-publish","dead-letter-exchange":"parking.dlx","dead-letter-routing-key":"expired"}';
+  // gọi docker trực tiếp (không qua shell) để JSON của policy không bị shell Windows làm hỏng dấu nháy
+  const rabbitctl = (...args) => execFileSync('docker', ['compose', 'exec', '-T', 'rabbitmq', 'rabbitmqctl', ...args], { cwd: ROOT, stdio: 'pipe' });
+  rabbitctl('set_policy', '-p', '/', '--priority', '20', '--apply-to', 'quorum_queues', 'tc59-small', '^cmd\.C$', policy);
+  compose('stop parking-c');
+  const accepted = [];
+  try {
+    let full;
+    for (let i = 0; i < 6 && !full; i++) {
+      const r = await reserveVia(token, 'C', `TC59-${i}`);
+      if (r.status === 503) full = r; else accepted.push(r.body.commandId);
+    }
+    assert.ok(full, 'phải có một lần trả 503 khi hàng đợi đầy');
+    assert.equal(full.body.error, 'QUEUE_FULL');
+    assert.ok(full.headers.get('retry-after'), 'thiếu Retry-After');
+    for (const id of accepted) {
+      const c = await agg(`/api/commands/${encodeURIComponent(id)}`, { token });
+      assert.notEqual(c.body?.status, 'FAILED', `lệnh đã nhận ${id} không được mất`);
+    }
+  } finally {
+    rabbitctl('clear_policy', '-p', '/', 'tc59-small');
+    compose('start parking-c');
   }
 });

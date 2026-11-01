@@ -49,7 +49,7 @@ function decodeCommand(m, parkingId, internalKey) {
     if (body[k] !== undefined && body[k] !== p[k]) throw new InvalidCommand('PROPERTY_MISMATCH');
   }
   if (p.type !== undefined && p.type !== body.type) throw new InvalidCommand('TYPE_MISMATCH');
-  if (m.fields?.routingKey && m.fields.routingKey !== `cmd.${parkingId}.${body.type}`) throw new InvalidCommand('ROUTING_MISMATCH');
+  if (m.fields?.routingKey && ![`cmd.${parkingId}.${body.type}`, `cmd.${parkingId}.${body.type}.admin`].includes(m.fields.routingKey)) throw new InvalidCommand('ROUTING_MISMATCH');
   for (const k of ['schemaVersion', 'actor', ...META]) {
     if (p.headers?.[k] !== undefined && canonical(p.headers[k]) !== canonical(body[k])) throw new InvalidCommand('HEADER_MISMATCH');
   }
@@ -93,13 +93,24 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
   return payIn(c, { sessionId: b.sessionId, method: 'ONLINE', paymentKey: env.messageId, userId: actor.userId });
 }
 
-function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}` }) {
+// PD-14b: DB lệch epoch etcd (primary cũ) hoặc mất etcd quá lâu -> trả mã lỗi, không ghi. Không lưu inbox để gửi lại được.
+async function epochError(pool, c) {
+  if (typeof pool.checkEpoch !== 'function') return null;
+  try { await pool.checkEpoch(c); return null; } catch (e) {
+    if (e.code === 'STALE_DB_EPOCH' || e.code === 'ETCD_UNREACHABLE') return { code: e.status, body: { error: e.code, ...e.details } };
+    throw e;
+  }
+}
+
+function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now }) {
   return async (m) => {
     const env = decodeCommand(m, parkingId, internalKey);
     const hash = createHash('sha256').update(canonical({ type: env.type, parkingId, actor: env.actor, payload: env.payload })).digest('hex');
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
+      const stale = await epochError(pool, c);
+      if (stale) { await c.query('ROLLBACK'); return { ...stale, messageId: env.messageId }; }
       // Token và ghi nghiệp vụ nằm trong cùng giao dịch inbox.
       const fence = await checkFencing(c, env.payload.sagaId ? 'reconcile' : 'default', env.fencingToken);
       let out;
@@ -117,6 +128,11 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
           ? { code: 422, body: { error: 'IDEMPOTENCY_KEY_REUSED' } }
           : { code: prior.status_code, body: prior.result };
         if (out.code == null || out.body == null) throw new Error('Incomplete inbox result');
+      } else if (Number.isSafeInteger(env.deadlineAt) && now() > env.deadlineAt) {
+        // PD-06: TTL của RabbitMQ chỉ tính lúc tin nằm trong queue; tin đã prefetch rồi chờ s.tail có thể quá hạn.
+        // Không áp dụng nữa, lưu kết quả 410 vào inbox để gửi lại cùng messageId cũng nhận đúng kết quả này.
+        out = { code: 410, body: { error: 'COMMAND_EXPIRED' } };
+        await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
       } else {
         out = await dispatch(c, env, { parkingId, reservationMinutes, qrSecret });
         // Normalize Date values once: first delivery and replay return identical JSON.
@@ -131,6 +147,9 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
       await enrichReply(c, env, payload, properties, internalKey);
       await c.query('INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties) VALUES ($1,$2,$3,$4)',
         [env.messageId, env.replyTo, payload, properties]);
+      // Kiểm lại trước COMMIT: giao dịch đã qua lần kiểm đầu rồi bị chậm thì không được commit vào primary cũ sau failover
+      const late = await epochError(pool, c);
+      if (late) { await c.query('ROLLBACK'); return { ...late, messageId: env.messageId }; }
       await c.query('COMMIT');
       return { ...out, messageId: env.messageId, duplicate: !inserted.rowCount };
     } catch (e) {
@@ -171,34 +190,51 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
         const closed = new Promise((r) => { s.closed = r; });
         conn.on('error', () => end(s)); conn.on('close', () => end(s));
         if (stopped) { end(s); break; }
-        const ch = await conn.createChannel(); s.ch = ch;
-        ch.on('error', () => end(s)); ch.on('close', () => end(s));
-        await ch.checkQueue(`cmd.${parkingId}`); // Topology owned by definitions/policy, not redeclared here.
-        await ch.prefetch(20);
-        if (stopped) { end(s); break; }
-        if (s.dead) throw new Error('Command channel closed during setup');
-        const { consumerTag } = await ch.consume(`cmd.${parkingId}`, (m) => {
-          if (!m) { end(s); return; }
-          // SAC chooses a consumer, NOT a serial async callback execution order.
-          s.tail = s.tail.then(async () => {
-            if (s.dead || stopped) return;
-            try {
-              const result = await processCommand(m);
-              await afterCommit(result);
-              if (!s.dead) ch.ack(m); // processor returns only after COMMIT succeeds.
-            } catch (error) {
-              log.error('command processing failed', { parkingId, error: error.message });
-              if (s.dead) return;
-              // PD-08 may replace this hook with confirmed delayed retry/dead transfer.
-              const transferred = await retryOrDead?.({ ch, message: m, error, permanent: error instanceof InvalidCommand });
-              if (transferred === true) ch.ack(m);
-              else if (error instanceof InvalidCommand) ch.nack(m, false, false); // durable DLX target; no hot requeue.
-              else end(s); // Leave unacked, close/reconnect with backoff after rollback.
+        s.channels = [];
+        // PD-06: hàng thường prefetch 16, hàng quản trị prefetch 4. Hàng admin là tuỳ chọn: bãi chưa có
+        // queue admin (vd D–F của overlay 6 bãi) thì bỏ qua, không làm hỏng consumer hàng thường.
+        for (const [queue, prefetch, optional] of [[`cmd.${parkingId}`, 16, false], [`cmd.${parkingId}.admin`, 4, true]]) {
+          const ch = await conn.createChannel();
+          if (optional) {
+            ch.on('error', () => {});
+            const ok = await ch.checkQueue(queue).then(() => true, () => false);
+            if (!ok) {
+              if (!s.adminWarned) log.info?.('không có hàng đợi lệnh quản trị, bỏ qua', { parkingId, queue });
+              s.adminWarned = true;
+              try { await ch.close(); } catch { /* channel đã đóng do lỗi 404 */ }
+              continue;
             }
-          }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
-        }, { noAck: false });
-        s.tag = consumerTag;
-        log.info?.('command consumer ready', { parkingId, consumerTag, prefetch: 20 });
+          } else {
+            await ch.checkQueue(queue); // Topology owned by definitions/policy, not redeclared here.
+          }
+          ch.on('error', () => end(s)); ch.on('close', () => end(s));
+          const entry = { ch }; s.channels.push(entry);
+          await ch.prefetch(prefetch);
+          if (stopped) { end(s); break; }
+          if (s.dead) throw new Error('Command channel closed during setup');
+          const { consumerTag } = await ch.consume(queue, (m) => {
+            if (!m) { end(s); return; }
+            // SAC chooses a consumer, NOT a serial async callback execution order.
+            s.tail = s.tail.then(async () => {
+              if (s.dead || stopped) return;
+              try {
+                const result = await processCommand(m);
+                await afterCommit(result);
+                if (!s.dead) ch.ack(m); // processor returns only after COMMIT succeeds.
+              } catch (error) {
+                log.error('command processing failed', { parkingId, error: error.message });
+                if (s.dead) return;
+                // PD-08 may replace this hook with confirmed delayed retry/dead transfer.
+                const transferred = await retryOrDead?.({ ch, message: m, error, permanent: error instanceof InvalidCommand });
+                if (transferred === true) ch.ack(m);
+                else if (error instanceof InvalidCommand) ch.nack(m, false, false); // durable DLX target; no hot requeue.
+                else end(s); // Leave unacked, close/reconnect with backoff after rollback.
+              }
+            }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
+          }, { noAck: false });
+          entry.tag = consumerTag;
+          log.info?.('command consumer ready', { parkingId, queue, consumerTag, prefetch });
+        }
         await closed;
       } catch (e) {
         log.error('command consumer reconnect', { parkingId, error: e.message });
@@ -214,7 +250,7 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
       stopped = true; clearTimeout(retryTimer); wake?.();
       const s = state;
       if (s && !s.dead) {
-        if (s.tag) await s.ch.cancel(s.tag).catch(() => {});
+        for (const { ch, tag } of s.channels ?? []) if (tag) await ch.cancel(tag).catch(() => {});
         await s.tail;
         end(s);
       }

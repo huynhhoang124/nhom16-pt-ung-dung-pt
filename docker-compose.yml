@@ -68,7 +68,7 @@ services:
 
   # Replica A - chỉ chạy khi bật profile ha
   db-a-replica:
-    profiles: [ha]
+    profiles: [ha, coord]
     image: postgres:16-alpine
     entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
     environment:
@@ -338,9 +338,36 @@ services:
     volumes:
       - etcd-3-data:/etcd-data
     deploy:
-      resources:
-        limits:
-          memory: 128M
+  # --- PD-14b: Quản lý Failover tự động & Epoch (docker compose --profile coord up -d) ---
+  failover-manager-1:
+    build: ./failover-manager
+    image: nhom16/failover-manager
+    profiles: [coord]
+    environment:
+      INSTANCE_ID: "1"
+      PORT: 8051
+      ETCD_ENDPOINTS: http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      ENABLE_TEST_FAULTS: ${ENABLE_TEST_FAULTS:-0}
+      PARKINGS: >-
+        [{"parkingId":"A","primaryUrl":"postgres://postgres:dev@db-a/parking","replicaUrl":"postgres://postgres:dev@db-a-replica/parking","sync":true}]
+    ports: ["8051:8051"]
+    depends_on:
+      etcd-1: { condition: service_started }
+
+  failover-manager-2:
+    build: ./failover-manager
+    image: nhom16/failover-manager
+    profiles: [coord]
+    environment:
+      INSTANCE_ID: "2"
+      PORT: 8052
+      ETCD_ENDPOINTS: http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+      ENABLE_TEST_FAULTS: ${ENABLE_TEST_FAULTS:-0}
+      PARKINGS: >-
+        [{"parkingId":"A","primaryUrl":"postgres://postgres:dev@db-a/parking","replicaUrl":"postgres://postgres:dev@db-a-replica/parking","sync":true}]
+    ports: ["8052:8052"]
+    depends_on:
+      etcd-1: { condition: service_started }
 
 volumes:
   etcd-1-data:
