@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { makePool, one } = require('./helpers');
 const s = require('../src/slots');
 const { makeRelay } = require('../src/relay');
-const { withRequestId } = require('../src/log');
+const { log, withRequestId } = require('../src/log');
 
 test('GS-03 relay ghi đúng request ID từ outbox chỉ sau broker confirm và đánh dấu đã gửi', async () => {
   const pool = await makePool();
@@ -179,4 +179,10 @@ test('relay dùng transaction và SKIP LOCKED để lấy batch', async () => {
   assert.ok(queries.some((q) => q === 'BEGIN'));
   assert.ok(queries.some((q) => /FOR UPDATE\s+SKIP LOCKED/i.test(q)));
   assert.ok(queries.some((q) => q === 'COMMIT'));
+});
+
+test('log có warn: đăng ký etcd lỗi lúc khởi động không làm sập node (index.js gọi log.warn)', () => {
+  assert.equal(typeof log.warn, 'function');
+  assert.doesNotThrow(() => log.warn('thử', { error: 'x' }));
+  assert.equal(typeof require('../../aggregator-service/src/log').log.warn, 'function');
 });
