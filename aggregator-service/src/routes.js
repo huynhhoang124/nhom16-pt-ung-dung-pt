@@ -28,6 +28,8 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
   // PD-03: gửi lệnh qua broker, chờ phản hồi tối đa REPLY_WAIT_MS -> 201/409, quá hạn -> 202 + commandId
   async function broker(req, res, type, payload, key = req.get('idempotency-key')) {
     if (!commandFlow) return res.status(503).json({ error: 'COMMAND_SERVICE_UNAVAILABLE' });
+    // Bãi đã bị đánh dấu OFFLINE: từ chối ngay như chế độ http, không xếp lệnh chờ hết TTL
+    if (reg.get(req.params.id)?.status === 'OFFLINE') return res.status(503).json({ error: 'PARKING_OFFLINE', parkingId: req.params.id });
     const traceparent = req.get('traceparent');
     if (traceparent && !TRACEPARENT.test(traceparent)) return res.status(400).json({ error: 'INVALID_TRACEPARENT' });
     try {

@@ -34,7 +34,7 @@ function makeFailoverManager({
   checkIntervalMs = 1000,
   waitWindowMs = process.env.FAILOVER_WAIT_WINDOW_MS !== undefined
     ? Number(process.env.FAILOVER_WAIT_WINDOW_MS)
-    : (process.env.NODE_ENV === 'test' ? 10 : 3500),
+    : (process.env.NODE_ENV === 'test' ? 10 : 6000),   // > ETCD_WATCH_WINDOW_MS của node (5000)
   log = console,
   pgClientFactory = defaultPgClientFactory,
 } = {}) {

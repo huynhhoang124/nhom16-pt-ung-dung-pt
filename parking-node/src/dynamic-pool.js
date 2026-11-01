@@ -14,7 +14,8 @@ async function makeDynamicPool({
   log = console,
   poolFactory = (opts) => new Pool(opts),
   etcdClient = null,
-  watchWindowMs = Number(process.env.ETCD_WATCH_WINDOW_MS || 3000),
+  // Phải nhỏ hơn FAILOVER_WAIT_WINDOW_MS của failover-manager (6000). 3 s quá sát: máy tải nặng, etcd trả chậm -> 503 giả
+  watchWindowMs = Number(process.env.ETCD_WATCH_WINDOW_MS || 5000),
 } = {}) {
   // Tương thích ngược 100% khi không có etcd
   if (!etcdEndpoints && !etcdClient) {
@@ -86,20 +87,30 @@ async function makeDynamicPool({
     });
     epochWatcher.on('error', (err) => log.error?.('[dynamic-pool] Watcher epoch lỗi', { error: err.message }));
 
+  } catch (e) {
+    log.warn?.('[dynamic-pool] Không thể tạo etcd watcher', { error: e.message });
+  }
+
+  // Heartbeat chạy kể cả khi tạo watcher lỗi (etcd chưa sẵn sàng lúc khởi động): không có nó thì lastEtcdContact
+  // đứng yên và mọi lệnh ghi bị 503 ETCD_UNREACHABLE mãi sau watchWindowMs
     if (!etcdClient) {
       const pingInterval = Math.min(1000, Math.max(500, Math.floor(watchWindowMs / 2)));
       heartbeatTimer = setInterval(async () => {
         try {
-          await client.get(epochKey).string();
+          // Đọc cả primary và epoch rồi đồng bộ: watcher lỗi/đứt thì heartbeat vẫn bám đúng primary mới sau failover,
+          // không để lastEtcdContact tươi mà currentEpoch/currentUrl còn cũ
+          const [primary, epoch] = await Promise.all([client.get(primaryKey).string(), client.get(epochKey).string()]);
+          if (epoch && Number(epoch) !== currentEpoch) {
+            log.info?.(`[dynamic-pool] Heartbeat: epoch ${currentEpoch} -> ${epoch}`);
+            currentEpoch = Number(epoch);
+          }
+          if (primary && primary !== currentUrl) wrapper.switchPrimary(primary);
           lastEtcdContact = Date.now();
         } catch (err) {
           log.warn?.('[dynamic-pool] Heartbeat etcd thất bại', { error: err.message });
         }
       }, pingInterval);
     }
-  } catch (e) {
-    log.warn?.('[dynamic-pool] Không thể tạo etcd watcher', { error: e.message });
-  }
 
   const wrapper = {
     isDynamic: true,
