@@ -316,7 +316,7 @@ test('PD-14b manager: tự động hạ cấp sync replication sang async khi re
   assert.equal(manager.parkingStates[0].degradedToAsync, true);
 
   const alterQuery = executedQueries.find(
-    (q) => q.url === 'postgres://primary-a' && q.sql.includes('ALTER SYSTEM SET synchronous_standby_names')
+    (q) => q.url === 'postgres://primary-a' && q.sql.includes('ALTER SYSTEM RESET synchronous_standby_names')
   );
   assert.ok(alterQuery, 'Phải chạy ALTER SYSTEM trên primary');
 

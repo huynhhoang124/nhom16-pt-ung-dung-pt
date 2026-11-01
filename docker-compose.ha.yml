@@ -166,6 +166,16 @@ services:
       db-f:
         condition: service_healthy
 
+  # PD-14b: chạy kèm ha thì failover-manager theo dõi cả bãi D (đồng bộ), E, F (bất đồng bộ)
+  failover-manager-1:
+    environment:
+      PARKINGS: >-
+        [{"parkingId":"A","primaryUrl":"postgres://postgres:dev@db-a/parking","replicaUrl":"postgres://postgres:dev@db-a-replica/parking","sync":true},{"parkingId":"D","primaryUrl":"postgres://postgres:dev@db-d/parking","replicaUrl":"postgres://postgres:dev@db-d-replica/parking","sync":true},{"parkingId":"E","primaryUrl":"postgres://postgres:dev@db-e/parking","replicaUrl":"postgres://postgres:dev@db-e-replica/parking","sync":false},{"parkingId":"F","primaryUrl":"postgres://postgres:dev@db-f/parking","replicaUrl":"postgres://postgres:dev@db-f-replica/parking","sync":false}]
+  failover-manager-2:
+    environment:
+      PARKINGS: >-
+        [{"parkingId":"A","primaryUrl":"postgres://postgres:dev@db-a/parking","replicaUrl":"postgres://postgres:dev@db-a-replica/parking","sync":true},{"parkingId":"D","primaryUrl":"postgres://postgres:dev@db-d/parking","replicaUrl":"postgres://postgres:dev@db-d-replica/parking","sync":true},{"parkingId":"E","primaryUrl":"postgres://postgres:dev@db-e/parking","replicaUrl":"postgres://postgres:dev@db-e-replica/parking","sync":false},{"parkingId":"F","primaryUrl":"postgres://postgres:dev@db-f/parking","replicaUrl":"postgres://postgres:dev@db-f-replica/parking","sync":false}]
+
 volumes:
   db-d-replica-data:
   db-e-data:

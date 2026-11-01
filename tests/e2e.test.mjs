@@ -818,6 +818,19 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
   }
 );
 
+// TC68 -> TC69 dùng chung trạng thái sau failover; TC69 (hoặc TC68 lỗi) trả bãi A về db-a, epoch 1
+let tc68Passed = false;
+const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put ${k} ${v}`);
+const etcdGet = (k) => compose(`exec -T etcd-1 etcdctl get --print-value-only ${k}`).trim();
+function resetA() {
+  try {
+    compose('start db-a');
+    sql('db-a', 'UPDATE db_epoch SET epoch = 1');
+    etcdPut('/nhom16/parking/A/db/epoch', 1);
+    etcdPut('/nhom16/parking/A/db/primary', 'postgres://postgres:dev@db-a/parking');
+  } catch {}
+}
+
 test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng epoch etcd, node tự chuyển pool sang DB mới',
   { ...T, skip: !process.env.COORD },
   async () => {
@@ -857,39 +870,46 @@ test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng
       });
       assert.equal(bookRes.status, 201);
       console.log('TC68 - PASS: Failover tự động thành công, node tự chuyển pool và đặt chỗ bình thường');
+      tc68Passed = true;
     } finally {
-      compose('start db-a');
       compose('--profile coord stop failover-manager-1 failover-manager-2');
-      try {
-        sql('db-a', 'UPDATE db_epoch SET epoch = 1');
-        compose('exec -T etcd-1 etcdctl put /nhom16/parking/A/db/epoch 1');
-        compose('exec -T etcd-1 etcdctl put /nhom16/parking/A/db/primary postgres://postgres:dev@db-a/parking');
-      } catch {}
+      if (!tc68Passed) resetA();   // đạt thì để nguyên trạng thái sau failover cho TC69
     }
   }
 );
 
 test('TC69 zombie primary fencing: DB primary cũ sống lại (mang epoch cũ) -> Node từ chối ghi (STALE_DB_EPOCH)',
   { ...T, skip: !process.env.COORD },
-  async () => {
+  async (t) => {
+    if (!tc68Passed) return t.skip('cần TC68 đạt trước');
     try {
-      // Giả lập tình huống primary cũ bật lại nhưng mang epoch cũ (ví dụ 1), trong khi cluster epoch trên etcd đã là 2
-      // Node phát hiện db_epoch != etcd_epoch -> từ chối giao dịch ghi với mã lỗi STALE_DB_EPOCH
-      const checkRes = await node('A', '/api/reservations', {
-        method: 'POST',
-        body: {
-          requestId: `e2e-tc69:${randomUUID()}`,
-          userId: 'user1',
-          slotCode: 'A01',
-          licensePlate: plate(),
-        },
-        headers: { 'x-test-simulate-stale-epoch': '1' },
-      });
-      assert.equal(checkRes.status, 409);
-      assert.equal(checkRes.body?.error, 'STALE_DB_EPOCH');
-      // Kiểm tra cơ chế zombie primary fencing
+      // 1. Bật lại primary cũ: db-a không biết đã bị thay, vẫn nhận ghi với db_epoch cũ
+      compose('start db-a');
+      const etcdEpoch = Number(etcdGet('/nhom16/parking/A/db/epoch'));
+      assert.ok(etcdEpoch >= 2, `epoch etcd sau failover: ${etcdEpoch}`);
+      await until('db-a cũ chạy lại', async () => { try { return sql('db-a', 'SELECT 1') === '1'; } catch { return false; } }, 30_000);
+
+      // 2. Chỉ một primary hợp lệ: nhận ghi (không recovery) và mang db_epoch bằng epoch etcd
+      const valid = ['db-a', 'db-a-replica'].filter((db) =>
+        sql(db, 'SELECT pg_is_in_recovery()') === 'f' && Number(sql(db, 'SELECT epoch FROM db_epoch LIMIT 1')) === etcdEpoch);
+      assert.deepEqual(valid, ['db-a-replica']);
+
+      // 3. Định tuyến nhầm về primary cũ (cấu hình cũ, epoch giữ nguyên): node đổi pool sang db-a, phát hiện epoch lệch thật
+      etcdPut('/nhom16/parking/A/db/primary', 'postgres://postgres:dev@db-a/parking');
+      await until('node A sẵn sàng', async () => (await node('A', '/health')).status === 200, 30_000);
+      let r;
+      await until('node A chặn ghi vào primary cũ', async () => {
+        r = await node('A', '/api/reservations', {
+          method: 'POST',
+          body: { requestId: `e2e-tc69:${randomUUID()}`, userId: 'user1', slotCode: await freeSlot('A'), licensePlate: plate() },
+        });
+        return r.status === 409;
+      }, 15_000);
+      assert.equal(r.body?.error, 'STALE_DB_EPOCH');
+      assert.equal(sql('db-a', "SELECT count(*) FROM reservations WHERE request_id LIKE 'e2e-tc69:%'"), '0');
       console.log('TC69 - PASS: Zombie primary bị chặn ghi, bảo vệ tính nhất quán dữ liệu');
     } finally {
+      resetA();
     }
   }
 );

@@ -3,7 +3,7 @@
 //   - 3 lần lỗi liên tiếp -> đọc replay LSN của replica -> Bước A (CAS tăng epoch trên etcd) -> Bước B (chờ cửa sổ an toàn
 //     để node ngừng ghi vào primary cũ) -> Bước C (pg_promote trên replica) -> Bước 4 (ghi db_epoch vào primary mới).
 //   - CAS thất bại -> dừng ngay, KHÔNG promote. Promote lỗi -> giữ epoch N+1 (không giảm), báo FAILOVER_PROMOTE_FAILED.
-//   - Giám sát replica của bãi đồng bộ (sync=true): chết quá 3s -> hạ cấp synchronous_standby_names = '' trên primary.
+//   - Giám sát replica của bãi đồng bộ (sync=true): chết quá 3s -> ALTER SYSTEM RESET synchronous_standby_names trên primary.
 
 const { Client } = require('pg');
 
@@ -125,7 +125,7 @@ function makeFailoverManager({
       log.warn?.(`WARN: degraded sync replication to async for parking ${state.parkingId}. Trade-off: Consistency -> Availability after 3s down. RPO > 0: transactions committed during async window may be lost if primary crashes`);
       client = await pgClientFactory(state.primaryUrl, 2000);
       await client.connect();
-      await client.query("ALTER SYSTEM SET synchronous_standby_names = ''");
+      await client.query('ALTER SYSTEM RESET synchronous_standby_names');
       await client.query('SELECT pg_reload_conf()');
       state.degradedToAsync = true;
       log.info?.(`[failover-manager] Đã chuyển bãi ${state.parkingId} sang chế độ async thành công`);
