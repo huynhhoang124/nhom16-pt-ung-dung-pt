@@ -198,14 +198,14 @@ Nền: `feature/PD-19-regional-aggregators` (`864a936`, Hiệp). Xem lại, ch�
 Nền: `feature/PD-14b-auto-failover-epoch` (Luận). Lấy `a613d05 c13fc62 5129966 088def2`. Không lấy `0293d31`, `84ee4c8` và các commit merge.
 
 - [ ] Thiết kế nửa trang vào #32: thứ tự CAS → chờ → promote, cửa sổ an toàn.
-- [ ] `git checkout -b huynh/PD-14b origin/dev && git cherry-pick a613d05 c13fc62 5129966 088def2`. Khi xung đột:
+- [x] `git checkout -b huynh/PD-14b origin/dev && git cherry-pick a613d05 c13fc62 5129966 088def2`. Khi xung đột:
   - Bỏ thay đổi PD-10 ở `leader.js`, `fencing.js`, `app.js`.
   - Giữ `failover-manager/`, `parking-node/src/dynamic-pool.js`, `epoch.test.js`.
-- [ ] `failover-manager` dùng module bầu leader trên `dev`, khoá `/nhom16/election/failover`.
-- [ ] Bỏ đường tắt `x-test-simulate-stale-epoch` ở `parking-node/src/app.js`.
-- [ ] Viết lại TC69 thật: bật lại primary cũ → chờ node sẵn sàng → ghi → `409 STALE_DB_EPOCH`, và chỉ 1 primary (`pg_is_in_recovery()`).
-- [ ] Bãi A, D: replica chết quá 3 s thì `ALTER SYSTEM RESET synchronous_standby_names` + `pg_reload_conf()` và ghi cảnh báo. Phải khớp với cách B3 đặt tham số.
-- [ ] Kiểm tra:
+- [x] `failover-manager` dùng module bầu leader trên `dev`, khoá `/nhom16/election/failover`.
+- [x] Bỏ đường tắt `x-test-simulate-stale-epoch` ở `parking-node/src/app.js`.
+- [x] Viết lại TC69 thật: bật lại primary cũ → chờ node sẵn sàng → ghi → `409 STALE_DB_EPOCH`, và chỉ 1 primary (`pg_is_in_recovery()`).
+- [x] Bãi A, D: replica chết quá 3 s thì `ALTER SYSTEM RESET synchronous_standby_names` + `pg_reload_conf()` và ghi cảnh báo. Phải khớp với cách B3 đặt tham số.
+- [x] Kiểm tra:
   - `COORD=1 HA=1`: TC68 (failover ≤ 15 s), TC69, TC70 (ghi treo ≤ 3 s), TC65, TC66 đạt cùng một lượt.
   - Đo `scripts/measure-failover.mjs`, ghi vào runbook.
 - [ ] PR, merge.
