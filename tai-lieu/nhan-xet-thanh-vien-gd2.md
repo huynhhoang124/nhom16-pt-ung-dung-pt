@@ -29,6 +29,19 @@ Sửa xong thì đẩy commit mới lên nhánh của mình, không amend, khôn
 
 `main` sau merge #65: unit 74/59/2, e2e `coord` 22/22, `ha` đạt TC43–TC49, TC63–TC67.
 
+Chiều 01/11 mình đã tự chạy plan test của từng người. Kết quả ghi ngay dưới mục "Plan test" của mỗi người. Ký hiệu:
+- ✅ đạt
+- ❌ lỗi
+- ⚠️ đạt có điều kiện
+- ⛔ không chạy được
+- ⏸ chưa có code
+
+Lỗi mới phát hiện:
+- Luận 6, 7: node sập do thiếu `log.warn`; TC69 là test giả.
+- Loan 5: PD-05 TC60 đo sai.
+- Trang: PD-18 có số đo; PD-22 lỗi TC37.
+- Hiệp: PD-26 lỗi bất biến 4.
+
 ---
 
 ## Luận – 77
@@ -42,14 +55,22 @@ PD-09, PD-11, PD-10 đã merge. PD-14b chưa PR. PD-07 chưa làm.
 4. **PD-10 – lệnh qua broker chưa kiểm fencing** ([commands.js:85](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/38bc9bcd65520d6dddeb9b019b2b41318f9d609e/parking-node/src/commands.js#L85)). → Gọi `checkFencing` ngay sau `BEGIN`; token cũ thì ghi `409 STALE_LEADER` vào inbox.
 5. **PD-14b – nhánh còn chứa PD-10 bản cũ, xung đột với `dev`.** → Tạo nhánh mới từ `origin/dev`, cherry-pick `a613d05 c13fc62 5129966 088def2`. Chỉ giữ `failover-manager/`, `dynamic-pool.js`, `epoch.test.js`, rồi mở PR.
 
-**Test phải tự chạy**
-- `COORD=1 HA=1`: TC65, TC66, TC43, TC44 cùng đạt trong một lượt.
-- `docker compose pause aggregator` 15 s → luôn chỉ 1 bản `isLeader: true`.
-- PD-14b TC68–70:
-  - Tắt `db-b` → replica lên primary trong ≤ 15 s.
-  - Bật lại `db-b` cũ → node từ chối ghi.
-  - Tắt `db-a-replica` → ghi vào A chỉ treo ≤ 3 s.
-- PD-07 TC75–76: saga 3 bãi thành công, bù trừ đúng.
+6. **PD-09 (lỗi mới) – node sập khi không nối được etcd lúc khởi động.** [index.js:73](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/2b9cb9d/parking-node/src/index.js#L73) gọi `log.warn`, nhưng [log.js:17](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/2b9cb9d/parking-node/src/log.js#L17) chỉ có `info` và `error`. Kết quả: `TypeError: log.warn is not a function`, container thoát với mã 1.
+   - Gặp khi `.env` có `ETCD_ENDPOINTS` mà etcd chưa chạy. Đây đúng là tình huống PD-09 phải chịu được.
+   - Các chỗ `log.warn?.(...)` ở `registry.js`, `config.js`, `discovery.js` không sập nhưng cảnh báo bị nuốt mất.
+   - Sửa: thêm `warn` vào `log.js` của cả node và aggregator.
+7. **PD-14b – TC69 là test giả.** [app.js:120](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/088def2/parking-node/src/app.js#L120) thấy header `x-test-simulate-stale-epoch` thì trả `409` luôn, không đụng DB. → TC69 phải bật lại primary cũ thật rồi ghi qua node.
+   - TC69 chạy ngay sau TC68 thì lỗi (`status 0`), vì node A chưa nối lại xong. → Chờ node A sẵn sàng trước khi gửi.
+
+**Plan test – kết quả mình chạy 01/11**
+- ✅ `COORD=1 HA=1`: TC43, TC44, TC65, TC66 cùng đạt trong một lượt. TC43 cần sửa cổng sang 3005 trên máy mình.
+- ❌ Sau lượt đó, `aggregator-2` bị tắt (lỗi 2). Cả 2 bản cùng báo `isLeader: true` (token 23 và 27) do `simulatePause` (lỗi 1).
+- ✅ `docker compose pause` leader thật 15 s: bản kia lên leader (token 31). Sau unpause chỉ còn 1 leader.
+- PD-14b (nhánh `088def2`):
+  - ✅ TC68: promote replica.
+  - ✅ TC70: hạ xuống async.
+  - ⚠️ TC69: chỉ đạt khi chạy riêng, và là test giả (lỗi 7).
+- ⏸ PD-07 TC75–76: chưa có code.
 
 ---
 
@@ -66,18 +87,19 @@ PD-01, PD-02 đã merge. PR #49 (PD-08), #52 (PD-03), #53 (PD-04) không cập n
    - Bãi chưa có queue thì cứ 5 s reconnect và ghi log ([commands.js:151](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/72c9d70a929d7de33263f2f18710d281ae81b3e0/parking-node/src/commands.js#L151)). → Tăng dần thời gian chờ, tối đa 60 s.
 5. **Quy trình – 3 PR chờ (tối đa 2).** → Chuyển #52, #53 sang Draft, đăng thiết kế PD-03 lên #20.
 
-**Test phải tự chạy**
-- TC57: lỗi tạm thời → retry rồi thành công, không trùng.
-- TC58: tin sai schema → vào `cmd.dead`, đẩy lại được.
-- TC51, TC54, TC62 với `COMMAND_MODE=broker`.
-- TC61: tắt F khi phát lệnh 3 bãi → kết quả 2/3.
-- e2e trên `dev` mới nhất không đỏ.
+**Plan test – kết quả mình chạy 01/11**
+- ⛔ Không chạy được test nào: TC57–58, TC51, TC54, TC62, TC61.
+  - Merge thử vào `dev` thì xung đột: PD-08 4 file, PD-03 7 file, PD-04 6 file.
+  - Test của PD-08 cần biến `PD02_SOURCE_ROOT` trỏ tới một checkout PD-02 riêng.
+  - Test của PD-03 cần "broker candidate" ghép bằng patch.
+  - TC61 tự skip trong code ([pd04-broadcast.test.mjs:124](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/e8dc90f/tests/pd04-broadcast.test.mjs#L124)).
+- → Sửa lỗi 1 (rebase lên `dev`, bỏ patch) trước, rồi chạy lại TC57–58, TC51, TC54, TC62, TC61 bằng `node --test` trên stack thường.
 
 ---
 
 ## Loan – 70
 
-PD-13 đã merge. PR #55 (PD-17) và #63 (PD-14a) còn lỗi. PD-05, 15, 16 chưa làm. Tuần này làm nhiều nhất nhóm.
+PD-13 đã merge. PR #55 (PD-17), #63 (PD-14a) và #64 (PD-05, mở 31/10) còn lỗi. PD-15, 16 chưa làm. Tuần này làm nhiều nhất nhóm.
 
 **Cần sửa**
 1. **PD-17 – HLC không truyền qua HTTP.** TC74 đạt chỉ vì D chạy nhanh. Với D lệch `-30000`, sự kiện vào D đứng trước ra A.
@@ -95,13 +117,24 @@ PD-13 đã merge. PR #55 (PD-17) và #63 (PD-14a) còn lỗi. PD-05, 15, 16 chư
    - PD-14a: runbook thiếu cách chạy script đo trễ trong container. `rewind.mjs --execute` chưa chạy thật.
    - PD-13: [tc60.pd13.test.mjs:22](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/551bd9af8a5cc366fe9fdd084477050d0661123f/tests/tc60.pd13.test.mjs#L22) viết cứng tên container → dùng `docker compose ps -q`. `docker-compose.pd13.yml` chép lại biến môi trường → dùng `extends`.
 
-**Test phải tự chạy**
-- TC74 đạt cả `+30000` và `-30000`.
-- Bật `ha` → `down` (không `-v`) → `up` không `ha` → đặt chỗ ở A trả 201.
-- `config -q` không profile → không lỗi.
-- `pg_stat_replication`: A, D `quorum`; B, C, E, F `async`.
-- PD-05: 2 bản node, 100 lệnh cùng slot → đúng thứ tự, không trùng.
-- PD-15 TC71, PD-16 TC72–73.
+5. **PD-05 (PR #64 mới) – TC60 trượt cả 3 lần: failover đo được 7,2–7,7 s, yêu cầu ≤ 5 s.**
+   - Con số này chủ yếu là thời gian chạy lệnh `rabbitmqctl list_consumers` qua `docker compose exec`. Trên máy mình mỗi lần gọi mất khoảng 6 s, nên chưa đo đúng thời gian failover.
+   - Hàm `waitFor` đặt timeout 5000 ms nhưng một vòng kiểm tra đã dài hơn thế ([tc60.pd05.test.mjs:402](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/044715e/tests/tc60.pd05.test.mjs#L402)).
+   - Sửa: đo bằng Management API (`GET :15672/api/consumers/%2F`), hoặc lấy khoảng cách `processed_at` trong `inbox_messages` giữa lệnh cuối của consumer cũ và lệnh đầu của consumer mới.
+   - Sau khi PD-13 merge (đã merge), chạy lại với `parking-a-1`/`parking-a-2` như PR ghi.
+
+**Plan test – kết quả mình chạy 01/11**
+- ❌ TC74 với `-30000`: sai thứ tự (lỗi 1). PD-17 không đổi từ lần review.
+- ❌ Bật `ha` → `down` → `up` không `ha` → ghi vào A treo (lỗi 2).
+- ❌ `config -q`:
+  - Không profile: lỗi `parking-a depends on undefined service "db-a-sync-config"`.
+  - Chỉ `ha`: lỗi `db-d-sync-config depends on undefined service "db-d"`.
+  - `ha` + `extra`: đạt.
+- ✅ `pg_stat_replication`: A, D `quorum`; B, C `async`.
+- PD-05:
+  - ✅ TC52, TC53 (PD-02) đạt.
+  - ❌ TC60 trượt (lỗi 5).
+- ⏸ PD-15 TC71, PD-16 TC72–73: chưa có code.
 
 ---
 
@@ -129,11 +162,20 @@ PD-18 đã merge. PR #58 (PD-22) không cập nhật từ 24/10. PR #62 (PD-23) 
    - #58 cần rebase.
    - PD-18: LISTEN không nối lại khi DB khởi động lại.
 
-**Test phải tự chạy**
-- `restart db-c` → 40 sự kiện, ≥ 95% dưới 20 ms.
-- PD-22: bảng số đo có/không replay. Xoá stream → khởi động ≤ 10 s.
-- PD-23: 150 phiên mẫu → `/api/admin/stats` khớp giữa `true`/`false`. `restart stats-service` → không trùng, không thiếu.
-- PD-06 TC55, TC59.
+**Plan test – kết quả mình chạy 01/11**
+- ❌ PD-18 trên `dev`, 40 sự kiện bãi C, đo `published_at - created_at`:
+
+  | | p50 | p95 | < 20 ms |
+  |---|---|---|---|
+  | Trước restart | 37 ms | 61 ms | 0% |
+  | Sau `restart db-c` | 338 ms | 690 ms | 0% |
+
+  - Sau restart độ trễ tăng gấp 10 lần: LISTEN không nối lại, relay rơi về chế độ quét định kỳ (lỗi 7).
+  - Cả trước restart cũng chưa đạt mục tiêu ≥ 95% dưới 20 ms.
+- ✅ PD-22: Aggregator khởi động khoảng 2 s khi có `events.stream`. Đã xoá stream thì vẫn khoảng 2 s: log lỗi `404 NOT-FOUND` rồi chạy tiếp.
+- ❌ PD-22 e2e 16/17: TC37 lỗi `Cannot read properties of null (reading 'token')` ở cả 2 lần chạy. Trên `dev` TC37 đạt. → Rebase lên `dev` rồi chạy lại.
+- ❌ PD-23: `/api/admin/stats` toàn 0 (lỗi 1). Nhánh không đổi từ lần review.
+- ⏸ PD-06 TC55, TC59: chưa có code.
 
 ---
 
@@ -156,11 +198,16 @@ PD-12 rebase đạt nhưng chưa có PR. PD-24, PD-26, PD-19 chưa có PR. PD-27
    → Đăng thiết kế lên #44 và chờ duyệt. Tách `tests/jepsen/` ra nhánh mới từ `dev`. Bỏ ghi đè `Date.now`. File kết quả chỉ giữ bảng.
 4. **PD-19:** rebase sau khi PD-12 merge.
 
-**Test phải tự chạy**
-- PD-12: `SCALE=1 COORD=1` e2e đạt hết; với `ZONE=bac` gọi A–C trước.
-- PD-24 TC77: một trace đủ chặng trên Jaeger, chụp ảnh vào PR.
-- PD-26 TC78–79: 6 bất biến đạt, có seed; cô lập 1 nút RabbitMQ không mất lệnh.
-- PD-27 TC80: bảng trước/sau với k6.
+**Plan test – kết quả mình chạy 01/11**
+- ✅ PD-12: e2e `SCALE=1 COORD=1` 21/21.
+- ❌ PD-12: chưa có ưu tiên `zone`. `zone` chỉ được lưu ở `discovery.js` và `nodes.js`, không dùng khi chọn thứ tự gọi bãi.
+- ⛔ PD-24 TC77: chưa chạy được, vì máy mình không tải được image Jaeger và OTel Collector từ Docker Hub. Hiệp tự chạy và chụp ảnh vào PR.
+- PD-26 TC78 (`--seed 42 --nemesis partition --time 120`, 1936 dòng lịch sử): đạt 5/6 bất biến.
+  - Đạt: 469 lệnh thành công đều có đúng 1 hiệu ứng; 475 lệnh nhận đều kết thúc; version liên tục; chỉ 1 primary.
+  - ❌ Bất biến 4 lỗi: `did not converge within 30s: fetch failed`.
+  - Mỗi vòng kiểm tra gọi 18 lần `docker compose exec` nên một vòng đã gần hết 30 s ([checkers.mjs:145](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/7713dfd/tests/jepsen/checkers.mjs#L145)). → Gộp truy vấn mỗi DB thành một lần gọi; ghi rõ bãi nào lỗi `fetch`.
+  - Lần chạy đầu RabbitMQ lỗi lúc khởi động (`rabbitmq_prelaunch`) và runner dừng hẳn. → Thêm bước thử lại `up`.
+- ⏸ TC79, PD-27 TC80: chưa chạy.
 
 ---
 
