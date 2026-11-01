@@ -124,13 +124,14 @@ function crashAfterCommitOnce(result) {
 }
 
 function startCommandConsumer({ url, pool, parkingId, internalKey, log = console,
-  connect = (u) => amqp.connect(u, { timeout: 2000 }), retryMs = 5000,
+  connect = (u) => amqp.connect(u, { timeout: 2000 }), retryMs = 5000, maxRetryMs = 60000,
   processCommand = makeCommandProcessor({ pool, parkingId, internalKey }), afterCommit = crashAfterCommitOnce, retryOrDead }) {
   const connectAny = makeConnector(url, connect);
   let stopped = false;
   let state;
   let wake;
   let retryTimer;
+  let retryDelay = retryMs;
   const end = (s) => {
     if (s.dead) return;
     s.dead = true;
@@ -173,6 +174,7 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
           }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
         }, { noAck: false });
         s.tag = consumerTag;
+        retryDelay = retryMs; // A successful subscription resets setup-failure backoff.
         log.info?.('command consumer ready', { parkingId, consumerTag, prefetch: 20 });
         await closed;
       } catch (e) {
@@ -180,7 +182,10 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
         if (s) end(s);
       }
       if (s) await s.tail;
-      if (!stopped) await new Promise((r) => { wake = r; retryTimer = setTimeout(r, retryMs); });
+      if (!stopped) {
+        await new Promise((r) => { wake = r; retryTimer = setTimeout(r, retryDelay); });
+        retryDelay = Math.min(retryDelay * 2, maxRetryMs);
+      }
       wake = undefined;
     }
   })();

@@ -2,6 +2,7 @@ const amqp = require('amqplib');
 const { randomUUID } = require('node:crypto');
 const { makeConnector } = require('./amqp-connect');
 const EXCHANGE = 'parking.replies';
+const UNROUTABLE = 'UNROUTABLE';
 
 function makeReplyPublisher(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000 } = {}) {
   const connectAny = makeConnector(url, connect);
@@ -31,7 +32,10 @@ function makeReplyPublisher(url, { connect = (u) => amqp.connect(u, { timeout: 2
         try {
           s.ch = await conn.createConfirmChannel();
           s.ch.on('error', () => discard(s)); s.ch.on('close', () => discard(s));
-          s.ch.on('return', (m) => s.pending.get(m.properties.headers?.['x-reply-publish-id'])?.(false));
+          s.ch.on('return', (m) => {
+            const done = s.pending.get(m.properties.headers?.['x-reply-publish-id']);
+            done?.(m.fields?.replyCode === 312 ? UNROUTABLE : false);
+          });
           await s.ch.assertExchange(EXCHANGE, 'direct', { durable: true });
           if (s.dead || stopped || expired) throw new Error('Reply channel closed');
           current = s;
@@ -71,14 +75,25 @@ function makeReplyRelay(pool, publish) {
     running = true;
     let count = 0;
     try {
-      const { rows } = await pool.query('SELECT id, reply_to, payload, properties FROM command_reply_outbox WHERE published_at IS NULL ORDER BY id LIMIT 100');
+      const { rows } = await pool.query(`SELECT id, reply_to, payload, properties FROM command_reply_outbox
+        WHERE published_at IS NULL AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+        ORDER BY id LIMIT 100`);
       for (const r of rows) {
-        if (!await publish(r.reply_to, r.payload, r.properties)) break;
-        await pool.query('UPDATE command_reply_outbox SET published_at=now() WHERE id=$1', [r.id]);
+        const outcome = await publish(r.reply_to, r.payload, r.properties);
+        if (outcome === UNROUTABLE) {
+          // Keep the payload durable; an absent reply queue must not block other destinations.
+          // This schedules reply delivery only, not command execution/retry (PD-08).
+          await pool.query(`UPDATE command_reply_outbox
+            SET next_attempt_at=now()+interval '30 seconds', last_error='NO_ROUTE'
+            WHERE id=$1 AND published_at IS NULL`, [r.id]);
+          continue;
+        }
+        if (outcome !== true) break; // Broker/confirm failure: retain pending rows, stop this batch.
+        await pool.query('UPDATE command_reply_outbox SET published_at=now(), next_attempt_at=NULL, last_error=NULL WHERE id=$1', [r.id]);
         count++;
       }
       return count;
     } finally { running = false; }
   };
 }
-module.exports = { makeReplyPublisher, makeReplyRelay, EXCHANGE };
+module.exports = { makeReplyPublisher, makeReplyRelay, EXCHANGE, UNROUTABLE };

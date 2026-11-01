@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS command_reply_outbox (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at TIMESTAMPTZ
 );
+-- Additive upgrade for existing outboxes: retain unroutable replies and retry them later.
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS last_error TEXT;
 CREATE INDEX IF NOT EXISTS ix_command_replies_unpublished ON command_reply_outbox(id) WHERE published_at IS NULL;
 
 CREATE EXTENSION IF NOT EXISTS btree_gist;   -- cho ràng buộc EXCLUDE (slot_id WITH =, khoảng thời gian WITH &&)

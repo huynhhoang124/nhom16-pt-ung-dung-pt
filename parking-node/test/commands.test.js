@@ -6,7 +6,7 @@ const slots = require('../src/slots');
 const { signature } = require('../src/command-signature');
 const { signature: producerSignature } = require('../../aggregator-service/src/command-signature');
 const { decodeCommand, makeCommandProcessor, startCommandConsumer, cleanupInbox, InvalidCommand } = require('../src/commands');
-const { makeReplyPublisher, makeReplyRelay } = require('../src/command-replies');
+const { makeReplyPublisher, makeReplyRelay, UNROUTABLE } = require('../src/command-replies');
 const KEY = 'test-internal-key';
 const actor = { userId: 'u42', role: 'USER' };
 function message(key, type = 'reserve', payload = { slotCode: 'A01', licensePlate: '30A-123.45' }, extra = {}) {
@@ -125,6 +125,40 @@ test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, re
     assert.equal(await makeReplyRelay(pool, async (...args) => { sent.push(args); return true; })(), before);
     assert.equal(sent[0][0], 'test.replies');
   });
+  await t.test('unroutable head is deferred without blocking other replies, and a restored binding recovers it', async () => {
+    const first = (await pool.query(`INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties)
+      VALUES ('missing','missing.queue','{}','{}') RETURNING id`)).rows[0].id;
+    const second = (await pool.query(`INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties)
+      VALUES ('routed','existing.queue','{}','{}') RETURNING id`)).rows[0].id;
+    const attempted = [];
+    const relay = makeReplyRelay(pool, async (destination) => {
+      attempted.push(destination); return destination === 'missing.queue' ? UNROUTABLE : true;
+    });
+    assert.equal(await relay(), 1);
+    assert.deepEqual(attempted, ['missing.queue', 'existing.queue']);
+    const deferred = await one(pool, 'SELECT * FROM command_reply_outbox WHERE id=$1', [first]);
+    assert.equal(deferred.published_at, null); assert.equal(deferred.last_error, 'NO_ROUTE');
+    assert(deferred.next_attempt_at); assert.deepEqual(deferred.payload, {});
+    assert((await one(pool, 'SELECT published_at FROM command_reply_outbox WHERE id=$1', [second])).published_at);
+    attempted.length = 0;
+    assert.equal(await relay(), 0); assert.equal(attempted.length, 0, 'deferred row is not retried every 500 ms');
+    await pool.query("UPDATE command_reply_outbox SET next_attempt_at=now()-interval '1 second' WHERE id=$1", [first]);
+    assert.equal(await makeReplyRelay(pool, async () => true)(), 1);
+    const recovered = await one(pool, 'SELECT * FROM command_reply_outbox WHERE id=$1', [first]);
+    assert(recovered.published_at); assert.equal(recovered.last_error, null); assert.equal(recovered.next_attempt_at, null);
+  });
+  await t.test('schema upgrade preserves existing inbox and pending outbox rows and is repeatable', async () => {
+    const { init } = require('../src/db');
+    const pending = (await pool.query(`INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties)
+      VALUES ('upgrade','later.queue','{"retained":true}','{}') RETURNING id`)).rows[0].id;
+    const inboxBefore = await one(pool, "SELECT * FROM inbox_messages WHERE message_id='u42:pay'");
+    await pool.query('ALTER TABLE command_reply_outbox DROP COLUMN next_attempt_at, DROP COLUMN last_error');
+    await init(pool, 'A', 5); await init(pool, 'A', 5);
+    assert.deepEqual(await one(pool, "SELECT * FROM inbox_messages WHERE message_id='u42:pay'"), inboxBefore);
+    const row = await one(pool, 'SELECT * FROM command_reply_outbox WHERE id=$1', [pending]);
+    assert.deepEqual(row.payload, { retained: true }); assert.equal(row.published_at, null);
+    assert.equal(row.next_attempt_at, null); assert.equal(row.last_error, null);
+  });
   await t.test('retention deletes only committed inbox results older than seven days, leaves outbox untouched', async () => {
     await pool.query("UPDATE inbox_messages SET processed_at=now()-interval '8 days' WHERE message_id='u42:one'");
     const replies = (await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox')).n;
@@ -194,10 +228,55 @@ test('reply publisher: mandatory return/nack/disconnect keep outbox pending; con
   const a = p.publish('agg.1', {}, { messageId: 'reply1', headers: {} }); await tick();
   const ch = b.connections[0].ch; const sent = ch.sent[0];
   assert.equal(sent[3].mandatory, true); assert.equal(sent[3].persistent, true);
-  ch.emit('return', { properties: sent[3] }); sent[4](null); assert.equal(await a, false);
+  ch.emit('return', { properties: sent[3], fields: { replyCode: 312 } }); sent[4](null); assert.equal(await a, UNROUTABLE);
   const yes = p.publish('agg.1', {}, { messageId: 'reply2', headers: {} }); await tick(); ch.sent[1][4](null); assert.equal(await yes, true);
   const nack = p.publish('agg.1', {}, { headers: {} }); await tick(); ch.sent[2][4](new Error('message nacked')); assert.equal(await nack, false);
   const lost = p.publish('agg.1', {}, { headers: {} }); await tick(); await b.connections[0].close(); assert.equal(await lost, false);
   const retry = p.publish('agg.1', {}, { headers: {} }); await tick(); b.connections[1].ch.sent[0][4](null); assert.equal(await retry, true);
   assert.equal(b.connections.length, 2); await p.close();
+});
+
+
+test('missing queue uses capped exponential backoff; successful subscription resets delay; stop cancels waiting', async () => {
+  const b = fakeBroker(); const waits = [];
+  // Fake only the long reconnect timers; other test polling keeps real timers.
+  const original = global.setTimeout;
+  let fail = true;
+  let wakeRetry;
+  const timers = [];
+  global.setTimeout = (callback, ms, ...args) => {
+    if (ms >= 5000) {
+      waits.push(ms);
+      const timer = original(() => {}, 60000); timers.push(timer);
+      wakeRetry = () => { clearTimeout(timer); callback(); };
+      return timer;
+    }
+    return original(callback, ms, ...args);
+  };
+  const connect = async () => {
+    const conn = await b.connect();
+    conn.ch.checkQueue = async () => { if (fail) throw new Error('NOT_FOUND'); };
+    return conn;
+  };
+  const consumer = startCommandConsumer({ url: 'amqp://test', parkingId: 'D', connect, log: quiet,
+    processCommand: async (m) => m, afterCommit() {},
+  });
+  try {
+    for (let i = 0; i < 5; i++) {
+      await until(() => waits.length === i + 1);
+      wakeRetry();
+    }
+    await until(() => waits.length === 6);
+    assert.deepEqual(waits, [5000, 10000, 20000, 40000, 60000, 60000]);
+    fail = false; wakeRetry();
+    await until(() => b.connections.at(-1)?.ch.deliver);
+    await b.connections.at(-1).close();
+    await until(() => waits.length === 7);
+    assert.equal(waits[6], 5000);
+    const before = b.connections.length;
+    await consumer.stop();
+    assert.equal(b.connections.length, before);
+  } finally {
+    await consumer.stop(); timers.forEach(clearTimeout); global.setTimeout = original;
+  }
 });
