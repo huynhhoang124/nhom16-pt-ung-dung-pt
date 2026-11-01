@@ -88,14 +88,22 @@ if (has('--import-agg')) {
   const adding = opt('--add');
   if (!adding) { console.error('Dùng: --add <url phân mảnh mới> [--dry-run] | --cleanup | --import-agg'); process.exit(2); }
   if (urls.some((u) => shardName(u) === shardName(adding))) { console.error(`${shardName(adding)} đã có trong vòng`); process.exit(2); }
-  const moving = await movingRows(urls, adding);
-  if (dryRun) { console.log(`(dry-run) sẽ chuyển ${moving.length} user sang ${shardName(adding)}`); process.exit(0); }
+  if (dryRun) {
+    const moving = await movingRows(urls, adding);
+    console.log(`(dry-run) sẽ chuyển ${moving.length} user sang ${shardName(adding)}`);
+    process.exit(0);
+  }
 
-  // Chặn ghi -> chép -> đối chiếu số lượng + checksum. Lỗi thì mở lại ghi, vòng cũ vẫn đúng (bản chép thừa không được đọc).
+  // Chặn ghi TRƯỚC khi đọc phân mảnh cũ -> chờ lệnh ghi đang chạy xong -> chép -> đối chiếu số lượng + checksum.
+  // Lỗi thì mở lại ghi, vòng cũ vẫn đúng (bản chép thừa không được đọc).
   const id = (await agg.query(
     `INSERT INTO shard_migrations(shards, adding, status, write_blocked) VALUES ($1,$2,'COPYING',true) RETURNING id`,
     [urls.join(','), adding])).rows[0].id;
+  // ponytail: chờ cố định cho request đăng ký/đổi mật khẩu đã qua kiểm cờ kịp ghi xong (bcrypt + INSERT < 1 s).
+  // Cần chặt hơn thì đếm request ghi đang chạy ở mỗi Aggregator.
+  await new Promise((r) => setTimeout(r, Number(process.env.DRAIN_MS ?? 3000)));
   try {
+    const moving = await movingRows(urls, adding);
     const target = await connect(adding);
     await target.query(readFileSync(`${base}src/schema.sql`, 'utf8'));
     await copy(target, moving);
