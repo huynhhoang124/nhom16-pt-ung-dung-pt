@@ -8,6 +8,8 @@ const { applyEvent, reconcile, startConsumer } = require('./events');
 const { makeAuth, seedUsers } = require('./auth');
 const { makeApp } = require('./routes');
 const { makeCommands } = require('./commands');
+const { makeCommandFlow } = require('./command-flow');
+const { startReplyService } = require('./command-replies');
 const { log } = require('./log');
 
 const env = (k, d) => process.env[k] ?? d;
@@ -94,17 +96,43 @@ async function main() {
   const cache = new Map();
   const b64 = (k) => (process.env[k] ? Buffer.from(process.env[k], 'base64').toString() : undefined);
   const auth = makeAuth(env('JWT_SECRET', 'dev-secret'), { privateKey: b64('JWT_PRIVATE_KEY_B64'), publicKey: b64('JWT_PUBLIC_KEY_B64') });
+  // PD-03: COMMAND_MODE=broker gửi lệnh qua RabbitMQ và chờ phản hồi; mặc định http giữ đường cũ
+  const instanceId = env('INSTANCE_ID', '1');
+  const commandMode = env('COMMAND_MODE', 'http');
   const commands = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'), { signingKey: env('INTERNAL_KEY', 'dev') });
-  const app = makeApp({ pool, reg, cache, auth, commands, config, leader, reserveTimeoutMs: config.get('reserveTimeoutMs', 3000) });
+  const commandFlow = makeCommandFlow({
+    pool, publisher: commands, instanceId,
+    waitMs: Number(env('REPLY_WAIT_MS', 3000)), ttlMs: Number(env('COMMAND_TTL_MS', 10000)),
+  });
+  const app = makeApp({
+    pool, reg, cache, auth, commands, commandFlow, commandMode, config, leader,
+    reserveTimeoutMs: config.get('reserveTimeoutMs', 3000),
+  });
   const server = http.createServer(app);
   const io = new Server(server);   // frontend đi qua nginx cùng origin nên không cần CORS
+  let replies;
+  if(commandMode==='broker'){
+    for(let attempt=0;;attempt++){
+      try{replies=await startReplyService({pool,url:env('RABBITMQ_URL','amqp://localhost/%2F'),instanceId,internalKey:env('INTERNAL_KEY','dev'),flow:commandFlow,cache,
+        onResult:row=>{
+          if(row.slot)applyEvent(cache,{parkingId:row.parking_id,slot:row.slot.slotCode,status:row.slot.status,version:row.slot.version});
+          io.to(`user:${row.user_id}`).emit('COMMAND_RESULT',{commandId:row.id,status:row.status,statusCode:row.status_code,result:row.result,parkingId:row.parking_id,slot:row.slot});
+        },log});break;}
+      catch(e){if(e.message!=='DUPLICATE_AGGREGATOR_ID'||attempt>=20)throw e;await new Promise(r=>setTimeout(r,1000));}
+    }
+    commandFlow.start();
+  }
+  for(const signal of ['SIGTERM','SIGINT'])process.once(signal,async()=>{
+    const timeout=setTimeout(()=>process.exit(1),10000);
+    await commandFlow.stop();await replies?.stop();await commands.close();clearTimeout(timeout);process.exit(0);
+  });
   // NV-08: socket có token hợp lệ thì vào phòng "user:<id>" để nhận thông báo riêng; không có vẫn nhận realtime chung.
   io.use((socket, next) => {
     const u = auth.verify(socket.handshake.auth?.token);
     if (u) socket.join(`user:${u.sub}`);
     next();
   });
-  const instance = env('INSTANCE_ID', '1');
+  const instance = instanceId; // One canonical ID for replies, events and diagnostics.
   startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (n) => {
     (n.to === '*' ? io : io.to(`user:${n.to}`)).emit('NOTIFICATION', n);
   }, log, { exchange: 'user.notifications', queue: `aggregator.notifications.${instance}`, pattern: '#' });
