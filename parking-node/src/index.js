@@ -132,7 +132,7 @@ async function main() {
   // Hết hạn giữ chỗ + kích hoạt lượt đặt trước + cảnh báo sắp hết hạn.
   // Chỉ node giữ advisory lock mới được chạy các tác vụ này.
   const minutes = Number(env('RESERVATION_MINUTES', 15));
-  const scheduledJobsLock = createScheduledJobsLock(env('DATABASE_URL'), {
+  const scheduledJobsLock = createScheduledJobsLock(() => pool.currentUrl ?? env('DATABASE_URL'), {
     parkingId,
     log,
   });

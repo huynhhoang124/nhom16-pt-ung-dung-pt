@@ -11,6 +11,7 @@ function defaultPgClientFactory(url, timeoutMs = 10000) {
   const client = new Client({
     connectionString: url,
     connectionTimeoutMillis: Math.max(10000, timeoutMs),
+    query_timeout: timeoutMs,   // DB nhận kết nối nhưng treo SQL: SELECT 1 không được chờ mãi (checkOnce kẹt isChecking)
   });
   return {
     async connect() {
@@ -199,6 +200,16 @@ function makeFailoverManager({
         if (waitWindowMs > 0) {
           log.info?.(`[failover-manager] Bước B: Chờ cửa sổ an toàn ${waitWindowMs}ms trước khi promote replica...`);
           await new Promise((resolve) => setTimeout(resolve, waitWindowMs));
+        }
+
+        // Mất leader hoặc epoch đã bị bản khác đổi trong lúc chờ -> dừng, không promote (tránh đua với leader mới)
+        if (elector && !elector.isLeader()) {
+          log.warn?.(`[failover-manager] Mất quyền leader trong lúc chờ, huỷ failover bãi ${state.parkingId}`);
+          return { ok: false, reason: 'LOST_LEADERSHIP', epoch: nextEpoch };
+        }
+        if (etcdClient && (await etcdClient.get(`/nhom16/parking/${state.parkingId}/db/epoch`).string()) !== String(nextEpoch)) {
+          log.warn?.(`[failover-manager] Epoch bãi ${state.parkingId} đã đổi trong lúc chờ, huỷ failover`);
+          return { ok: false, reason: 'EPOCH_CHANGED', epoch: nextEpoch };
         }
 
         // Bước C: Gọi SELECT pg_promote() trên Replica

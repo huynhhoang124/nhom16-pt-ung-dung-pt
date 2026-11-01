@@ -93,6 +93,15 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
   return payIn(c, { sessionId: b.sessionId, method: 'ONLINE', paymentKey: env.messageId, userId: actor.userId });
 }
 
+// PD-14b: DB lệch epoch etcd (primary cũ) hoặc mất etcd quá lâu -> trả mã lỗi, không ghi. Không lưu inbox để gửi lại được.
+async function epochError(pool, c) {
+  if (typeof pool.checkEpoch !== 'function') return null;
+  try { await pool.checkEpoch(c); return null; } catch (e) {
+    if (e.code === 'STALE_DB_EPOCH' || e.code === 'ETCD_UNREACHABLE') return { code: e.status, body: { error: e.code, ...e.details } };
+    throw e;
+  }
+}
+
 function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now }) {
   return async (m) => {
     const env = decodeCommand(m, parkingId, internalKey);
@@ -100,6 +109,8 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
+      const stale = await epochError(pool, c);
+      if (stale) { await c.query('ROLLBACK'); return { ...stale, messageId: env.messageId }; }
       // Token và ghi nghiệp vụ nằm trong cùng giao dịch inbox.
       const fence = await checkFencing(c, env.payload.sagaId ? 'reconcile' : 'default', env.fencingToken);
       let out;
@@ -136,6 +147,9 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
       await enrichReply(c, env, payload, properties, internalKey);
       await c.query('INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties) VALUES ($1,$2,$3,$4)',
         [env.messageId, env.replyTo, payload, properties]);
+      // Kiểm lại trước COMMIT: giao dịch đã qua lần kiểm đầu rồi bị chậm thì không được commit vào primary cũ sau failover
+      const late = await epochError(pool, c);
+      if (late) { await c.query('ROLLBACK'); return { ...late, messageId: env.messageId }; }
       await c.query('COMMIT');
       return { ...out, messageId: env.messageId, duplicate: !inserted.rowCount };
     } catch (e) {

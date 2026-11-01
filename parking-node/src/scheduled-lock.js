@@ -41,7 +41,8 @@ function createScheduledJobsLock(
         // Nếu chưa có kết nối riêng, tạo một kết nối mới.
         if (!session) {
           session = new ClientClass({
-            connectionString,
+            // PD-14b: hàm -> đọc primary hiện tại (dynamic-pool) mỗi lần nối lại
+            connectionString: typeof connectionString === 'function' ? connectionString() : connectionString,
             connectionTimeoutMillis: 1000,
           });
 

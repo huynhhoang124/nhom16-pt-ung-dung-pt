@@ -20,6 +20,8 @@ async function tx(pool, fn) {
     const fence = await fenceIn(c);
     if (!fence.ok) throw new Abort(fence.code, { error: fence.error, job: fence.job, token: fence.token });
     const out = await fn(c);
+    // Kiểm lại trước COMMIT: giao dịch chậm qua lúc failover không được commit vào primary cũ
+    if (typeof pool.checkEpoch === 'function') await pool.checkEpoch(c);
     await c.query('COMMIT');
     return out;
   } catch (e) {
