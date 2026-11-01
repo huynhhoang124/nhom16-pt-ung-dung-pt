@@ -109,8 +109,16 @@ test('TC42 xe vào/ra không idempotent: lỗi thì KHÔNG retry, trả nguyên 
 test('GS-04 /metrics của Aggregator: trạng thái và số lần lỗi từng bãi', async (t) => {
   const { x, agg, n } = await flakySystem(t, 0);
   n.fails = 2;
+  const metrics = require('../src/metrics');
+  metrics.observeCommand({ type: 'reserve', parking_id: 'X', status: 'DONE', created_at: new Date(Date.now() - 200) });
+  metrics.incCmdDead();
   const url = `http://127.0.0.1:${agg.server.address().port}/metrics`;
   const text = await (await fetch(url)).text();
+  // PD-25: số đo kênh lệnh
+  assert.match(text, /command_duration_seconds_count\{aggregator="aggregator-1",type="reserve",parking_id="X",status="DONE"\} \d+/);
+  assert.match(text, /cmd_dead_total\{aggregator="aggregator-1"\} [1-9]/);
+  assert.match(text, /cmd_oldest_age_seconds\{aggregator="aggregator-1"\} 0/);
+  assert.match(text, /aggregator_is_leader/);
   assert.match(text, /parking_node_up\{node="X",aggregator="aggregator-1"\} 1/);
   assert.match(text, /parking_node_fails\{node="X",aggregator="aggregator-1"\} 2/);
   assert.ok(x);

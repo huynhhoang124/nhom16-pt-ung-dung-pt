@@ -16,9 +16,10 @@ function makeExpiredHandler({ pool, notify = () => {}, log = console }) {
         `UPDATE commands SET status='EXPIRED', status_code=410, result=$2, updated_at=now()
          WHERE id=$1 AND status='PENDING' RETURNING *`,
         [id, { error: 'COMMAND_EXPIRED', message: 'Bãi đang gián đoạn, chưa đặt' }]);
-      if (r.rows[0]) notify(r.rows[0]);
+      if (r.rows[0]) { require('./metrics').observeCommand(r.rows[0]); notify(r.rows[0]); }   // PD-25: tính cả lệnh EXPIRED
     } else if (reason === 'delivery_limit') {
       ch.sendToQueue('cmd.dead', m.content, { ...m.properties, persistent: true });
+      require('./metrics').incCmdDead();
     } else {
       log.info?.('bỏ qua tin trong cmd.expired', { messageId: id, reason });
     }

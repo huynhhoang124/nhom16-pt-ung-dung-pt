@@ -4,6 +4,7 @@
 # không dùng static_configs [aggregator:8000]: mỗi lần lấy sẽ trúng một bản ngẫu nhiên, số đếm nhảy lung tung.
 global:
   scrape_interval: 5s
+  evaluation_interval: 5s   # PD-25: luật cảnh báo đánh giá mỗi 5 s (mặc định 1 phút, demo chờ lâu)
 scrape_configs:
   - job_name: parking
     static_configs:
@@ -16,3 +17,30 @@ scrape_configs:
       - { names: [rabbitmq, rabbitmq-2, rabbitmq-3], type: A, port: 15692, refresh_interval: 15s }
     relabel_configs:
       - { source_labels: [__meta_dns_name], target_label: instance }   # hiện tên nút thay vì IP
+  # PD-25: hàng đợi lệnh cmd.* (số tin chờ, chưa ack) từ endpoint chi tiết của plugin rabbitmq_prometheus
+  - job_name: rabbitmq-queues
+    metrics_path: /metrics/detailed
+    params: { family: [queue_coarse_metrics] }
+    dns_sd_configs:
+      - { names: [rabbitmq, rabbitmq-2, rabbitmq-3], type: A, port: 15692, refresh_interval: 15s }
+    relabel_configs:
+      - { source_labels: [__meta_dns_name], target_label: instance }
+  # PD-25: failover-manager, etcd chỉ chạy với profile coord; dùng DNS nên tắt profile thì không hiện mục tiêu down giả
+  - job_name: failover-manager
+    dns_sd_configs:
+      - { names: [failover-manager-1], type: A, port: 8051, refresh_interval: 15s }
+      - { names: [failover-manager-2], type: A, port: 8052, refresh_interval: 15s }
+    relabel_configs:
+      - { source_labels: [__meta_dns_name], target_label: instance }
+  - job_name: etcd
+    dns_sd_configs:
+      - { names: [etcd-1, etcd-2, etcd-3], type: A, port: 2379, refresh_interval: 15s }
+    relabel_configs:
+      - { source_labels: [__meta_dns_name], target_label: instance }
+
+# PD-25: luật cảnh báo + gửi sang Alertmanager (profile obs)
+rule_files: [/etc/prometheus/alerts.yml]
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: [alertmanager:9093]

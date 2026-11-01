@@ -219,17 +219,17 @@ Nền: `feature/PD-14b-auto-failover-epoch` (Luận). Lấy `a613d05 c13fc62 512
 
 ### B10 – PD-25 Metrics, cảnh báo, dashboard (issue #43) – sau B2, B6
 
-- [ ] Thêm metric vào `aggregator-service/src/metrics.js` và `parking-node/src/metrics.js`:
+- [x] Thêm metric vào `aggregator-service/src/metrics.js` và `parking-node/src/metrics.js`:
   - `command_duration_seconds`
   - `cmd_redelivered_total`
   - `cmd_dead_total`
   - `cmd_oldest_age_seconds`
   - `aggregator_is_leader`
   - `fencing_rejected_total`
-  - `hlc_drift_ms` (gọi khi PD-17 của Loan đã merge)
-- [ ] `observability/prometheus.yml`: thêm job cho `failover-manager`, `stats-service`, etcd, RabbitMQ `/metrics/detailed?family=queue_coarse_metrics`.
-- [ ] Alertmanager: service trong profile `obs`, file `observability/alertmanager.yml` và `observability/alerts.yml` theo ngưỡng mục 10.2.
-- [ ] 2 dashboard `observability/grafana/dashboards/` ("Kênh lệnh", "Điều phối"), theo mẫu `nhom16.json`.
+  - `hlc_drift_ms` (gọi khi PD-17 của Loan đã merge) — CHƯA làm: PD-17 chưa merge. `aggregator_is_leader`, `fencing_rejected_total` đã có từ PD-10, giữ nguyên.
+- [x] `observability/prometheus.yml`: thêm job cho `failover-manager`, `stats-service` (repo chưa có service này, bỏ qua), etcd, RabbitMQ `/metrics/detailed?family=queue_coarse_metrics`.
+- [x] Alertmanager: service trong profile `obs`, file `observability/alertmanager.yml` và `observability/alerts.yml` theo ngưỡng mục 10.2.
+- [x] 2 dashboard `observability/grafana/dashboards/` ("Kênh lệnh", "Điều phối"), theo mẫu `nhom16.json`.
 - [ ] Kiểm tra: chạy k6 rồi chụp 2 dashboard; tắt một bãi hoặc làm đầy hàng đợi → cảnh báo bắn.
 - [ ] PR, merge.
 

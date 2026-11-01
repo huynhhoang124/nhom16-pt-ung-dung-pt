@@ -17,7 +17,7 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
   // PT-01: cho biết request rơi vào bản Aggregator nào (demo cân bằng tải / tắt một bản)
   const instance = process.env.INSTANCE_ID ?? '1';
   app.use((_req, res, next) => { res.set('x-instance', `aggregator-${instance}`); next(); });
-  const crossZone = mountMetrics(app, { reg, leader, instance });   // GET /metrics; nginx không chuyển /metrics ra ngoài
+  const crossZone = mountMetrics(app, { reg, leader, pool, instance });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
   // PD-11: timeout ghi đọc lại mỗi lần gọi (đổi qua etcd là áp dụng ngay cho đặt chỗ, saga, trả tiền)
