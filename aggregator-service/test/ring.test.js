@@ -44,3 +44,32 @@ test('thứ tự cấu hình không làm đổi chủ khoá; vòng quay lại đ
   a.removeShard('db-users-2');
   assert.throws(() => a.shardFor('user1'), /NO_USER_SHARDS/);
 });
+
+test('mỗi user mẫu nằm đúng một phân mảnh; cờ write_blocked chặn ghi', async () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { pglitePool } = require('./helpers');
+  const { makeUserShards } = require('../src/ring');
+  const { seedUsers, makeAuth } = require('../src/auth');
+  const schema = fs.readFileSync(path.join(__dirname, '../src/schema.sql'), 'utf8');
+  const dbs = { 'db-users-1': await pglitePool(), 'db-users-2': await pglitePool() };
+  const agg = await pglitePool();
+  for (const p of [...Object.values(dbs), agg]) await p.query(schema);
+  const users = makeUserShards({
+    urls: 'postgres://x@db-users-1/users,postgres://x@db-users-2/users', agg, makePool: (u) => dbs[new URL(u).hostname],
+  });
+  await seedUsers(users, 'pw');
+  const counts = await Promise.all(Object.values(dbs).map(async (p) => Number((await p.query('SELECT count(*) AS n FROM users')).rows[0].n)));
+  assert.equal(counts[0] + counts[1], 6);
+  assert.ok(counts.every((n) => n > 0), `phân bố: ${counts}`);
+  const auth = makeAuth('secret');
+  assert.ok(await auth.login(users.for('user1'), 'user1', 'pw'));
+  const other = Object.values(dbs).find((p) => p !== users.for('user1'));
+  assert.equal(await auth.login(other, 'user1', 'pw'), null);
+
+  assert.equal(await users.writable(), true);   // chưa có bảng shard_migrations
+  await agg.query('CREATE TABLE shard_migrations(id SERIAL PRIMARY KEY, write_blocked BOOLEAN NOT NULL DEFAULT false)');
+  await agg.query('INSERT INTO shard_migrations(write_blocked) VALUES (true)');
+  assert.equal(await users.writable(), false);
+  for (const p of [...Object.values(dbs), agg]) await p.end();
+});

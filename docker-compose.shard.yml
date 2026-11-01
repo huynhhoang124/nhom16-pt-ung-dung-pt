@@ -1,0 +1,56 @@
+# PD-16: phân mảnh bảng users theo username (vòng băm ring.js). Bảng commands, sagas vẫn ở db-agg.
+# docker compose -f docker-compose.yml -f docker-compose.shard.yml up -d
+# db-users-3 (profile shard3) chỉ dùng khi tập thêm phân mảnh: node scripts/them-phan-manh.mjs
+x-pg: &pg
+  image: postgres:16-alpine
+  environment: { POSTGRES_PASSWORD: dev, POSTGRES_DB: parking }
+  healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres -d parking"], interval: 3s, timeout: 3s, retries: 30 }
+
+services:
+  db-users-1:
+    <<: *pg
+    volumes:
+      - db-users-1-data:/var/lib/postgresql/data
+      - ./postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+  db-users-1-replica:
+    image: postgres:16-alpine
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    environment: { PGDATA: /var/lib/postgresql/data, REPLICA_OF: db-users-1, REPLICATION_PASSWORD: replica, APPLICATION_NAME: db-users-1-replica }
+    volumes:
+      - db-users-1-replica-data:/var/lib/postgresql/data
+      - ./postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 3s, timeout: 3s, retries: 60 }
+    depends_on: { db-users-1: { condition: service_healthy } }
+  db-users-2:
+    <<: *pg
+    volumes:
+      - db-users-2-data:/var/lib/postgresql/data
+      - ./postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+  db-users-2-replica:
+    image: postgres:16-alpine
+    entrypoint: ["/bin/sh", "/replica-entrypoint.sh"]
+    environment: { PGDATA: /var/lib/postgresql/data, REPLICA_OF: db-users-2, REPLICATION_PASSWORD: replica, APPLICATION_NAME: db-users-2-replica }
+    volumes:
+      - db-users-2-replica-data:/var/lib/postgresql/data
+      - ./postgres/replica-entrypoint.sh:/replica-entrypoint.sh:ro
+    healthcheck: { test: ["CMD-SHELL", "pg_isready -U postgres"], interval: 3s, timeout: 3s, retries: 60 }
+    depends_on: { db-users-2: { condition: service_healthy } }
+  db-users-3:
+    profiles: [shard3]
+    <<: *pg
+    volumes:
+      - db-users-3-data:/var/lib/postgresql/data
+      - ./postgres/init-primary.sh:/docker-entrypoint-initdb.d/10-replication.sh:ro
+  aggregator:
+    environment: { USERS_DATABASE_URLS: "${USERS_DATABASE_URLS:-postgres://postgres:dev@db-users-1/parking,postgres://postgres:dev@db-users-2/parking}" }
+    depends_on: { db-users-1: { condition: service_healthy }, db-users-2: { condition: service_healthy } }
+  aggregator-2:
+    environment: { USERS_DATABASE_URLS: "${USERS_DATABASE_URLS:-postgres://postgres:dev@db-users-1/parking,postgres://postgres:dev@db-users-2/parking}" }
+    depends_on: { db-users-1: { condition: service_healthy }, db-users-2: { condition: service_healthy } }
+
+volumes:
+  db-users-1-data:
+  db-users-1-replica-data:
+  db-users-2-data:
+  db-users-2-replica-data:
+  db-users-3-data:
