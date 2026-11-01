@@ -12,13 +12,29 @@
     "aggregator": {
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
-        "ZONE": "bac"
+        "ZONE": "bac",
+        "REGIONAL_PEER_URL": "http://aggregator-nam:8000"
       }
     },
     "aggregator-2": {
+      "profiles": [
+        "ha",
+        "scale"
+      ],
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
-        "ZONE": "bac"
+        "ZONE": "bac",
+        "REGIONAL_PEER_URL": "http://aggregator-nam:8000"
+      }
+    },
+    "aggregator-nam-1": {
+      "environment": {
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379"
+      }
+    },
+    "aggregator-nam-2": {
+      "environment": {
+        "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379"
       }
     },
     "db-a": {

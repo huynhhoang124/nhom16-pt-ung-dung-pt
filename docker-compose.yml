@@ -116,10 +116,11 @@ services:
       ZONE: ${ZONE:-bac}
       ENABLE_TEST_FAULTS: ${ENABLE_TEST_FAULTS:-0}
       NODES: >-
-        [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875,"publicUrl":"http://localhost:8001"},
-         {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002"},
-         {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội","lat":21.0287,"lng":105.8524,"publicUrl":"http://localhost:8003"}]
+        [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875,"publicUrl":"http://localhost:8001","zone":"bac"},
+         {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002","zone":"bac"},
+         {"parkingId":"C","name":"Bãi C – Hoàn Kiếm","apiUrl":"http://parking-c:8003","address":"Hoàn Kiếm, Hà Nội","lat":21.0287,"lng":105.8524,"publicUrl":"http://localhost:8003","zone":"bac"}]
     ports: ["8000:8000"]
+    networks: { default: { aliases: [aggregator-bac-1, aggregator-bac] } }
     depends_on: { db-agg: { condition: service_healthy } }
 
   # --- PT-01: bản Aggregator thứ hai (docker compose --profile ha up -d). Cùng tên mạng "aggregator" nên nginx
@@ -129,9 +130,23 @@ services:
     profiles: [ha]
     image: nhom16/aggregator
     environment: { <<: *agg-env, INSTANCE_ID: "2" }
-    networks: { default: { aliases: [aggregator] } }
+    networks: { default: { aliases: [aggregator, aggregator-bac-2, aggregator-bac] } }
     ports:
     - "8010:8000"
+    depends_on: { db-agg: { condition: service_healthy } }
+
+  aggregator-nam-1:
+    profiles: [scale]
+    image: nhom16/aggregator
+    environment: { <<: *agg-env, INSTANCE_ID: "nam-1", ZONE: nam, REGIONAL_PEER_URL: "http://aggregator-bac:8000", ETCD_ENDPOINTS: "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379" }
+    networks: { default: { aliases: [aggregator, aggregator-nam] } }
+    depends_on: { db-agg: { condition: service_healthy } }
+
+  aggregator-nam-2:
+    profiles: [scale]
+    image: nhom16/aggregator
+    environment: { <<: *agg-env, INSTANCE_ID: "nam-2", ZONE: nam, REGIONAL_PEER_URL: "http://aggregator-bac:8000", ETCD_ENDPOINTS: "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379" }
+    networks: { default: { aliases: [aggregator, aggregator-nam] } }
     depends_on: { db-agg: { condition: service_healthy } }
 
   # NV-08: dịch vụ thông báo (nghe parking.events, gửi user.notifications); tắt thì hệ thống vẫn chạy

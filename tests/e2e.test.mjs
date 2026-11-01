@@ -707,6 +707,8 @@ test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm l
   { ...T, skip: !process.env.COORD },
   async () => {
     try {
+      // PD-19: 2 bản vùng Nam cũng tranh leader; tạm dừng để test chỉ có 2 bản vùng Bắc
+      if (SCALE) compose('stop aggregator-nam-1 aggregator-nam-2');
       // 1. Khởi động bản Aggregator thứ 2
       compose('--profile ha up -d aggregator-2');
       await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
@@ -744,6 +746,7 @@ test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm l
 
       console.log('TC65 - PASS: Chuyển giao Leader thành công khi Leader cũ dừng');
     } finally {
+      if (SCALE) compose('start aggregator-nam-1 aggregator-nam-2');
       compose('start aggregator');
       compose('--profile ha stop aggregator-2');
     }
@@ -754,6 +757,8 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
   { ...T, skip: !process.env.COORD },
   async () => {
     try {
+      // PD-19: 2 bản vùng Nam cũng tranh leader; tạm dừng để test chỉ có 2 bản vùng Bắc
+      if (SCALE) compose('stop aggregator-nam-1 aggregator-nam-2');
       // 1. Khởi động bản Aggregator thứ 2
       compose('--profile ha up -d aggregator-2');
       await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
@@ -802,6 +807,7 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
 
       console.log('TC66 - PASS: Node từ chối lệnh từ Leader cũ do Fencing Token cũ, bảo vệ chống split-brain');
     } finally {
+      if (SCALE) compose('start aggregator-nam-1 aggregator-nam-2');
       compose('--profile ha stop aggregator-2');
     }
   }
