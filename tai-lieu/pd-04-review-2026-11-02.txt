@@ -1,0 +1,77 @@
+PD-04 actual verification, 2026-11-02 (local Windows/Docker)
+Issue #21; existing PR #53; base origin/dev 4155051814f4df61e4df75dcb27f7b1e32553c5b.
+PD-03 #68, PD-06 #72, PD-12 #67 and PD-09 are merged dependencies.
+
+Full unit regression:
+- parking-node npm test: 90 passed, 1 skipped (opt-in PostgreSQL integration).
+- aggregator-service npm test: 87 passed, 3 skipped (opt-in integrations).
+- notification-service npm test: 2 passed.
+- frontend npm test: 5 passed; npm run build: passed, 111 modules.
+- Syntax checks, git diff --check against dev, Compose config: passed.
+
+TC61 real broker/DB/etcd, project pd04-review-1102:
+- Reuses docker-compose.scale.yml (PD-12), actual PD-09 etcd registry and
+  merged PD-03/PD-06 production entrypoints. No candidate source patching.
+- node --test tests/pd04-broadcast.test.mjs: 7 passed, 0 failed, 0 skipped.
+  Raw final run: pd-04-broker-2026-11-02.log.
+- One observed publish to cmd.zone-nam.setPricing; D/E/F all applied.
+- Ten HTTP requests with the same key and explicit broker redelivery:
+  same broadcast ID, one inbox effect per parking, repeated safe replies.
+- F stopped: applied D/E, missing F. Restarted after >10 seconds, before
+  10-minute deadline. All three eventually applied; elapsed incl. restart
+  and persistence probe: 19343 ms. F inbox count remained one.
+- Signed already-expired command: stable 410, no pricing mutation.
+- Offline F, signed command with 250 ms remaining of its 600000 ms lifetime:
+  actual broker expiration/DLX observed; restart did not execute it.
+  This checks remaining-deadline expiration, not a 10-minute wall-clock wait.
+- Actual Management: durable quorum/SAC admin queues, zone/all bindings only
+  on admin queues; normal/admin consumer prefetch 16/4; admin TTL 600000.
+- lockFloor/banPlates survive D restart; duplicate lock keeps slot version.
+- cmd.all broadcast returns independent per-lot results, including business
+  rejection for missing floor; responses do not overwrite each other.
+- Missing authentication 401, non-admin 403, invalid payload 400,
+  nonexistent zone 404.
+
+Read-only topology script against http://localhost:15673:
+PD-01 Management API verified: vhost /, 2 exchanges, 14 quorum queues,
+25 bindings, 2 policy, parking permissions.
+
+Browser verification against built frontend:
+- Demo admin opened Quản trị; bac/nam and all three command types visible.
+- Sending lockFloor for nonexistent floor 98 displayed CONFIRMED plus six
+  separate FLOOR_NOT_FOUND results, 0/6 applied. No slots were changed.
+- Exact browser test command, inbox/outbox/results rows were removed afterward.
+
+Initial failures and corrections:
+- Unit TTL test exposed inherited user 10-second default; broadcast publisher
+  now explicitly uses admin 600000 and clamps to the signed remaining deadline.
+- Unit worker test now awaits its asynchronous pump before inspecting state.
+- First real TC61 run hit stale HTTP keep-alive sockets after synchronous Docker
+  probes; harness now requests Connection: close (no unsafe POST auto-retry).
+- DLQ probe initially stopped at older test records. It now holds other records
+  unacked while finding its own, then requeues them; no purge or volume deletion.
+- The complete final TC61 run passed after these corrections.
+
+Isolation and restoration:
+- Existing workspace changes were left in D:\nhom16-pt-ung-dung-pt.
+- All changes/test stack belong to D:\pd-04-admin-broadcast.
+- TC61 finally restarts D/F and restores pricing/owned slot/ban fixtures;
+  known test command rows are removed by exact ID across all six databases.
+- Six-lot test project stopped afterward; volumes retained. Existing unrelated
+  RabbitMQ, Airflow and Superset containers were not stopped or changed.
+- HTTP regression uses a separate pd04-http-1102 project, COMMAND_MODE=http.
+  node --test tests/e2e.test.mjs: 16 passed, 0 failed, 22 skipped; raw log:
+  pd-04-http-2026-11-02.log. Skips are modes/profiles not enabled in A/B/C
+  (broker request-reply, scale, HA, coord, shards, saga and optional chaos).
+  This is the complete HTTP-mode run, not evidence for those skipped criteria.
+  All test-stopped services were restored before stopping this owned project;
+  its database/RabbitMQ volumes are also retained.
+
+Limits:
+- PARKING_ZONES is only a fallback when registry metadata lacks a zone.
+- Full live region reassignment/rebinding belongs to PD-09/PD-12.
+- No saga, fencing protocol, delayed retry PD-08 or full dynamic config added.
+- Requires synchronized clocks; handler rechecks deadline after DB locks and
+  before completing effects; a tiny interval before COMMIT remains documented.
+- Broadcast audit retention is separate from the existing 7-day inbox dedup;
+  automatic audit cleanup is not introduced in this task.

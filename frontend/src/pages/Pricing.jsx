@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, message } from '../api.js';
 import { TYPE_LABEL } from './Dashboard.jsx';
+import { Icon, TYPE_ICON } from '../ui.jsx';
 
 const FIELDS = [
   ['firstBlockMin', 'Block đầu (phút)'], ['firstBlockFee', 'Giá block đầu'], ['nextHourFee', 'Mỗi giờ tiếp'],
@@ -30,13 +31,13 @@ export default function Pricing({ parkingId, canEdit }) {
     <form onSubmit={save}>
       <h3>Bảng giá (VND)</h3>
       <div className="scroll"><table>
-        <thead><tr><th>Loại xe</th>{FIELDS.map(([k, label]) => <th key={k}>{label}</th>)}</tr></thead>
+        <thead><tr><th>Loại xe</th>{FIELDS.map(([k, label]) => <th key={k} className={canEdit ? undefined : 'tnum'}>{label}</th>)}</tr></thead>
         <tbody>
           {rules.map((r, i) => (
             <tr key={r.vehicleType}>
-              <td>{TYPE_LABEL[r.vehicleType]}</td>
+              <td><Icon name={TYPE_ICON[r.vehicleType]} /> {TYPE_LABEL[r.vehicleType]}</td>
               {FIELDS.map(([k]) => (
-                <td key={k}>
+                <td key={k} className={canEdit ? undefined : 'tnum'}>
                   {canEdit
                     ? <input type="number" min="0" step="1000" className="num" value={r[k] ?? ''} onChange={(e) => set(i, k, e.target.value)} />
                     : (r[k] ?? '—').toLocaleString('vi-VN')}
@@ -47,8 +48,10 @@ export default function Pricing({ parkingId, canEdit }) {
         </tbody>
       </table></div>
       <p className="muted small">Quá block đầu, chưa đủ giờ tính tròn 1 giờ. Qua đêm: phiên chạm khung 22:00–06:00.</p>
-      {note && <p className={note.kind === 'ok' ? 'success' : 'error'}>{note.text}</p>}
-      {canEdit && <button className="primary">Lưu bảng giá</button>}
+      <div className="inline" style={{ alignItems: 'center' }}>
+        {canEdit && <button className="primary">Lưu bảng giá</button>}
+        {note && <span className={note.kind === 'ok' ? 'success' : 'error'}><Icon name={note.kind === 'ok' ? 'check' : 'x'} /> {note.text}</span>}
+      </div>
     </form>
   );
 }

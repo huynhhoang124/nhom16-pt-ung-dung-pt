@@ -293,3 +293,31 @@ test('TC53 Aggregator chết giữa saga: khởi động lại thì bù trừ n�
   assert.equal((await agg.pool.query('SELECT status FROM sagas WHERE id=$1', [id])).rows[0].status, 'FAILED');
   assert.equal((await a.pool.query('SELECT status FROM reservations WHERE id=$1', [rid])).rows[0].status, 'CANCELLED');
 });
+
+test('PD-10 khôi phục saga mang token lúc lên leader: node đã thấy token mới hơn thì từ chối, mất quyền thì dừng', async (t) => {
+  const { checkFencing } = require('../../parking-node/src/fencing');
+  const { a, agg } = await system(t);
+  const id = '22222222-2222-4222-8222-222222222222';
+  const res = await agg.reg.call(agg.reg.get('A'), '/api/reservations', { method: 'POST',
+    body: { requestId: `${id}:0`, userId: 'u-y', slotCode: 'A03', licensePlate: '30A-123.46' } });
+  const rid = (await res.json()).id;
+  await agg.pool.query(`INSERT INTO sagas(id, request_id, user_id, status, steps, updated_at)
+    VALUES ($1, 'u-y:k', 'u-y', 'RUNNING', $2, now() - interval '2 minutes')`,
+    [id, JSON.stringify([{ ...item('A', 'A03'), state: 'DONE', reservationId: rid }, { ...item('B', 'B03'), state: 'PENDING' }])]);
+  const rsv = async () => (await a.pool.query('SELECT status FROM reservations WHERE id=$1', [rid])).rows[0].status;
+
+  // đã mất quyền leader trước khi tới saga này -> không bù trừ gì
+  assert.equal(await agg.app.locals.sagas.recover(60_000, { fencingToken: 40, isActive: () => false }), 0);
+  assert.equal(await rsv(), 'ACTIVE');
+
+  // leader mới (token 50) đã ghi vào bãi A; leader cũ khôi phục với token 40 -> node từ chối, chỗ vẫn giữ
+  await checkFencing(a.pool, 'reconcile', 50);
+  await agg.app.locals.sagas.recover(60_000, { fencingToken: 40 });
+  assert.equal(await rsv(), 'ACTIVE');
+  assert.equal((await agg.pool.query('SELECT status FROM sagas WHERE id=$1', [id])).rows[0].status, 'COMPENSATING');
+
+  // leader mới khôi phục bằng token 50 -> bù trừ xong
+  await agg.pool.query(`UPDATE sagas SET updated_at = now() - interval '2 minutes' WHERE id=$1`, [id]);
+  assert.equal(await agg.app.locals.sagas.recover(60_000, { fencingToken: 50 }), 1);
+  assert.equal(await rsv(), 'CANCELLED');
+});

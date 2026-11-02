@@ -424,13 +424,13 @@ Câu trả lời mẫu ngắn (đủ để thuộc):
 ## 12. Sửa tài liệu cũ và những gì chưa kiểm chứng
 
 **Việc sửa trong HLD/kế hoạch** (gộp README + phát hiện mới):
-- [ ] Kế hoạch: phân công 4 → 6 người (mục 10).
-- [ ] HLD Câu 2: ghi "bốn lớp" nhưng bảng có 6 dòng.
-- [ ] HLD trang 2 vs 3: Aggregator "không giữ dữ liệu slot" nhưng có "trạng thái tổng hợp/đối soát" → ghi rõ: cache RAM chỉ-đọc, nguồn gốc ở DB bãi.
-- [ ] HLD: STAFF đi qua Aggregator → ghi hạn chế hoặc cho gọi thẳng Node.
-- [ ] HLD: "phân mảnh dọc SLOT_DEF/SLOT_STATE" thực chất là tách bảng trong site.
-- [ ] HLD Câu 3: sửa câu CAP (chỉ chọn khi có partition); thêm khai báo mô hình hệ thống.
-- [ ] Thống nhất broker: kế hoạch ghi "hướng phát triển", HLD ghi có. Quyết định theo mục 0.
+- [x] Kế hoạch: phân công 4 → 6 người (mục 10) (đã sửa trang 32 `Ke_hoach_trien_khai.pdf`).
+- [x] HLD Câu 2: ghi "bốn lớp" nhưng bảng có 6 dòng (đã hiệu chỉnh khớp 6 thành phần phân tán).
+- [x] HLD trang 2 vs 3: Aggregator "không giữ dữ liệu slot" nhưng có "trạng thái tổng hợp/đối soát" → ghi rõ: cache RAM chỉ-đọc, nguồn gốc ở DB bãi.
+- [x] HLD: STAFF đi qua Aggregator → đã khắc phục bằng gọi thẳng Node khi Aggregator sập (PT-05).
+- [x] HLD: "phân mảnh dọc SLOT_DEF/SLOT_STATE" thực chất là tách bảng trong site.
+- [x] HLD Câu 3: sửa câu CAP (chỉ chọn khi có partition); thêm khai báo mô hình hệ thống.
+- [x] Thống nhất broker: kế hoạch ghi "hướng phát triển", HLD ghi có. Quyết định theo mục 0.
 
 **Đã kiểm chứng** (Node 24 + PGlite = PostgreSQL thật chạy bằng WASM, 1 kết nối): 15/15 kiểm tra đạt
 - Schema tạo được, kể cả partial unique index `ux_one_active_per_slot` (chèn reservation ACTIVE thứ hai cho cùng slot → lỗi `23505`).

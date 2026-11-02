@@ -75,15 +75,6 @@
       }
     },
     {
-      "name": "cmd.expired",
-      "vhost": "/",
-      "durable": true,
-      "auto_delete": false,
-      "arguments": {
-        "x-queue-type": "quorum"
-      }
-    },
-    {
       "name": "cmd.A.admin",
       "vhost": "/",
       "durable": true,
@@ -112,15 +103,165 @@
         "x-queue-type": "quorum",
         "x-single-active-consumer": true
       }
+    },
+    {
+      "name": "cmd.D",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.D.admin",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.E",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.E.admin",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.F",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.F.admin",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum",
+        "x-single-active-consumer": true
+      }
+    },
+    {
+      "name": "cmd.dead",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum"
+      }
+    },
+    {
+      "name": "cmd.expired",
+      "vhost": "/",
+      "durable": true,
+      "auto_delete": false,
+      "arguments": {
+        "x-queue-type": "quorum"
+      }
     }
   ],
   "bindings": [
     {
       "source": "parking.commands",
       "vhost": "/",
+      "destination": "cmd.A.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.A.*.admin",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.B.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.B.*.admin",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.C.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.C.*.admin",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.D",
+      "destination_type": "queue",
+      "routing_key": "cmd.D.*",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.D.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.D.*.admin",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.E",
+      "destination_type": "queue",
+      "routing_key": "cmd.E.*",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.E.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.E.*.admin",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.F",
+      "destination_type": "queue",
+      "routing_key": "cmd.F.*",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.F.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.F.*.admin",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
       "destination": "cmd.A",
       "destination_type": "queue",
-      "routing_key": "cmd.A.#",
+      "routing_key": "cmd.A.*",
       "arguments": {}
     },
     {
@@ -128,7 +269,7 @@
       "vhost": "/",
       "destination": "cmd.B",
       "destination_type": "queue",
-      "routing_key": "cmd.B.#",
+      "routing_key": "cmd.B.*",
       "arguments": {}
     },
     {
@@ -136,7 +277,7 @@
       "vhost": "/",
       "destination": "cmd.C",
       "destination_type": "queue",
-      "routing_key": "cmd.C.#",
+      "routing_key": "cmd.C.*",
       "arguments": {}
     },
     {
@@ -194,13 +335,61 @@
       "destination_type": "queue",
       "routing_key": "cmd.all.#",
       "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.D.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.all.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.D.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.zone-nam.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.E.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.all.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.E.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.zone-nam.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.F.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.all.#",
+      "arguments": {}
+    },
+    {
+      "source": "parking.commands",
+      "vhost": "/",
+      "destination": "cmd.F.admin",
+      "destination_type": "queue",
+      "routing_key": "cmd.zone-nam.#",
+      "arguments": {}
     }
   ],
   "policies": [
     {
       "vhost": "/",
       "name": "command-delivery",
-      "pattern": "^cmd\\.[A-F]$",
+      "pattern": "^cmd\\.[A-F](\\.admin)?$",
       "apply-to": "quorum_queues",
       "priority": 10,
       "definition": {
@@ -217,7 +406,7 @@
       "name": "admin-command-delivery",
       "pattern": "^cmd\\.[A-Za-z0-9_-]+\\.admin$",
       "apply-to": "quorum_queues",
-      "priority": 10,
+      "priority": 20,
       "definition": {
         "dead-letter-exchange": "parking.dlx",
         "dead-letter-routing-key": "expired",

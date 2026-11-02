@@ -16,6 +16,7 @@ function write(level, msg, fields) {
 }
 const log = { info: (msg, f) => write('info', msg, f), error: (msg, f) => write('error', msg, f) };
 log.log = log.info;   // tương thích chỗ nhận đối tượng kiểu console
+log.warn = (msg, f) => write('warn', msg, f);   // etcd, registry, config gọi log.warn
 
 // Middleware Express: nhận X-Request-Id (hoặc tạo mới), trả lại trong response, log mỗi request khi xong.
 function withRequestId(req, res, next) {

@@ -1,107 +1,172 @@
-# PD-04 — Phát lệnh theo vùng và giao diện quản trị
+# PD-04 – Phát lệnh nhiều bãi và giao diện quản trị
 
-Issue #21, kế hoạch v1.4 mục 5.7–5.8; hợp đồng queue quản trị của PD-06 (Issue #23).
+Issue #21, kế hoạch 1.4 mục 5.7–5.8; hợp đồng admin queue PD-06 (Issue #23).
+Người dùng chỉ thị thực hiện trọn vẹn, không chờ Huynh duyệt. Không tự đăng Issue
+comment hoặc merge PR. Tiếp tục nhánh/PR #53 hiện hữu, không tạo trùng.
 
-## Trạng thái dependency và phạm vi
+## Dependency và base
 
-Đối chiếu `origin/dev` ngày 23/10/2026: `0f8eae8`, đã có PD-01 #47. PD-02 #48, PD-03 #52 và PD-08 #49 chưa merge. Không có consumer/inbox/request–reply trong dev để bật chức năng này hoàn chỉnh. Compose có A/B/C và D tùy chọn; không có dịch vụ E/F, cũng chưa có dữ liệu vùng etcd của PD-09 trong dev. **TC61 vùng Nam D/E/F bị chặn, PR phải là draft.** Không tuyên bố đã thay thế các dependency này.
+Base dev `4155051814f4df61e4df75dcb27f7b1e32553c5b` ngày 02/11/2026 đã có PD-03 #68,
+PD-06 #72, PD-12 #67 và PD-09. Không còn dùng code/patch/candidate cũ của PD-03 #52.
+Nhận dev bằng merge giữ lịch sử đã push, không force-push; diff so với dev chỉ PD-04.
+Ref hung có sẵn nên giữ tên nhánh `hung-pd-04-admin-broadcast`. Base PR là dev;
+không cần stacked PR hoặc đổi base sau dependency.
 
-Thay đổi độc lập gồm topology quản trị, API và lưu broadcast/kết quả từng bãi, worker publish/reply, hàm nghiệp vụ nhận transaction client, guard cho HTTP cũ, giao diện và test. Không sao chép implementation inbox hay bảng `commands` của PD-02/PD-03. Điểm nối consumer nằm trong patch chờ dependency, được thử trên candidate riêng.
+Đã bỏ admin-integration.js, pd04-pd02-integration.patch và prepare-pd04-candidate.mjs.
+Một inbox processor hiện có nhận decoder/dispatch admin trực tiếp, giữ epoch/fencing
+và saga của dev; không viết inbox khác hoặc mở transaction nghiệp vụ thứ hai.
 
-Nhánh `hung-pd-04-admin-broadcast` dùng dấu gạch ngang vì ref `hung` hiện hữu chặn tên `hung/pd-04-admin-broadcast`; theo lựa chọn đã được cho phép trong PD-01. Không thêm `codex/`.
+## Topology thống nhất PD-06
 
-## Topology và vùng
+- Vhost `/`, parking.commands topic durable; queue cmd.A.admin … cmd.F.admin
+  durable quorum, SAC, immutable args giống PD-06.
+- Chỉ queue quản trị nhận `cmd.zone-bac.#` (A/B/C), `cmd.zone-nam.#` (D/E/F)
+  và `cmd.all.#`. Không thêm broadcast binding vào cmd.<bãi> thường.
+- Một publish `cmd.zone-nam.setPricing` có ba bản broker giao tới D/E/F.admin,
+  không publish lần lượt từng bãi. Giữ unicast admin bindings PD-06 hiện có.
+- Policy admin-command-delivery priority **20** cao hơn command-delivery priority 10,
+  gồm TTL 600000, max-length 10000, reject-publish, delivery-limit 5, DLX parking.dlx,
+  key expired, dead-letter-strategy at-least-once. Không để hai policy cùng ưu tiên
+  khiến broker chọn ngẫu nhiên policy thiếu TTL admin.
+- Caller broadcast đặt expiration 600000 và deadline đã lưu; publisher dùng phần
+  thời gian còn lại. Fallback cho broadcast có targets cũng là 600000, không bị
+  commandTtlMs của người dùng (10000) ghi đè. Republish giữ deadline, không gia hạn.
+- Dùng đúng consumer PD-06: hai channel prefetch user 16/admin 4, một lifecycle và
+  handler chain; không tạo thêm consumer admin, không dựa SAC để coi async tuần tự.
+- Reply dùng parking.replies direct durable, routing key agg.broadcast, queue chung
+  agg.broadcast.replies durable quorum không TTL. Không dùng queue riêng PD-03
+  để consumer command thông thường nhận rồi bỏ broadcast reply.
 
-- Giữ vhost `/`, URI `/%2F`, cùng permissions và connector PD-01.
-- `parking.commands`: topic durable. Broadcast vùng dùng `cmd.zone-<zone>.<type>`, tất cả dùng `cmd.all.<type>`. **Một publish** cho một broadcast; không publish từng bãi.
-- Chỉ `cmd.<id>.admin` nhận `cmd.zone-<zone>.#` và `cmd.all.#`. Queue user giữ `cmd.<id>.#`, không nhận hai key này. Không bind unicast `cmd.A.admin.*`, vì key đó khớp queue user PD-01.
-- Queue admin durable/quorum/SAC, immutable args chỉ `x-queue-type=quorum`, `x-single-active-consumer=true`. Policy `admin-command-delivery` chứa TTL 600000, max-length 10000, reject-publish, delivery-limit 5, DLX `parking.dlx`/`expired`, at-least-once. Không gắn policy TTL user 10 giây vào admin.
-- Definitions seed A/B/C vùng `bac`. Runtime chuẩn bị queue/binding cho các bãi **đã đăng ký** trước publish; không dựng dịch vụ/DB D/E/F. `PARKING_ZONES` là map tĩnh tạm thời, mặc định `{"A":"bac","B":"bac","C":"bac"}`. Nếu registry tương lai có `node.zone`, giá trị đó được ưu tiên.
-- Target snapshot gồm cả node OFFLINE, được lưu trong DB trước publish. Snapshot không đổi khi registry/vùng thay đổi sau đó. Node chỉ áp dụng nếu chính nó có trong snapshot đã ký.
-- Cấu hình vùng phải đồng nhất trên mọi Aggregator. Đổi vùng cần đối chiếu và bỏ binding vùng cũ trước bật lại; runtime chỉ tự bỏ seed `bac` của A/B/C khi cấu hình khác. Không quảng cáo hỗ trợ thay đổi vùng động/etcd khi PD-09 chưa tích hợp.
-- Reply dùng direct exchange `parking.replies`, key `agg.broadcast`, queue chung durable/quorum `agg.broadcast.replies`, không TTL 60 giây để giữ reply qua thời gian Aggregator ngừng. Mọi instance PD-04 có thể consume và ghi DB chung. Key riêng tránh consumer PD-03 lấy rồi bỏ reply broadcast.
+## Mục tiêu và vùng
 
-## API, định danh và kết quả
+Lấy danh sách từ registry PD-09/PD-12, ưu tiên node.zone do etcd đăng ký. Bao gồm
+bãi OFFLINE/DEGRADED đã biết; không loại F chỉ vì F đang dừng. PARKING_ZONES là map
+fallback khi registry chưa có zone, chỉ là cấu hình tĩnh tạm (mặc định A/B/C=bac).
+Khi dùng scale/coord, D/E/F đăng ký nam qua etcd; không dựng lại môi trường PD-12.
 
-Chỉ JWT `ADMIN` được gọi các API sau:
+Snapshot targets được lưu trước publish và được ký trong envelope. Cùng key retry
+không chụp lại targets; reply từ bãi ngoài snapshot bị bỏ. Runtime chuẩn bị bindings
+cho bãi đã đăng ký trước publish; node chỉ thực thi khi nằm trong snapshot. Đổi vùng
+đang có lưu lượng cần đối chiếu binding cũ; đây không phải triển khai toàn bộ cấu hình
+vùng động. Không tự xóa queue/binding không thuộc PD-04 hoặc dữ liệu cũ.
 
-```
+## API và định danh
+
+JWT ADMIN mới gọi được:
+
+```text
 GET  /api/admin/broadcast/zones
 POST /api/admin/broadcast
 GET  /api/admin/broadcast/:id
 ```
 
-POST nhận đúng `{ zone, type, body }`. `zone=all` chỉ bãi đã đăng ký. Vùng không có bãi trả 404; payload sai trả 400. Header `Idempotency-Key` tối đa 64 ký tự `[A-Za-z0-9_-]`, không có thì server sinh UUID. `broadcastId = <userId>:broadcast-<key>` đồng thời là `messageId` và `correlationId`; namespace `broadcast-` tách khỏi request–reply user. Cùng key + cùng body trả snapshot/kết quả cũ; đổi nội dung với key cũ trả 422. Actor lấy từ JWT của server, HMAC bao phủ envelope và các AMQP properties theo PD-02/PD-03. Metadata truy vết được giữ trong command/outbox/reply.
+POST đúng `{zone,type,body}`. zone là tên vùng hoặc all. Vùng không có bãi trả 404;
+sai type/payload trả 400; chưa đăng nhập 401, sai role 403. Idempotency-Key 1–64
+ký tự chữ/số/_/-, không có thì UUID. broadcastId = messageId = correlationId =
+`<adminId>:broadcast-<key>`. Cùng key/nội dung trả snapshot/kết quả cũ, khác nội dung
+trả 422. Actor từ JWT server, không từ client. HMAC và trace metadata được giữ.
 
-Ví dụ:
+Payloads:
 
-```json
-{"zone":"bac","type":"lockFloor","body":{"floor":1,"locked":true}}
-```
+- setPricing: `{rules:[{vehicleType:"CAR",firstBlockMin:120,firstBlockFee:25000,
+  nextHourFee:10000,overnightFee:30000,maxDayFee:150000}]}`; CAR/MOTO không trùng.
+- lockFloor: `{floor:1,locked:true}`; false để mở. Tầng không có 404, còn xe/lượt
+  PENDING_SAGA/ACTIVE/USED trả 409, không đổi một phần. Chỉ mở slot do broadcast khóa,
+  giữ bảo trì thủ công. Event/version slot dùng đường outbox hiện có.
+- banPlates: `{plates:["30A-123.45"],banned:true}`; chuẩn hóa, tối đa 100 biển,
+  không trùng; false bỏ cấm. Guard chặn đặt/vào bãi (cả QR), cho xe ra/thanh toán.
 
-Các payload được hỗ trợ:
+POST gom reply tối đa 5 giây, trả HTTP 200 cùng broadcastId, targets, total,
+applied, rejected (lỗi nghiệp vụ từng bãi), missing, publishState, deadlineAt,
+expired và receivedAt từng kết quả. REJECTED do mandatory NO_ROUTE lần đầu trả 404.
+`applied` chỉ sau reply hợp lệ, `missing` không đồng nghĩa thất bại. Nack fanout
+có thể đã nhận ở một số queue nên UNKNOWN, không khẳng định toàn bộ bị từ chối.
 
-- `setPricing`: `{ "rules": [ { "vehicleType":"CAR", "firstBlockMin":120, "firstBlockFee":25000, "nextHourFee":10000, "overnightFee":30000, "maxDayFee":150000 } ] }`; 1–2 quy tắc, CAR/MOTO không trùng. Dùng `savePricing(client,rules)` hiện hữu.
-- `lockFloor`: `{ "floor":1, "locked":true }`; false để mở. Tầng không có trả 404; còn xe/lượt đặt ACTIVE/USED trả 409, không đổi một phần. Chỉ mở lại slot do broadcast khóa, giữ nguyên bảo trì thủ công. Version tăng cùng event outbox theo các loại MAINTENANCE_ON/OFF hiện hữu.
-- `banPlates`: `{ "plates":["30A-123.45"], "banned":true }`; false để bỏ cấm. Chuẩn hóa biển số, tối đa 100 biển, không trùng. Guard chặn đặt chỗ/vào bãi, kể cả QR lấy biển số từ reservation; không chặn xe ra/thanh toán. Không hủy các lượt đặt trước một cách ngầm định.
+GET đọc DB chung; late reply cập nhật độc lập theo parkingId. Projection không trả
+payload gốc, chữ ký, secret hay biển số. Không ghi đè kết quả bãi khác cùng correlation.
 
-POST gom tối đa 5 giây sau khi lưu intent, trả HTTP 200 với:
+## Transaction, persistence và hết hạn
 
-```json
-{"broadcastId":"...","targets":["D","E","F"],"total":3,"applied":["D","E"],"rejected":[],"missing":["F"],"publishState":"CONFIRMED","expired":false}
-```
+admin_broadcasts giữ intent/hash/envelope/targets/deadline/publish lease;
+admin_broadcast_results có PK(broadcast_id,parking_id), reply_hash và status/result.
+DB update trước ack. Kết quả terminal đầu tiên từng bãi thắng; duplicate đồng nhất
+được chấp nhận, xung đột không ghi đè. Crash sau claim/publish giữ cùng ID/deadline
+khi phục hồi; inbox mỗi bãi chặn hiệu lực trùng.
 
-Đây là ví dụ hợp đồng D/E/F, **không phải kết quả TC61 đã chạy**. `applied` chỉ có khi nhận reply hợp lệ của bãi; `rejected` là lỗi nghiệp vụ đã trả lời; `missing` là chưa có bằng chứng, không đồng nghĩa thất bại. Hết 5 giây không gửi lệnh mới. GET đọc kết quả mới từ DB; frontend tự hỏi lại mỗi 2 giây và có nút kiểm tra thủ công, kể cả sau deadline. Session storage chỉ giữ mã broadcast để mở lại, không giữ payload/biển số. Khi retry trong cùng form, key giữ nguyên nếu nội dung không đổi.
+Node dùng transaction inbox + nghiệp vụ + result + reply outbox hiện có; COMMIT rồi
+ack. admin_command_gate exclusive cho mutation admin, SHARE cho user, thứ tự gate
+trước slot. Giữ CAS/version/constraints. admin_floor_locks/admin_locked_slots và
+banned_plates lưu DB. Savepoint rollback toàn bộ mutation khi clock_timestamp quá
+hạn sau chờ lock hoặc cuối dispatch; lưu kết quả 410 an toàn. Kiểm đầu handler của
+PD-06 cũng giữ, không gọi dispatch cho lệnh đã hết deadline.
 
-## Persistence, crash và đồng thời
+Không triển khai saga/fencing/config động thay người khác. Có khoảng rất nhỏ giữa
+kiểm cuối và COMMIT, cùng giới hạn clock skew hiện có; không hứa deadline tuyệt đối
+tại COMMIT. PD-06 quản lý cmd.expired; PD-04 không cạnh tranh consumer queue đó.
+GET hiển thị hết hạn + missing nếu chưa có reply, không suy thành applied.
 
-Schema thêm không phá dữ liệu: `admin_broadcasts` giữ định danh, hash request, actor/envelope, target snapshot, deadline và publish lease/state; `admin_broadcast_results` có khóa `(broadcast_id,parking_id)` và hash reply. Không ghi đè nhiều bãi vào `commands.result` của PD-03. Reply phải có parkingId thuộc snapshot, đúng actor/type/correlation và HMAC. Kết quả terminal đầu tiên của từng bãi thắng; duplicate giống nhau được chấp nhận, reply khác không ghi đè. DB ghi thành công rồi mới ack. GET trả projection không chứa payload gốc, secret, chữ ký hoặc biển số; mã lỗi nghiệp vụ chỉ hiện chuỗi mã kiểm soát.
+## Giao diện
 
-Intent commit trước publish. Worker dùng `FOR UPDATE SKIP LOCKED` + lease 10 giây; chết sau claim hoặc trước/sau confirm có thể publish lại **cùng ID/snapshot/deadline**. Publish confirm chỉ chứng minh broker nhận. Mandatory NO_ROUTE lần đầu là REJECTED/404; nack khi fanout có thể đã nhận ở một số queue nên là UNKNOWN, không khẳng định toàn bộ bị từ chối. UNKNOWN được thử lại sau lease/backoff cùng ID; node inbox bảo vệ hiệu lực. Hết deadline dừng publish, không cấp lại 10 phút. Không có cam kết exactly-once delivery.
+Trang Quản trị có chọn vùng/type, dữ liệu JSON được kiểm tra và bảng kết quả từng bãi;
+hiện “2/3 bãi đã áp dụng, bãi F chưa phản hồi”. Poll GET mỗi 2 giây khi còn chờ,
+có nút kiểm tra thủ công cho reply muộn. Không phát command mới chỉ vì qua 5 giây.
+Session storage giữ digest/key/ID TRƯỚC POST và sau reload, không lưu payload/biển số.
+Thao tác cùng nội dung dùng lại key; nút Soạn lệnh mới tạo intent mới khi đã hoàn tất
+hoặc hết hạn. Không tự retry bằng ID mới khi publisher chưa rõ kết quả.
 
-Node dùng **inbox processor PD-02 duy nhất**, inject decoder/dispatch admin. INSERT inbox, nghiệp vụ, kết quả và reply outbox cùng transaction; COMMIT rồi ack. Duplicate cùng ID đọc kết quả cũ, không chạy lại. Decoder admin cho phép scope zone/all nhưng kiểm HMAC, role ADMIN do server ký, target, routing key, thuộc tính chuẩn và hạn đúng 10 phút. Các mutation admin được serialize bằng khóa UPDATE trên hàng `admin_command_gate`; user dùng khóa SHARE nên vẫn song song với nhau. Thứ tự gate trước slot tránh race đổi floor/ban với đặt/vào bãi; giữ CAS/version và ràng buộc DB. SAC không được dùng để suy ra async handler tuần tự.
-
-`admin_floor_locks`, `admin_locked_slots`, `banned_plates` lưu DB. Check `clock_timestamp()` sau khi lấy gate/khóa giá/slot, và cuối savepoint; nếu quá hạn rollback mutation rồi ghi kết quả 410 vào inbox/outbox. Consumer admin 4, user 16 khi bật; hai channel/consumer độc lập. Tắt cả hai và drain khi shutdown theo lifecycle PD-02.
-
-## Tích hợp sau khi dependency vào dev
-
-Mặc định `ADMIN_BROADCAST_ENABLED=false`: API báo 503 `ADMIN_BROADCAST_NOT_READY`, không gửi lệnh vào queue không consumer. Chỉ bật khi **mọi node mục tiêu** đã có inbox, relay và signed reply.
-
-1. Merge/rebase PD-02 và PD-03 theo quy trình review; có hook `enrichReply` của PD-03 trước insert outbox. PD-04 không tự merge chúng.
-2. Áp dụng hook PD-03 nếu nó còn là patch: `scripts/pd03-pd02-reply.patch` trong PR #52. Copy module `reply-envelope.js` tương ứng.
-3. Kiểm tra và áp dụng `git apply --check scripts/pd04-pd02-integration.patch`, sau đó `git apply scripts/pd04-pd02-integration.patch`. Patch yêu cầu base PD-02 + hook signed reply PD-03. Nếu index/slots đã được PD-08/PD-06 thay đổi, ghép cùng lifecycle và guard tương ứng; không ghi đè retry consumer của PD-08. Admin không đi vào retry user (routing/deadline khác hợp đồng).
-4. Chạy schema additive theo init service, import definitions/policy. Với DB/node của PD-02, bảo đảm guard nằm trong `reserveIn`, không tạo transaction lồng nhau.
-5. Cấu hình vùng đồng nhất, bảo đảm queue quản trị tồn tại, đặt `ADMIN_BROADCAST_ENABLED=true` cho Aggregator và node rồi khởi động lại có kiểm soát.
-
-Patch có capability marker `makeCommandProcessor.supportsCustomDispatch`; thiếu extension thì node báo rõ `PD04_REQUIRES_PD02_DISPATCH_EXTENSION`, tránh âm thầm đưa broadcast qua decoder user.
-
-Không xóa queue/vhost/DB/volume. Queue admin mới dùng args cố định giống definitions; policy mutable. Nếu gặp PRECONDITION_FAILED do queue admin cũ khác loại/SAC, sao lưu definitions, dừng publisher mới, xác định consumer và drain/chuyển dữ liệu sang queue mới có kiểm chứng trước khi đổi binding. Không dùng purge hoặc `down -v` để né lỗi. Bỏ chức năng bằng cờ false, giữ bảng và queue để bảo toàn dữ liệu đã nhận.
-
-## Kiểm tra
-
-```sh
-cd parking-node && npm ci && npm test
-cd ../aggregator-service && npm ci && npm test
-cd ../frontend && npm ci && npm run build
-```
-
-Trên môi trường tích hợp, dùng biến Compose chính xác, không để test chạy nhầm project:
+## Chạy và kiểm tra
 
 ```powershell
-$env:COMPOSE_PROJECT_NAME='pd04-broadcast'
-$env:COMPOSE_FILE='docker-compose.yml;D:\pd04-compose.local.yml'
+npm ci --prefix parking-node
+npm ci --prefix aggregator-service
+npm ci --prefix frontend
+npm ci --prefix notification-service
+npm test --prefix parking-node
+npm test --prefix aggregator-service
+npm test --prefix frontend
+npm run build --prefix frontend
+# Chỉ tạo .env từ .env.example lần đầu; không ghi đè file đang dùng.
+$env:COMPOSE_PROJECT_NAME='pd04-review-1102'
+$env:COMPOSE_FILE='docker-compose.yml;docker-compose.scale.yml;tests/pd04-compose.test.yml'
+$env:COMPOSE_PROFILES='scale,coord'
 $env:ADMIN_BROADCAST_ENABLED='true'
+docker compose build parking-a aggregator frontend notification
+docker compose up -d --no-build --wait rabbitmq etcd-1 etcd-2 etcd-3 parking-a parking-b parking-c parking-d parking-e parking-f toxiproxy aggregator frontend notification
 $env:RUN_PD04_BROKER='1'
+$env:PD04_AMQP_URL='amqp://parking:parking@localhost:5673/%2F'
 node --test tests/pd04-broadcast.test.mjs
 $env:RABBITMQ_MANAGEMENT_URL='http://localhost:15673'
-node scripts/check-command-topology.mjs --default-mode
-node --test tests/e2e.test.mjs
+node scripts/check-command-topology.mjs
+# Hồi quy HTTP A/B/C dùng default stack riêng theo README, COMMAND_MODE=http.
+docker compose stop # giữ tất cả volume
 ```
 
-Override local chỉ đổi broker sang 5673/15673 và context node candidate gồm PD-02 + signed reply PD-03 + patch PD-04; không commit candidate/dependency code. `PD04_AMQP_URL` đổi URL broker cho test. Không dùng secret thật trong file theo dõi Git. Test tự khôi phục node C, giá cũ, xóa đúng inbox/outbox/broadcast ID của fixture; không xóa volume. Dùng `docker compose down` giữ volume sau khi thử.
+Fixture dùng dịch vụ PD-12/PD-09 thật, bỏ dependency sync replica chỉ trong test để
+không kiểm thay replication; không sửa production generator. Broker 5673/15673,
+etcd-1 host 12379 tránh cổng mặc định; API 8000 và bãi 8001–8006. Không đụng broker
+sẵn có. Linux dùng dấu `:` trong COMPOSE_FILE. CI admin-broadcast chạy TC61 thật,
+không skip hoặc ghép source ngoài repo.
 
-Tạo candidate có thể tái lập bằng `node scripts/prepare-pd04-candidate.mjs <checkout-PD02> <checkout-PD03> <thư-mục-mới>`. Script kiểm patch trước khi áp dụng, chỉ ghi vào thư mục mới và không sửa các checkout dependency. Compose override dùng build context `<thư-mục-mới>/parking-node` cho cả A/B/C.
+TC61: một publish D/E/F, duplicate HTTP/broker, F dừng >10 s rồi bật trước 10 phút,
+late reply/đúng một inbox effect; expiry khi offline và node guard; quyền/payload/
+vùng không có; Management không double routing/QoS 16/4; lock/ban/price còn sau restart.
+Bằng chứng mới: [pd-04-review-2026-11-02.txt](pd-04-review-2026-11-02.txt). Các kết quả
+candidate A/B/C ngày 23/10 là lịch sử, không thay cho TC61 mới.
 
-## Giới hạn phải giữ trong review
+Ngày 02/11: TC61 D/E/F **7/7 đạt, không skip**; [log broker](pd-04-broker-2026-11-02.log).
+Hồi quy HTTP đầy đủ **16 đạt, 22 skip theo mode/profile, 0 lỗi**;
+[log HTTP](pd-04-http-2026-11-02.log). Node 90 đạt/1 skip, Aggregator 87 đạt/3 skip,
+notification 2 đạt, frontend 5 đạt và build đạt. HTTP dùng project riêng
+`pd04-http-1102`, COMPOSE_FILE `docker-compose.yml;tests/pd04-compose.test.yml`,
+COMPOSE_PROFILES rỗng, COMMAND_MODE=http và
+PD02_AMQP_URL=`amqp://parking:parking@localhost:5673/%2F`; bật cùng các dịch vụ A/B/C
+như trên, bỏ etcd/toxiproxy/D/E/F. Không coi các test broker/HA bị skip là đã đạt.
 
-TC61 Nam D/E/F chưa được kiểm chứng; không tự dựng toàn bộ môi trường PD-12 hay etcd PD-09. Test A/B/C candidate không chứng minh dependency đã tích hợp dev. Consumer expired/leader update trạng thái thuộc PD-06; PD-04 kiểm không áp dụng lệnh admin đã quá hạn nhưng không làm thay toàn bộ TTL/back-pressure. Clock skew giữa Aggregator và DB, khoảng rất nhỏ giữa final deadline check và COMMIT cần hợp đồng thời gian PD-06; không tuyên bố commit-time deadline tuyệt đối. Không có saga, fencing hoặc cấu hình vùng động. Runtime cần ngân sách retention/giám sát reply/broadcast DB trong triển khai lâu dài.
+## Nâng cấp và hoàn tác
+
+Schema additive bằng init hiện có, không drop dữ liệu. Definitions import không
+xóa topology cũ; policy admin priority 20 sửa được trên queue đang có tin. Queue cũ
+khác type/SAC phải kiểm kê ready/unacked, sao lưu/chuyển có confirm trước cutover;
+không xóa để né PRECONDITION_FAILED, không down -v/purge. Hủy tính năng bằng cờ
+ADMIN_BROADCAST_ENABLED=false cho yêu cầu mới, giữ DB/queues và consumer xả backlog
+có kiểm soát. Guard cho floor/ban đã lưu vẫn giữ; tắt UI không đảo ngược nghiệp vụ.

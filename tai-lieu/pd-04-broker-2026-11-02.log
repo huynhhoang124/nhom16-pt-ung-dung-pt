@@ -1,0 +1,37 @@
+ Container pd04-review-1102-parking-f-1 Stopping
+ Container pd04-review-1102-parking-f-1 Stopped
+▶ TC61 PD-04 D/E/F: one publish, late F, dedup, expiry, persistence and authorization
+  ✔ one publish; all targets apply; ten HTTP duplicates and broker redelivery stay one inbox effect (4995.2989ms)
+ Container pd04-review-1102-db-f-1 Waiting
+ Container pd04-review-1102-db-f-1 Healthy
+ Container pd04-review-1102-parking-f-1 Starting
+ Container pd04-review-1102-parking-f-1 Started
+ Container pd04-review-1102-parking-f-1 Restarting
+ Container pd04-review-1102-parking-f-1 Started
+F late application elapsed ms: 19343
+  ✔ F stopped >10 seconds: 2/3 first, durable late result then persistence after restart (20191.3003ms)
+ Container pd04-review-1102-parking-f-1 Stopping
+ Container pd04-review-1102-parking-f-1 Stopped
+  ✔ signed expired admin command is recorded as 410, with no late mutation (3742.9874ms)
+ Container pd04-review-1102-db-f-1 Waiting
+ Container pd04-review-1102-db-f-1 Healthy
+ Container pd04-review-1102-parking-f-1 Starting
+ Container pd04-review-1102-parking-f-1 Started
+  ✔ broker expires remaining admin deadline while F is offline; restart cannot apply it (10787.2467ms)
+  ✔ management topology: only admin route, quorum/SAC, prefetch 16/4; admin-only endpoints (1030.2989ms)
+ Container pd04-review-1102-parking-d-1 Restarting
+ Container pd04-review-1102-parking-d-1 Started
+ Container pd04-review-1102-db-d-1 Waiting
+ Container pd04-review-1102-db-f-1 Waiting
+ Container pd04-review-1102-db-d-1 Healthy
+ Container pd04-review-1102-db-f-1 Healthy
+  ✔ lockFloor and banPlates persist across node restart; duplicate lock does not increment version (12822.9012ms)
+✔ TC61 PD-04 D/E/F: one publish, late F, dedup, expiry, persistence and authorization (99730.0587ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 99971.3799

@@ -695,7 +695,7 @@ Mỗi việc bị cắt ghi vào mục "Hướng phát triển" của báo cáo,
 - [ ] Đã tập failover replica (nếu có PT-02).
 
 **Tài liệu**
-- [ ] HLD + kế hoạch đã sửa (TL-01).
+- [x] HLD + kế hoạch đã sửa (TL-01).
 - [ ] Sơ đồ mới (TL-02).
 - [ ] Báo cáo đủ 12 mục + phụ lục, có ảnh và số liệu (TL-03).
 - [ ] Slide khoảng 15 trang (TL-04).

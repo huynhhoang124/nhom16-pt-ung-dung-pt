@@ -1,0 +1,20 @@
+[
+  {
+    "name": "parking-d",
+    "listen": "0.0.0.0:18004",
+    "upstream": "parking-d:8004",
+    "enabled": true
+  },
+  {
+    "name": "parking-e",
+    "listen": "0.0.0.0:18005",
+    "upstream": "parking-e:8005",
+    "enabled": true
+  },
+  {
+    "name": "parking-f",
+    "listen": "0.0.0.0:18006",
+    "upstream": "parking-f:8006",
+    "enabled": true
+  }
+]

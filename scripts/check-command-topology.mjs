@@ -19,7 +19,7 @@ for (const expected of definitions.queues) {
   const actual = await get(`queues/${encodeURIComponent(expected.vhost)}/${expected.name}`);
   assert.equal(actual.durable, true); assert.equal(actual.type, 'quorum');
   assert.deepEqual(actual.arguments, expected.arguments, `${expected.name}.arguments`);
-  const policy = definitions.policies.find((p) => p.vhost === expected.vhost && new RegExp(p.pattern).test(expected.name));
+  const policy = definitions.policies.filter((p) => p.vhost === expected.vhost && new RegExp(p.pattern).test(expected.name)).sort((a,b) => b.priority-a.priority)[0];
   if (policy) {
     assert.equal(actual.policy, policy.name, `${expected.name}.policy`);
     assert.deepEqual(actual.effective_policy_definition, policy.definition, `${expected.name}.effective_policy_definition`);

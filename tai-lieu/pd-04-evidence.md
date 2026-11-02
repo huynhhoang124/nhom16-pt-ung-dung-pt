@@ -1,5 +1,9 @@
 # PD-04 — Bằng chứng thực tế 23/10/2026
 
+> Lịch sử candidate A/B/C. Trạng thái hiện tại ngày 02/11: dependency đã merge,
+> TC61 D/E/F thật đạt 7/7; xem [bằng chứng mới](pd-04-review-2026-11-02.txt)
+> và [log TC61 mới](pd-04-broker-2026-11-02.log). Các script candidate dưới đây đã bỏ.
+
 Base dev `0f8eae8`, PD-03 #52 còn open/unmerged. Không có E/F hay vùng etcd trong dev. **TC61 D/E/F chưa đạt, PR draft.**
 
 | Kiểm tra | Kết quả quan sát |

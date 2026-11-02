@@ -79,9 +79,20 @@ test('concurrent duplicate business IDs: return and out-of-order confirms match 
   assert.equal(b.connections.length, 1);
 });
 
+test('default expiration follows dynamic configuration', async (t) => {
+  const b = broker(); let ttl = 10000;
+  const pub = makeCommands('amqp://test', { connect: b.connect, config: { get: () => ttl } });
+  t.after(() => pub.close());
+  const first = pub.send('A', 'reserve', {}); await tick();
+  assert.equal(b.sent[0][3].expiration, '10000'); ack(b.sent[0]); await first;
+  ttl = 20000;
+  const second = pub.send('A', 'reserve', {}); await tick();
+  assert.equal(b.sent[1][3].expiration, '20000'); ack(b.sent[1]); await second;
+});
+
 test('nack is unavailable, non-NO_ROUTE return is not 404', async (t) => {
   const b = broker(); const pub = makeCommands('amqp://test', { connect: b.connect }); t.after(() => pub.close());
-  const p = pub.send('A', 'reserve', {}); const check = rejects(p, 'PUBLISH_NACKED');
+  const p = pub.send('A', 'reserve', {}); const check = rejects(p, 'QUEUE_FULL');
   await tick(); ack(b.sent[0], new Error('message nacked')); await check;
   const q = pub.send('B', 'reserve', {}); const checkQ = rejects(q, 'PUBLISH_RETURNED');
   await tick(); returned(b, b.sent[1], 313); ack(b.sent[1]); await checkQ;
@@ -145,4 +156,19 @@ test('channel error invalidates publisher and does not become unhandled EventEmi
   const b = broker(); const pub = makeCommands('amqp://test', { connect: b.connect });
   const p = pub.send('A', 'reserve', {}); const check = rejects(p, 'PUBLISH_UNKNOWN_RESULT');
   await tick(); b.connections[0].ch.emit('error', new Error('channel failure')); await check; await pub.close();
+});
+
+
+test('broadcast TTL stays ten minutes despite PD-06 user TTL and keeps one fanout routing key', async (t) => {
+  const b = broker();
+  const pub = makeCommands('amqp://test', { connect: b.connect, config: { get: () => 10000 } });
+  t.after(() => pub.close());
+  const issuedAt = Date.now();
+  const p = pub.send('zone-nam', 'setPricing', {}, { messageId: 'admin:broadcast-ttl', correlationId: 'admin:broadcast-ttl',
+    replyTo: 'agg.broadcast', targets: ['D','E','F'], issuedAt, deadlineAt: issuedAt+600000, expiration: 600000 });
+  await tick();
+  assert.equal(b.sent.length,1);assert.equal(b.sent[0][1],'cmd.zone-nam.setPricing');
+  assert(Number(b.sent[0][3].expiration)>590000);assert.equal(b.sent[0][3].mandatory,true);
+  assert.deepEqual(JSON.parse(b.sent[0][2]).targets,['D','E','F']);
+  ack(b.sent[0]);await p;
 });

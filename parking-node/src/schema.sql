@@ -1,5 +1,28 @@
 -- Schema của MỘT bãi. Mỗi bãi có DB riêng (shared-nothing), node khác không truy cập được.
 
+-- PD-02: additive migration; command_type is the canonical column name.
+CREATE TABLE IF NOT EXISTS inbox_messages (
+  message_id TEXT PRIMARY KEY,
+  command_type TEXT NOT NULL,
+  request_hash TEXT NOT NULL,
+  result JSONB,
+  status_code INT,
+  processed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_inbox_processed_at ON inbox_messages(processed_at);
+
+-- Separate reply outbox: replies need no slot_code and can include business failures.
+CREATE TABLE IF NOT EXISTS command_reply_outbox (
+  id BIGSERIAL PRIMARY KEY,
+  command_id TEXT NOT NULL,
+  reply_to TEXT NOT NULL,
+  payload JSONB NOT NULL,
+  properties JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  published_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_command_replies_unpublished ON command_reply_outbox(id) WHERE published_at IS NULL;
+
 CREATE EXTENSION IF NOT EXISTS btree_gist;   -- cho ràng buộc EXCLUDE (slot_id WITH =, khoảng thời gian WITH &&)
 
 CREATE TABLE IF NOT EXISTS parking_slots (
@@ -23,14 +46,20 @@ CREATE TABLE IF NOT EXISTS reservations (
   end_time      TIMESTAMPTZ NOT NULL,                 -- hết khung giờ đã đặt (NV-01)
   expire_time   TIMESTAMPTZ NOT NULL,                 -- quá giờ này chưa đến = no-show
   status        VARCHAR(12) NOT NULL DEFAULT 'ACTIVE'
-                CHECK (status IN ('ACTIVE','USED','DONE','CANCELLED','EXPIRED')),
+                CHECK (status IN ('PENDING_SAGA','ACTIVE','USED','DONE','CANCELLED','EXPIRED')),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (end_time > start_time),
   -- Lưới đỡ ở tầng DB: trên cùng một slot, các lượt đặt còn hiệu lực không được chồng giờ.
   -- Thay cho "mỗi slot 1 reservation ACTIVE" của bản cơ bản. DB cũ cần docker compose down -v.
   CONSTRAINT ex_no_overlap EXCLUDE USING gist
-    (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('ACTIVE','USED'))
+    (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('PENDING_SAGA','ACTIVE','USED'))
 );
+ALTER TABLE reservations DROP CONSTRAINT IF EXISTS reservations_status_check;
+ALTER TABLE reservations ADD CONSTRAINT reservations_status_check
+  CHECK (status IN ('PENDING_SAGA','ACTIVE','USED','DONE','CANCELLED','EXPIRED'));
+ALTER TABLE reservations DROP CONSTRAINT IF EXISTS ex_no_overlap;
+ALTER TABLE reservations ADD CONSTRAINT ex_no_overlap EXCLUDE USING gist
+  (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('PENDING_SAGA','ACTIVE','USED'));
 
 -- Vừa là lịch sử sự kiện, vừa là OUTBOX: ghi cùng giao dịch với dữ liệu, relay gửi lên broker sau
 ALTER TABLE reservations ADD COLUMN IF NOT EXISTS warned_at TIMESTAMPTZ;   -- NV-08: đã báo sắp hết giờ giữ chỗ
@@ -45,6 +74,22 @@ CREATE TABLE IF NOT EXISTS parking_events (
   published_at  TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS ix_events_unpublished ON parking_events(id) WHERE published_at IS NULL;
+-- PD-18: báo relay ngay khi có sự kiện mới trong outbox.
+CREATE OR REPLACE FUNCTION notify_parking_event_outbox()
+RETURNS TRIGGER AS $$
+BEGIN
+  PERFORM pg_notify('outbox', NEW.id::text);
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_parking_events_outbox_notify ON parking_events;
+
+CREATE TRIGGER trg_parking_events_outbox_notify
+AFTER INSERT ON parking_events
+FOR EACH ROW
+EXECUTE FUNCTION notify_parking_event_outbox();
+
 
 -- Phiên gửi xe: mở khi xe vào, đóng khi xe ra (lịch sử, tính phí, thanh toán).
 CREATE TABLE IF NOT EXISTS parking_sessions (
@@ -75,3 +120,17 @@ CREATE TABLE IF NOT EXISTS pricing_rules (
   overnight_fee   INT NOT NULL,
   max_day_fee     INT
 );
+
+-- PD-10: Bảng fencing chống lệnh từ Leader cũ (split-brain)
+CREATE TABLE IF NOT EXISTS fencing (
+  job       TEXT PRIMARY KEY,
+  max_token BIGINT NOT NULL
+);
+
+-- PD-14b: Bảng db_epoch chống zombie primary ghi đè sau failover
+CREATE TABLE IF NOT EXISTS db_epoch (
+  epoch BIGINT NOT NULL
+);
+INSERT INTO db_epoch (epoch) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM db_epoch);
+
+

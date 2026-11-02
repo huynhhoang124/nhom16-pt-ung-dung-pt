@@ -1,0 +1,36 @@
+# Reuse the merged PD-12 six-lot and PD-09 etcd services; no replication/failover fixture needed.
+services:
+  rabbitmq:
+    ports: !override ["5673:5672", "15673:15672"]
+  etcd-1:
+    ports: !override ["12379:2379"]
+  aggregator:
+    image: pd04-test/aggregator
+    environment:
+      ADMIN_BROADCAST_ENABLED: "true"
+      COMMAND_MODE: "http"
+      REGIONAL_PEER_URL: ""
+  parking-a:
+    image: pd04-test/parking-node
+    depends_on: !override
+      db-a: { condition: service_healthy }
+    environment: { READ_DATABASE_URL: "", ADMIN_BROADCAST_ENABLED: "true" }
+  parking-b:
+    image: pd04-test/parking-node
+    environment: { READ_DATABASE_URL: "", ADMIN_BROADCAST_ENABLED: "true" }
+  parking-c:
+    image: pd04-test/parking-node
+    environment: { READ_DATABASE_URL: "", ADMIN_BROADCAST_ENABLED: "true" }
+  parking-d:
+    image: pd04-test/parking-node
+    depends_on: !override
+      db-d: { condition: service_healthy }
+    environment: { READ_DATABASE_URL: "", ADMIN_BROADCAST_ENABLED: "true" }
+  parking-e:
+    profiles: [scale]
+    image: pd04-test/parking-node
+    environment: { READ_DATABASE_URL: "", ADMIN_BROADCAST_ENABLED: "true" }
+  parking-f:
+    profiles: [scale]
+    image: pd04-test/parking-node
+    environment: { READ_DATABASE_URL: "", ADMIN_BROADCAST_ENABLED: "true" }

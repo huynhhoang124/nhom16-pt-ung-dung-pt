@@ -1,0 +1,46 @@
+﹣ TC52 HTTP broker contract: pending PD-03 request-reply and command lookup (366.6089ms) # PD-03 not implemented; TC52 currently verified at broker level
+✔ cô lập dữ liệu: node bãi A không biết địa chỉ DB của bãi khác (550.1327ms)
+✔ TC01 tra cứu tổng hợp các bãi theo cấu hình (52.3223ms)
+﹣ PD-12 etcd gắn nhãn vùng Bắc/Nam và registry trả đủ sáu bãi (0.307ms) # SKIP
+✔ TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh (215.112ms)
+✔ TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai (882.1734ms)
+✔ TC09 20 request đồng thời cùng một slot (Postgres thật): đúng 1 thành công (271.1733ms)
+✔ 10 lần gửi đồng thời CÙNG một Idempotency-Key: chỉ 1 reservation, mọi phản hồi cùng id (120.1364ms)
+✔ TC27 hai lần trả tiền song song khác key cho cùng một phiên (Postgres thật): đúng 1 thành công (890.427ms)
+✔ TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> RabbitMQ -> Aggregator -> Socket.IO (1125.8798ms)
+✔ TC37 notification dừng: vẫn đặt chỗ được, bật lại nhận đúng thông báo tồn (15556.3562ms)
+✔ TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B trả dữ liệu cũ; bật lại thì ONLINE (34422.8354ms)
+✔ DB bãi C khởi động lại: node C không sập, DB về thì tự kết nối lại và ghi được (2166.9885ms)
+✔ TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật lại thì được xử lý hết (11173.7907ms)
+✔ Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết (15245.7519ms)
+﹣ TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùng key -> đúng 1 lượt đặt (0.2927ms) # SKIP
+﹣ TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200 (0.1888ms) # SKIP
+﹣ TC44 HA: xe vào qua Aggregator 1, socket Aggregator 2 nhận SLOT_UPDATED (0.1402ms) # SKIP
+﹣ TC46: Staff thao tác khi Aggregator sập (0.1583ms) # SKIP
+﹣ TC48 cụm RabbitMQ: tắt nút rabbitmq, chuyển nút < 10s, outbox về 0 và Aggregator nhận sự kiện (0.136ms) # SKIP
+﹣ TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), outbox giữ tin; bật lại thì xả về 0 (0.1102ms) # SKIP
+✔ PD-02 PostgreSQL: 10 concurrent DB clients deduplicate and preserve transaction invariants (1904.2023ms)
+✔ TC52 PD-02 broker: 10 concurrent messages with one messageId create one reservation and 10 identical replies (4572.5378ms)
+✔ TC53 PD-02 broker: crash after COMMIT before ack, restart, redelivery replays without another effect (12332.4229ms)
+﹣ TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd -> tự động hiện trên API danh sách bãi trong <= 2s (0.4525ms) # SKIP
+﹣ TC64 phân hoạch mạng node <-> etcd: mất lease nhưng HTTP còn sống -> trạng thái chuyển DEGRADED (0.2052ms) # SKIP
+﹣ TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> Aggregator nhận ngay không cần restart (0.1668ms) # SKIP
+﹣ TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm leader mới trong <= 7s, metric = 1 (0.2118ms) # SKIP
+﹣ TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token cũ -> bị node từ chối STALE_LEADER, metric tăng (0.2666ms) # SKIP
+﹣ TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng epoch etcd, node tự chuyển pool sang DB mới (0.2187ms) # SKIP
+﹣ TC69 zombie primary fencing: DB primary cũ sống lại (mang epoch cũ) -> Node từ chối ghi (STALE_DB_EPOCH) (0.169ms) # SKIP
+﹣ TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự động hạ cấp sang async, giải phóng lệnh ghi (0.1203ms) # SKIP
+﹣ TC-PD21 giới hạn đăng nhập phân tán: 5 lần sai rải qua 2 Aggregator -> lần 6 bị 429 ở cả hai (0.1181ms) # SKIP
+﹣ TC73 phân mảnh users: tắt db-users-1 -> người ở phân mảnh 2 vẫn đăng nhập và đặt chỗ được (0.1155ms) # SKIP
+﹣ TC75 saga 3 bãi qua broker: mọi bước giữ chỗ rồi xác nhận, saga COMPLETED (0.1109ms) # SKIP
+﹣ TC76 saga qua broker: bước 3 lỗi -> bù trừ 2 bước trước, không còn chỗ giữ (0.1471ms) # SKIP
+﹣ TC55 bãi tắt lâu hơn TTL: lệnh EXPIRED, bật lại không bị đặt muộn (0.3564ms) # SKIP
+﹣ TC59 hàng đợi lệnh đầy: trả 503 kèm Retry-After, không mất lệnh đã nhận (0.2246ms) # SKIP
+ℹ tests 38
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 22
+ℹ todo 0
+ℹ duration_ms 102359.9904

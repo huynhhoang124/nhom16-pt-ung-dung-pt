@@ -1,24 +1,32 @@
 // Kiểm thử toàn hệ thống trên Docker (Postgres thật, RabbitMQ thật, mạng thật).
 //   docker compose up -d --build
 //   node --test tests/e2e.test.mjs
-// Test có tắt/bật container (parking-b, aggregator, rabbitmq) và tự bật lại khi xong.
+// Test có tắt/bật container (parking-b, aggregator, rabbitmq, notification) và tự bật lại khi xong.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { registerCommandInboxTests } from './command-inbox.e2e.mjs';
+import './command-inbox-http.test.mjs';
 
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { io } = createRequire(new URL('../frontend/package.json', import.meta.url))('socket.io-client');
-const AGG = 'http://localhost:8000';
-const NODE = { A: 'http://localhost:8001', B: 'http://localhost:8002', C: 'http://localhost:8003' };
+const AGG = process.env.AGGREGATOR_URL ?? 'http://localhost:8000';
+const AGG2 = process.env.AGGREGATOR_2_URL ?? 'http://localhost:8010';
+const SCALE = process.env.SCALE === '1';
+const PARKING_IDS = SCALE ? ['A', 'B', 'C', 'D', 'E', 'F'] : ['A', 'B', 'C'];
+const NODE = Object.fromEntries(['A', 'B', 'C', 'D', 'E', 'F'].map((id, index) => [id, `http://localhost:${8001 + index}`]));
+const COMPOSE = SCALE
+  ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord'
+  : 'docker compose';
 const KEY = process.env.INTERNAL_KEY ?? 'dev';
 const T = { timeout: 120_000 };
 
 const sh = (cmd) => execSync(cmd, { cwd: ROOT, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-const compose = (args) => sh(`docker compose ${args}`);
+const compose = (args) => sh(`${COMPOSE} ${args}`);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const sql = (db, q) => compose(`exec -T ${db} psql -U postgres -d parking -tAc "${q}"`);
 
@@ -27,7 +35,7 @@ const sql = (db, q) => compose(`exec -T ${db} psql -U postgres -d parking -tAc "
 async function http(url, { method = 'GET', body, headers = {} } = {}, retry = method === 'GET') {
   try {
     const r = await fetch(url, { method, headers: { 'content-type': 'application/json', ...headers }, body: body && JSON.stringify(body) });
-    return { status: r.status, body: await r.json().catch(() => null) };
+    return { status: r.status, headers: r.headers, body: await r.json().catch(() => null) };
   } catch {
     if (retry) { await sleep(300); return http(url, { method, body, headers }, false); }
     return { status: 0, body: null };
@@ -36,7 +44,15 @@ async function http(url, { method = 'GET', body, headers = {} } = {}, retry = me
 const agg = (path, { token, key, ...o } = {}) => http(AGG + path, {
   ...o, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { 'idempotency-key': key } : {}) },
 });
-const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { 'x-internal-key': KEY } });
+const agg2 = (path, { token, key, ...o } = {}) => http(AGG2 + path, {
+  ...o, headers: { ...(token ? { authorization: `Bearer ${token}` } : {}), ...(key ? { 'idempotency-key': key } : {}) },
+});
+const node = (id, path, o = {}) => http(NODE[id] + path, { ...o, headers: { ...o.headers, 'x-internal-key': KEY } });
+const FM1 = process.env.FAILOVER_MANAGER_1_URL ?? 'http://localhost:8051';
+const FM2 = process.env.FAILOVER_MANAGER_2_URL ?? 'http://localhost:8052';
+const fm1 = (path, o = {}) => http(FM1 + path, o);
+const fm2 = (path, o = {}) => http(FM2 + path, o);
+
 
 async function until(what, fn, ms = 60_000) {
   const end = Date.now() + ms;
@@ -51,7 +67,7 @@ const statusOf = async (id) => (await agg('/api/parkings')).body?.find((p) => p.
 // biển số ngẫu nhiên: lần chạy trước hỏng giữa chừng để xe còn trong bãi thì lần sau không bị PLATE_ALREADY_INSIDE
 const plate = () => `30A-${String(Math.random()).slice(2, 5)}.${String(Math.random()).slice(2, 4)}`;
 const freeSlot = async (id) => (await node(id, '/api/slots/available')).body[0].slotCode;
-const login = async (u) => (await agg('/api/auth/login', { method: 'POST', body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' } })).body.token;
+const login = async (u) => (await until(`đăng nhập ${u}`, async () => (await agg('/api/auth/login', { method: 'POST', body: { username: u, password: process.env.DEMO_PASSWORD ?? '123456' } })).body?.token, 10_000));
 
 // Dọn sau test (huỷ đặt chỗ, cho xe ra) để chạy lặp lại được nhiều lần.
 const undo = [];
@@ -61,8 +77,8 @@ test.after(async () => { for (const f of undo) await f(); });
 
 let tok;
 test.before(async () => {
-  await until('3 bãi ONLINE', async () => (await Promise.all(['A', 'B', 'C'].map(statusOf))).every((s) => s === 'ONLINE'), 120_000);
-  tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a') };
+  await until(`${PARKING_IDS.length} bãi ONLINE`, async () => (await Promise.all(PARKING_IDS.map(statusOf))).every((s) => s === 'ONLINE'), 120_000);
+  tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a'), admin: await login('admin') };
 });
 
 test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bãi khác', T, () => {
@@ -71,9 +87,21 @@ test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bã
   assert.doesNotMatch(env, /db-b|db-c/);
 });
 
-test('TC01 tra cứu tổng hợp 3 bãi', T, async () => {
+test('TC01 tra cứu tổng hợp các bãi theo cấu hình', T, async () => {
   const r = await agg('/api/parkings/availability');
-  assert.deepEqual(r.body.map((p) => [p.parkingId, p.status, p.total]), [['A', 'ONLINE', 40], ['B', 'ONLINE', 60], ['C', 'ONLINE', 30]]);
+  const totals = { A: 40, B: 60, C: 30, D: 20, E: 20, F: 20 };
+  const availability = r.body.map((p) => [p.parkingId, p.status, p.total]).sort(([a], [b]) => a.localeCompare(b));
+  assert.deepEqual(availability, PARKING_IDS.map((id) => [id, 'ONLINE', totals[id]]).sort(([a], [b]) => a.localeCompare(b)));
+});
+
+test('PD-12 etcd gắn nhãn vùng Bắc/Nam và registry trả đủ sáu bãi', { ...T, skip: !SCALE }, async () => {
+  const admin = await login('admin');
+  const r = await agg('/api/admin/nodes', { token: admin });
+  const zones = r.body.map((n) => [n.parkingId, n.zone]).sort(([a], [b]) => a.localeCompare(b));
+  assert.deepEqual(zones, [
+    ['A', 'bac'], ['B', 'bac'], ['C', 'bac'],
+    ['D', 'nam'], ['E', 'nam'], ['F', 'nam'],
+  ]);
 });
 
 test('TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh', T, async () => {
@@ -95,7 +123,8 @@ test('TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo b
   assert.equal(a.status, 201);
   cancelLater('A', a.body.id);
   const b = await agg('/api/parkings/A/reservations', { method: 'POST', token: tok.user1, key, body });
-  assert.deepEqual([b.status, b.body.id], [200, a.body.id]);
+  // http: lần gửi lại trả 200; broker (PD-03): trả nguyên phản hồi đã lưu của lệnh (201)
+  assert.deepEqual([b.status, b.body.id], [process.env.COMMAND_MODE === 'broker' ? 201 : 200, a.body.id]);
   assert.equal(sql('db-a', `SELECT count(*) FROM reservations r JOIN parking_slots s ON s.id=r.slot_id WHERE s.slot_code='${slot}' AND r.status='ACTIVE'`), '1');
 });
 
@@ -151,12 +180,89 @@ test('TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> Rabb
   assert.equal((await agg(`/api/parkings/B/slots/B01/enter`, { method: 'POST', token: tok.staffA, body: {} })).status, 403);
 });
 
+test('TC37 notification dừng: vẫn đặt chỗ được, bật lại nhận đúng thông báo tồn', T, async () => {
+  // Payload NOTIFICATION chưa có reservationId: dùng slot riêng, không tái sử dụng,
+  // để thông báo cũ của cùng user/bãi không thể làm test pass nhầm.
+  const slot = `T37-${randomUUID().replaceAll('-', '').slice(0, 6).toUpperCase()}`;
+  const key = randomUUID();
+  let slotCreated = false;
+  let rid;
+  let socket;
+  const queueState = () => compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages_ready consumers')
+    .match(/^notification\.events\s+(\d+)\s+(\d+)\s*$/m);
+  try {
+    // Queue phải được khai báo/bind trước khi dừng consumer, kể cả trên môi trường mới.
+    compose('start notification');
+    await until('notification có consumer', () => Number(queueState()?.[2]) > 0, 20_000);
+    compose('stop notification');
+    await until('notification không còn consumer', () => queueState()?.[2] === '0', 10_000);
+
+    const token = await login('user1');
+    assert.ok(token, 'user1 đăng nhập thành công');
+    const added = await node('A', '/api/slots', { method: 'POST', body: { slotCode: slot, floor: 1, type: 'CAR' } });
+    slotCreated = added.status === 201;
+    assert.equal(added.status, 201, 'tạo slot riêng cho TC37');
+    const r = await agg('/api/parkings/A/reservations', {
+      method: 'POST', token, key, body: { slotCode: slot, licensePlate: plate() },
+    });
+    rid = r.body?.id;
+    // Tạo mới trả 201; 200 trong tài liệu là mô tả thành công / replay cùng key.
+    assert.equal(r.status, 201, 'đặt chỗ vẫn thành công khi notification dừng');
+    assert.ok(rid);
+    assert.equal(r.body.slot_code, slot);
+    assert.equal(r.body.status, 'ACTIVE');
+    const userId = r.body.user_id;
+    assert.ok(userId);
+    assert.equal(r.body.request_id, `${userId}:${key}`, 'đúng request vừa tạo');
+    assert.equal(userId, JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString()).sub, 'đúng user1');
+    await until('sự kiện RESERVED của đúng reservation đã rời outbox', () => sql('db-a',
+      `SELECT count(*) FROM parking_events WHERE event_type='RESERVED' AND payload->>'reservationId'='${rid}' AND published_at IS NOT NULL`) === '1', 20_000);
+    await until('tin tồn trong notification.events khi không có consumer', () => {
+      const q = queueState();
+      return Number(q?.[1]) > 0 && q?.[2] === '0';
+    }, 10_000);
+
+    let received;
+    socket = io(AGG, { transports: ['websocket'], auth: { token }, autoConnect: false });
+    socket.on('NOTIFICATION', (n) => {
+      if (n.to === userId && n.parkingId === 'A' && n.kind === 'ok'
+          && n.text === `Đã giữ chỗ ${slot} (bãi A) cho bạn.`) received = n;
+    });
+    socket.connect();
+    await until('socket user1 kết nối', () => socket.connected, 10_000);
+    assert.equal(received, undefined, 'chưa gửi thông báo khi notification còn dừng');
+    compose('start notification');
+    await until('NOTIFICATION của đặt chỗ TC37 từ queue tồn', () => received, 30_000);
+    assert.equal(received.to, userId);
+  } finally {
+    // Dọn độc lập: lỗi bật service / huỷ đặt chỗ không được ngăn đóng socket / gỡ slot.
+    try {
+      compose('start notification');
+    } finally {
+      socket?.close();
+      try {
+        if (rid) {
+          const cancelled = await node('A', `/api/reservations/${rid}`, { method: 'DELETE' });
+          assert.equal(cancelled.status, 200, 'huỷ đặt chỗ TC37');
+        }
+      } finally {
+        if (slotCreated) {
+          const hidden = await node('A', `/api/slots/${slot}`, { method: 'DELETE' });
+          assert.equal(hidden.status, 200, 'gỡ slot TC37 qua API (giữ lịch sử)');
+        }
+      }
+    }
+  }
+});
+
 test('TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B trả dữ liệu cũ; bật lại thì ONLINE', T, async () => {
   compose('stop parking-b');
   try {
     await until('B OFFLINE', async () => (await statusOf('B')) === 'OFFLINE');
     const avail = await agg('/api/parkings/availability');
-    assert.deepEqual(avail.body.map((p) => [p.parkingId, p.status]), [['A', 'ONLINE'], ['B', 'OFFLINE'], ['C', 'ONLINE']]);
+    const statuses = avail.body.map((p) => [p.parkingId, p.status]).sort(([a], [b]) => a.localeCompare(b));
+    const expected = PARKING_IDS.map((id) => [id, id === 'B' ? 'OFFLINE' : 'ONLINE']).sort(([a], [b]) => a.localeCompare(b));
+    assert.deepEqual(statuses, expected);
     const r = await agg('/api/parkings/B/reservations', { method: 'POST', token: tok.user1, key: randomUUID(), body: { slotCode: 'B02', licensePlate: '30A-555.55' } });
     assert.deepEqual([r.status, r.body.error], [503, 'PARKING_OFFLINE']);
     const detail = await agg('/api/parkings/B');
@@ -191,7 +297,7 @@ test('TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật
     compose('start aggregator');
   }
   await until('queue rỗng', () => compose('exec -T rabbitmq rabbitmqctl -q list_queues name messages').match(/aggregator\.slot-updates\.1\s+(\d+)/)?.[1] === '0', 60_000);
-  await until('3 bãi ONLINE', async () => (await Promise.all(['A', 'B', 'C'].map(statusOf))).every((s) => s === 'ONLINE'));
+  await until(`${PARKING_IDS.length} bãi ONLINE`, async () => (await Promise.all(PARKING_IDS.map(statusOf))).every((s) => s === 'ONLINE'));
 });
 
 test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết', T, async () => {
@@ -231,4 +337,756 @@ test('TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùn
   assert.ok([200, 201].includes(again.status), String(again.status));
   assert.equal(sql('db-b', `SELECT count(*) FROM reservations WHERE license_plate='${lp.replace(/[^0-9A-Z]/g, '')}'`), '1');
   cancelLater('B', again.body.id);
+});
+
+
+test('TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200',
+  { ...T, skip: !process.env.HA },
+  async () => {
+    try {
+      // Dừng Aggregator 1
+      compose('stop aggregator');
+
+      // Chờ Nginx chuyển request sang Aggregator 2
+      await until('Nginx phục vụ qua Aggregator 2',
+        async () => {
+          const r = await http('http://localhost:3000/api/parkings');
+          return r.status === 200;
+        }, 20_000);
+
+      // Gửi 20 request và kiểm tra từng response
+      const statuses = [];
+
+      for (let i = 0; i < 20; i++) {
+        const r = await http('http://localhost:3000/api/parkings');
+        statuses.push(r.status);
+
+        assert.equal(r.status, 200,
+          `Request ${i + 1}/20 trả ${r.status}, mong đợi 200`);
+      }
+
+      console.log('TC43 - HTTP statuses:', statuses);
+      assert.equal(statuses.length, 20);
+
+    } finally {
+      // Luôn bật lại Aggregator 1
+      compose('start aggregator');
+
+      await until('Aggregator 1 phục hồi',
+        async () => (await http(AGG + '/api/parkings')).status === 200,
+        60_000);
+    }
+  }
+);
+
+
+test('TC44 HA: xe vào qua Aggregator 1, socket Aggregator 2 nhận SLOT_UPDATED',
+  { ...T, skip: !process.env.HA },
+  async () => {
+    const AGG2 = 'http://localhost:8010';
+
+    // Lấy slot trống và version hiện tại
+    const available = await node('A', '/api/slots/available');
+    assert.equal(available.status, 200);
+
+    const { slotCode: slot, version: v0 } = available.body[0];
+
+    // Socket kết nối trực tiếp Aggregator 2
+    const socket = io(AGG2, {
+      transports: ['websocket'],
+      reconnection: false,
+      timeout: 10000
+    });
+
+    const events = [];
+    let entered = false;
+
+    try {
+      socket.on('SLOT_UPDATED', (event) => {
+        if (
+          event.slot === slot &&
+          event.version > v0
+        ) {
+          events.push(event);
+        }
+      });
+
+      // Đảm bảo socket đã kết nối trước khi cho xe vào
+      await until('Socket Aggregator 2 kết nối',
+        () => socket.connected, 10_000);
+
+      // Cho xe vào thông qua Aggregator 1
+      const enter = await agg(
+        `/api/parkings/A/slots/${slot}/enter`,
+        {
+          method: 'POST',
+          token: tok.staffA,
+          body: {}
+        }
+      );
+
+      assert.equal(enter.status, 200);
+      assert.equal(enter.body.status, 'OCCUPIED');
+      entered = true;
+
+      // Đợi Aggregator 2 nhận sự kiện
+      await until('Aggregator 2 nhận SLOT_UPDATED',
+        () => events.some(e => e.status === 'OCCUPIED'),
+        15_000);
+
+      console.log('TC44 - Aggregator 2 nhận:', events);
+
+      assert.ok(
+        events.some(e => e.status === 'OCCUPIED'),
+        'Aggregator 2 không nhận được SLOT_UPDATED'
+      );
+
+    } finally {
+      // Đóng socket để test không bị treo
+      socket.close();
+
+      // Trả slot về AVAILABLE nếu đã cho xe vào
+      if (entered) {
+        const exit = await node(
+          'A',
+          `/api/slots/${slot}/exit`,
+          { method: 'POST', body: { cash: true } }
+        );
+
+        assert.equal(exit.status, 200);
+      }
+    }
+  }
+);
+
+
+// PT-05 cần cặp khoá RS256 (node scripts/gen-keys.mjs); không có khoá thì node không tự kiểm được token -> 401.
+test('TC46: Staff thao tác khi Aggregator sập', { ...T, skip: !process.env.JWT_PUBLIC_KEY_B64 }, async () => {
+  let slot;
+
+  const call = (action) => http(
+    `${NODE.A}/api/slots/${slot}/${action}`,
+    {
+      method: 'POST',
+      headers: { authorization: `Bearer ${tok.staffA}` },
+      body: {}
+    }
+  );
+
+  try {
+    compose('stop aggregator aggregator-2');
+    // Lấy slot SAU khi dừng: kết nối keep-alive tới node A để rỗi trong lúc dừng container đã bị server đóng,
+    // POST không tự thử lại nên dùng lại kết nối đó sẽ ra status 0. GET mở lại kết nối mới ngay trước enter/exit.
+    slot = await freeSlot('A');
+
+    const enter = await call('enter');
+    assert.equal(enter.status, 200);
+
+    const exit = await call('exit');
+    assert.equal(exit.status, 200);
+
+    // Cho xe vào lần nữa và để xe trong bãi: bật lại Aggregator phải thấy OCCUPIED. Nếu để slot về AVAILABLE
+    // thì trạng thái giống hệt lúc trước khi tắt, test qua cả khi Aggregator không cập nhật gì.
+    const again = await call('enter');
+    assert.equal(again.status, 200);
+    exitLater('A', slot);
+
+    console.log('TC46 - Enter:', enter.status, 'Exit:', exit.status, 'Enter lại:', again.status);
+  } finally {
+    compose('start aggregator aggregator-2');
+  }
+
+  await until('Aggregator thấy slot OCCUPIED giống node A', async () => {
+    const r = await agg('/api/parkings/A');
+    return r.status === 200 && r.body?.slots?.some((s) => s.slotCode === slot && s.status === 'OCCUPIED');
+  });
+
+  console.log('TC46 - PASS:', slot, 'OCCUPIED');
+});
+
+test('TC48 cụm RabbitMQ: tắt nút rabbitmq, chuyển nút < 10s, outbox về 0 và Aggregator nhận sự kiện',
+  { ...T, skip: !process.env.HA },
+  async () => {
+    const socket = io(AGG, {
+      transports: ['websocket'],
+      reconnection: false,
+      timeout: 10_000,
+    });
+    const events = [];
+    let slot;
+
+    try {
+      socket.on('SLOT_UPDATED', (e) => events.push(e));
+      await until('Socket Aggregator kết nối', () => socket.connected, 10_000);
+
+      // Dùng compose('stop rabbitmq')
+      compose('stop rabbitmq');
+
+      slot = await freeSlot('A');
+      const enter = await node('A', `/api/slots/${slot}/enter`, { method: 'POST', body: {} });
+      assert.equal(enter.status, 200);
+      exitLater('A', slot);
+
+      // Kiểm tra trong vòng < 10 giây outbox của db-a về 0 (đã gửi qua nút 2 hoặc nút 3)
+      await until(
+        'outbox db-a về 0 trong < 10 giây',
+        () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0',
+        10_000
+      );
+
+      // và Aggregator nhận được sự kiện
+      await until(
+        'Aggregator nhận được sự kiện SLOT_UPDATED',
+        () => events.some((e) => e.parkingId === 'A' && e.slot === slot && e.status === 'OCCUPIED'),
+        10_000
+      );
+    } finally {
+      socket.close();
+      compose('start rabbitmq');
+      await until('rabbitmq phục hồi vào cụm', () => {
+        try {
+          return compose('exec -T rabbitmq rabbitmqctl cluster_status').includes('rabbit@rabbitmq-2');
+        } catch {
+          return false;
+        }
+      }, 30_000).catch(() => {});
+    }
+  }
+);
+
+test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), outbox giữ tin; bật lại thì xả về 0',
+  { ...T, skip: !process.env.HA },
+  async () => {
+    let slot;
+    try {
+      // Dừng cả rabbitmq và rabbitmq-2 (mất quorum trên cụm 3 nút)
+      compose('stop rabbitmq rabbitmq-2');
+
+      // Cho xe vào bãi A
+      slot = await freeSlot('A');
+      const enter = await node('A', `/api/slots/${slot}/enter`, { method: 'POST', body: {} });
+      assert.equal(enter.status, 200);
+      exitLater('A', slot);
+
+      // Đợi relay thử gửi nhưng không thể do mất quorum
+      await sleep(2500);
+
+      // Kiểm tra outbox giữ tin (> 0)
+      const unsent = Number(sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL'));
+      assert.ok(unsent > 0, `Outbox phải giữ tin khi mất quorum (thực tế: ${unsent})`);
+
+      // Sau đó bật lại 2 nút
+      compose('start rabbitmq rabbitmq-2');
+
+      // Xác nhận outbox xả về 0
+      await until(
+        'outbox db-a xả về 0 sau khi bật lại 2 nút',
+        () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0',
+        60_000
+      );
+    } finally {
+      // Khối finally phải luôn bật lại các nút đã dừng
+      compose('start rabbitmq rabbitmq-2');
+      await until('cụm rabbitmq phục hồi', () => {
+        try {
+          const s = compose('exec -T rabbitmq rabbitmqctl cluster_status');
+          return s.includes('rabbit@rabbitmq-2') && s.includes('rabbit@rabbitmq-3');
+        } catch {
+          return false;
+        }
+      }, 45_000).catch(() => {});
+    }
+  }
+);
+
+registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot });
+
+// --- PD-09: Khám phá dịch vụ qua etcd (COORD=1 node --test tests/e2e.test.mjs) ---
+test('TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd -> tự động hiện trên API danh sách bãi trong <= 2s',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      compose('--profile extra up -d db-d parking-d');
+      await until('parking-d sẵn sàng', async () => {
+        const r = await node('D', '/health');
+        return r.status === 200;
+      }, 30_000);
+      const start = Date.now();
+      await until('bãi D xuất hiện trong danh sách bãi của Aggregator <= 2s', async () => {
+        const r = await agg('/api/parkings');
+        const d = r.body?.find((p) => p.parkingId === 'D');
+        return d && d.status === 'ONLINE';
+      }, 5000);
+      const elapsed = Date.now() - start;
+      console.log(`TC63 - Bãi D xuất hiện và ONLINE sau ${elapsed}ms`);
+      assert.ok(elapsed <= 2000, `Bãi mới phải hiện trong danh sách bãi kịp thời <= 2s (thực tế: ${elapsed}ms)`);
+    } finally {
+      if (!SCALE) compose('--profile extra stop parking-d db-d');
+    }
+  }
+);
+
+test('TC64 phân hoạch mạng node <-> etcd: mất lease nhưng HTTP còn sống -> trạng thái chuyển DEGRADED',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      process.env.ENABLE_TEST_FAULTS = '1';
+      compose('--profile extra up -d db-d parking-d');
+      await until('bãi D ONLINE', async () => {
+        const r = await agg('/api/parkings');
+        return r.body?.find((p) => p.parkingId === 'D')?.status === 'ONLINE';
+      }, 10_000);
+
+      // Giả lập bãi D mất kết nối tới etcd trong 8 giây (lease TTL 5s sẽ hết hạn trên etcd)
+      const part = await node('D', '/api/test/fault/etcd-partition', {
+        method: 'POST',
+        body: { ms: 8000 },
+      });
+      assert.equal(part.status, 200);
+
+      // Node D HTTP vẫn sống
+      const h = await node('D', '/health');
+      assert.equal(h.status, 200);
+
+      // Chờ lease 5s hết hạn trên etcd -> Aggregator nhận DELETE event -> chuyển sang DEGRADED
+      await until('bãi D chuyển sang DEGRADED khi mất lease', async () => {
+        const r = await agg('/api/parkings');
+        const d = r.body?.find((p) => p.parkingId === 'D');
+        return d && d.status === 'DEGRADED';
+      }, 15_000);
+
+      console.log('TC64 - PASS: Bãi D chuyển sang DEGRADED khi mất lease etcd nhưng HTTP vẫn sống');
+
+      // Sau 8 giây partition kết thúc, bãi D đăng ký lại lease -> phục hồi ONLINE
+      await until('bãi D phục hồi ONLINE sau khi có lại lease', async () => {
+        const r = await agg('/api/parkings');
+        const d = r.body?.find((p) => p.parkingId === 'D');
+        return d && d.status === 'ONLINE';
+      }, 15_000);
+
+      console.log('TC64 - PASS: Bãi D tự động phục hồi ONLINE');
+    } finally {
+      delete process.env.ENABLE_TEST_FAULTS;
+      if (!SCALE) compose('--profile extra stop parking-d db-d');
+    }
+  }
+);
+
+// --- PD-11: Cấu hình động qua etcd watch (COORD=1 node --test tests/e2e.test.mjs) ---
+test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> Aggregator nhận ngay không cần restart',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put "${k}" "${v}"`);
+    const adminToken = tok?.admin ?? await login('admin');
+
+    try {
+      // 1. Cập nhật cấu hình timeoutMs trên etcd thành 500
+      etcdPut('/nhom16/config/aggregator/timeoutMs', '500');
+
+      // 2. Chờ Aggregator nhận cấu hình mới qua watch trong <= 2s mà không cần restart container
+      await until('Aggregator nhận timeoutMs = 500', async () => {
+        const r = await agg('/api/config/timeoutMs', { token: adminToken });
+        return r.status === 200 && r.body?.value === 500;
+      }, 5000);
+
+      // 3. Kiểm tra log của Aggregator có chứa sự kiện cập nhật cấu hình kèm revision
+      const logs = compose('logs --tail 50 aggregator');
+      assert.match(logs, /\[etcd-config\] Cập nhật \/nhom16\/config\/aggregator\/timeoutMs|timeoutMs.*500/);
+      assert.match(logs, /revision/);
+
+      console.log('TC67 - PASS: Aggregator cập nhật timeoutMs = 500ms qua etcd watch tức thì và ghi log kèm revision');
+    } finally {
+      // Khôi phục giá trị mặc định 2000
+      try {
+        etcdPut('/nhom16/config/aggregator/timeoutMs', '2000');
+        await until('Aggregator khôi phục timeoutMs = 2000', async () => {
+          const r = await agg('/api/config/timeoutMs', { token: adminToken });
+          return r.status === 200 && r.body?.value === 2000;
+        }, 5000);
+      } catch { /* bỏ qua */ }
+    }
+  }
+);
+
+// --- PD-10: Bầu Leader Aggregator & Fencing Token (COORD=1 node --test tests/e2e.test.mjs) ---
+test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm leader mới trong <= 7s, metric = 1',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // PD-19: 2 bản vùng Nam cũng tranh leader; tạm dừng để test chỉ có 2 bản vùng Bắc
+      if (SCALE) compose('stop aggregator-nam-1 aggregator-nam-2');
+      // 1. Khởi động bản Aggregator thứ 2
+      compose('--profile ha up -d aggregator-2');
+      await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
+
+      // 2. Xác định bản nào đang là Leader
+      await until('Có ít nhất một bản là Leader', async () => {
+        const l1 = (await agg('/api/leader')).body?.isLeader;
+        const l2 = (await agg2('/api/leader')).body?.isLeader;
+        return l1 || l2;
+      }, 10_000);
+
+      const r1 = (await agg('/api/leader')).body;
+      const [leaderName, followerName, followerUrl] = r1?.isLeader
+        ? ['aggregator', 'aggregator-2', agg2]
+        : ['aggregator-2', 'aggregator', agg];
+
+      console.log(`TC65 - Leader hiện tại là ${leaderName}`);
+
+      // 3. Tắt bản đang là Leader
+      compose(`stop ${leaderName}`);
+
+      // 4. Chờ bản follower lên làm leader mới trong <= 7s (lease TTL 5s hết hạn trên etcd)
+      const start = Date.now();
+      await until('Bản follower trở thành Leader mới <= 7s', async () => {
+        const r = await followerUrl('/api/leader');
+        return r.status === 200 && r.body?.isLeader === true;
+      }, 10_000);
+      const elapsed = Date.now() - start;
+      console.log(`TC65 - ${followerName} đã lên làm Leader mới sau ${elapsed}ms`);
+      assert.ok(elapsed <= 7500, `Leader mới phải được bầu trong <= 7s (thực tế: ${elapsed}ms)`);
+
+      // 5. Kiểm tra metric aggregator_is_leader = 1 trên bản mới
+      const metrics = await (await fetch((followerName === 'aggregator' ? AGG : AGG2) + '/metrics')).text();
+      assert.match(metrics, /aggregator_is_leader 1/);
+
+      console.log('TC65 - PASS: Chuyển giao Leader thành công khi Leader cũ dừng');
+    } finally {
+      if (SCALE) compose('start aggregator-nam-1 aggregator-nam-2');
+      compose('start aggregator');
+      compose('--profile ha stop aggregator-2');
+    }
+  }
+);
+
+test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token cũ -> bị node từ chối STALE_LEADER, metric tăng',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // PD-19: 2 bản vùng Nam cũng tranh leader; tạm dừng để test chỉ có 2 bản vùng Bắc
+      if (SCALE) compose('stop aggregator-nam-1 aggregator-nam-2');
+      // 1. Khởi động bản Aggregator thứ 2
+      compose('--profile ha up -d aggregator-2');
+      await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
+
+      // Đảm bảo aggregator (bản 1) là leader
+      let l1 = (await agg('/api/leader')).body;
+      if (!l1?.isLeader) {
+        await agg2('/api/test/fault/leader-pause', { method: 'POST', body: { ms: 5000 } });
+        await until('Aggregator 1 trở thành Leader', async () => (await agg('/api/leader')).body?.isLeader, 10_000);
+        l1 = (await agg('/api/leader')).body;
+      }
+      assert.ok(l1?.isLeader, 'Aggregator 1 phải là leader');
+      const token1 = l1.fencingToken;
+      console.log(`TC66 - Aggregator 1 là leader với token: ${token1}`);
+
+      // 2. Giả lập pause Leader 1 (ngắt keepalive lease trong 12s, giữ token1 trong RAM)
+      const pauseRes = await agg('/api/test/fault/leader-pause', { method: 'POST', body: { ms: 12000 } });
+      assert.equal(pauseRes.status, 200);
+
+      // 3. Trong thời gian 5s lease của leader 1 hết hạn, Aggregator 2 lên làm leader với token mới (token2 > token1)
+      await until('Aggregator 2 nhận quyền Leader với token lớn hơn', async () => {
+        const r2 = (await agg2('/api/leader')).body;
+        return r2?.isLeader && r2.fencingToken > token1;
+      }, 10_000);
+
+      const token2 = (await agg2('/api/leader')).body.fencingToken;
+      console.log(`TC66 - Aggregator 2 đã trở thành Leader mới với token2: ${token2} > ${token1}`);
+
+      // 4. Leader mới (token2) ghi thật vào Node A: đưa một slot trống vào bảo trì -> Node A nâng max_token = token2
+      const fenced = (token) => ({ method: 'POST', body: {}, headers: { 'x-fencing-token': String(token), 'x-fencing-job': 'reconcile' } });
+      const { slotCode } = (await node('A', '/api/slots/available')).body[0];
+      const jobRes = await node('A', `/api/slots/${slotCode}/maintenance`, fenced(token2));
+      assert.equal(jobRes.status, 200);
+
+      // 5. Leader 1 cũ ghi với token cũ (token1): Node A kiểm token trong cùng giao dịch -> 409 STALE_LEADER, không ghi gì
+      const staleRes = await node('A', `/api/slots/${slotCode}/unmaintenance`, fenced(token1));
+      assert.equal(staleRes.status, 409);
+      assert.equal(staleRes.body?.error, 'STALE_LEADER');
+      const after = (await node('A', '/api/slots')).body.find((x) => x.slotCode === slotCode);
+      assert.equal(after.status, 'MAINTENANCE', 'lệnh của leader cũ không được ghi');
+      assert.equal((await node('A', `/api/slots/${slotCode}/unmaintenance`, fenced(token2))).status, 200);   // trả slot lại
+
+      // 6. Kiểm tra metric fencing_rejected_total trên Node A
+      const nodeMetrics = await (await fetch(NODE.A + '/metrics')).text();
+      assert.match(nodeMetrics, /fencing_rejected_total/);
+
+      console.log('TC66 - PASS: Node từ chối lệnh từ Leader cũ do Fencing Token cũ, bảo vệ chống split-brain');
+    } finally {
+      if (SCALE) compose('start aggregator-nam-1 aggregator-nam-2');
+      compose('--profile ha stop aggregator-2');
+    }
+  }
+);
+
+// TC68 -> TC69 dùng chung trạng thái sau failover; TC69 (hoặc TC68 lỗi) trả bãi A về db-a, epoch 1
+let tc68Passed = false;
+const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put ${k} ${v}`);
+const etcdGet = (k) => compose(`exec -T etcd-1 etcdctl get --print-value-only ${k}`).trim();
+function resetA() {
+  try {
+    compose('start db-a');
+    // replica đã thành primary riêng: db-a còn synchronous_standby_names thì mọi lệnh ghi treo chờ standby không tồn tại
+    sql('db-a', 'ALTER SYSTEM RESET synchronous_standby_names');
+    sql('db-a', 'SELECT pg_reload_conf()');
+    sql('db-a', 'UPDATE db_epoch SET epoch = 1');
+    etcdPut('/nhom16/parking/A/db/epoch', 1);
+    etcdPut('/nhom16/parking/A/db/primary', 'postgres://postgres:dev@db-a/parking');
+  } catch {}
+}
+
+test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng epoch etcd, node tự chuyển pool sang DB mới',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      // 1. Khởi động failover-manager
+      compose('--profile coord up -d failover-manager-1 failover-manager-2');
+      await until('Failover-manager 1 sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
+
+      // 2. Kiểm tra bãi A đang hoạt động bình thường trên primary (db-a)
+      const avBefore = await node('A', '/api/availability');
+      assert.equal(avBefore.status, 200);
+
+      // 3. Tắt db-a (primary bãi A) để kích hoạt failover tự động
+      console.log('TC68 - Tắt db-a để kích hoạt failover tự động...');
+      compose('stop db-a');
+
+      // 4. Chờ failover-manager phát hiện lỗi liên tiếp và promote db-a-replica, cập nhật etcd
+      await until('Failover hoàn tất trên etcd (epoch >= 2)', async () => {
+        const st1 = (await fm1('/status')).body;
+        const st2 = (await fm2('/status')).body;
+        const pA1 = st1?.parkings?.find((p) => p.parkingId === 'A');
+        const pA2 = st2?.parkings?.find((p) => p.parkingId === 'A');
+        return (pA1 && pA1.primaryUrl.includes('replica')) || (pA2 && pA2.primaryUrl.includes('replica'));
+      }, 45_000);
+
+      // 5. Node A tự nhận primary mới qua etcd watch mà không cần khởi động lại, đặt chỗ thành công
+      await sleep(1500);
+      const free = await freeSlot('A');
+      const bookRes = await node('A', '/api/reservations', {
+        method: 'POST',
+        body: {
+          requestId: `e2e-tc68:${randomUUID()}`,
+          userId: 'user1',
+          slotCode: free,
+          licensePlate: plate(),
+        },
+      });
+      assert.equal(bookRes.status, 201);
+      console.log('TC68 - PASS: Failover tự động thành công, node tự chuyển pool và đặt chỗ bình thường');
+      tc68Passed = true;
+    } finally {
+      compose('--profile coord stop failover-manager-1 failover-manager-2');
+      if (!tc68Passed) resetA();   // đạt thì để nguyên trạng thái sau failover cho TC69
+    }
+  }
+);
+
+test('TC69 zombie primary fencing: DB primary cũ sống lại (mang epoch cũ) -> Node từ chối ghi (STALE_DB_EPOCH)',
+  { ...T, skip: !process.env.COORD },
+  async (t) => {
+    if (!tc68Passed) return t.skip('cần TC68 đạt trước');
+    try {
+      // 1. Bật lại primary cũ: db-a không biết đã bị thay, vẫn nhận ghi với db_epoch cũ
+      compose('start db-a');
+      const etcdEpoch = Number(etcdGet('/nhom16/parking/A/db/epoch'));
+      assert.ok(etcdEpoch >= 2, `epoch etcd sau failover: ${etcdEpoch}`);
+      await until('db-a cũ chạy lại', async () => { try { return sql('db-a', 'SELECT 1') === '1'; } catch { return false; } }, 30_000);
+
+      // 2. Chỉ một primary hợp lệ: nhận ghi (không recovery) và mang db_epoch bằng epoch etcd
+      const valid = ['db-a', 'db-a-replica'].filter((db) =>
+        sql(db, 'SELECT pg_is_in_recovery()') === 'f' && Number(sql(db, 'SELECT epoch FROM db_epoch LIMIT 1')) === etcdEpoch);
+      assert.deepEqual(valid, ['db-a-replica']);
+
+      // 3. Định tuyến nhầm về primary cũ (cấu hình cũ, epoch giữ nguyên): node đổi pool sang db-a, phát hiện epoch lệch thật
+      etcdPut('/nhom16/parking/A/db/primary', 'postgres://postgres:dev@db-a/parking');
+      await until('node A sẵn sàng', async () => (await node('A', '/health')).status === 200, 30_000);
+      let r;
+      await until('node A chặn ghi vào primary cũ', async () => {
+        r = await node('A', '/api/reservations', {
+          method: 'POST',
+          body: { requestId: `e2e-tc69:${randomUUID()}`, userId: 'user1', slotCode: await freeSlot('A'), licensePlate: plate() },
+        });
+        return r.status === 409;
+      }, 15_000);
+      assert.equal(r.body?.error, 'STALE_DB_EPOCH');
+      assert.equal(sql('db-a', "SELECT count(*) FROM reservations WHERE request_id LIKE 'e2e-tc69:%'"), '0');
+      console.log('TC69 - PASS: Zombie primary bị chặn ghi, bảo vệ tính nhất quán dữ liệu');
+    } finally {
+      resetA();
+    }
+  }
+);
+
+test('TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự động hạ cấp sang async, giải phóng lệnh ghi',
+  { ...T, skip: !process.env.COORD },
+  async () => {
+    try {
+      compose('--profile coord up -d failover-manager-1');
+      await until('Failover-manager sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
+
+      // Kích hoạt degrade hoặc mô phỏng replica chết
+      const degRes = await fm1('/api/test/degrade/A', { method: 'POST' });
+      assert.equal(degRes.status, 200);
+      assert.equal(degRes.body?.degradedToAsync, true);
+
+      // Lệnh ghi trên primary A vẫn thực hiện trơn tru không bị nghẽn
+      const free = await freeSlot('A');
+      const bookRes = await node('A', '/api/reservations', {
+        method: 'POST',
+        body: {
+          requestId: `e2e-tc70:${randomUUID()}`,
+          userId: 'user1',
+          slotCode: free,
+          licensePlate: plate(),
+        },
+      });
+      assert.equal(bookRes.status, 201);
+      console.log('TC70 - PASS: Đã hạ cấp sao chép đồng bộ sang async khi replica chết, lệnh ghi thông suốt');
+    } finally {
+      compose('--profile coord stop failover-manager-1');
+    }
+  }
+);
+
+// --- PD-21: giới hạn đăng nhập dùng chung giữa các bản Aggregator (cần aggregator-2: profile ha) ---
+test('TC-PD21 giới hạn đăng nhập phân tán: 5 lần sai rải qua 2 Aggregator -> lần 6 bị 429 ở cả hai', { ...T, skip: !process.env.HA }, async () => {
+  const usersDb = process.env.SHARD ? 'db-users-1' : 'db-agg';   // user2 ở phân mảnh 1 (ring.js)
+  const clear = () => sql(usersDb, "DELETE FROM login_buckets WHERE username='user2'");
+  const tryLogin = (i, password) => (i % 2 ? agg2 : agg)('/api/auth/login', { method: 'POST', body: { username: 'user2', password } });
+  // TC65, TC66 tắt aggregator-2 khi xong: bật lại cho test này, xong thì trả về như cũ
+  compose('--profile ha up -d aggregator-2');
+  await until('2 Aggregator sẵn sàng', async () => (await agg('/health')).status === 200 && (await agg2('/health')).status === 200, 60_000);
+  clear();
+  try {
+    for (let i = 0; i < 5; i++) assert.equal((await tryLogin(i, 'sai-mat-khau')).status, 401, `lần sai ${i + 1}`);
+    assert.equal((await tryLogin(5, process.env.DEMO_PASSWORD ?? '123456')).status, 429);
+    assert.equal((await tryLogin(6, process.env.DEMO_PASSWORD ?? '123456')).status, 429);
+  } finally {
+    clear();
+    compose('--profile ha stop aggregator-2');
+  }
+});
+
+// --- PD-16: phân mảnh users (SHARD=1, compose thêm docker-compose.shard.yml) ---
+test('TC73 phân mảnh users: tắt db-users-1 -> người ở phân mảnh 2 vẫn đăng nhập và đặt chỗ được', { ...T, skip: !process.env.SHARD }, async () => {
+  const on = (db, u) => sql(db, `SELECT count(*) FROM users WHERE username='${u}'`) === '1';
+  // Tìm một người dùng ở phân mảnh 2 và một người ở phân mảnh 1 (user mẫu, thiếu thì tự đăng ký)
+  const pick = async (db) => {
+    for (const u of ['user1', 'user2']) if (on(db, u)) return u;
+    for (let i = 0; i < 50; i++) {
+      const u = `tc73_${randomUUID().slice(0, 8)}`;
+      const r = await agg('/api/auth/register', { method: 'POST', body: { username: u, password: 'matkhau123' } });
+      assert.equal(r.status, 201, JSON.stringify(r.body));
+      if (on(db, u)) return u;
+    }
+    throw new Error(`không tìm được username thuộc ${db}`);
+  };
+  const [u2, u1] = [await pick('db-users-2'), await pick('db-users-1')];
+  const pass = (u) => (u.startsWith('tc73_') ? 'matkhau123' : process.env.DEMO_PASSWORD ?? '123456');
+  const loginAs = (u) => agg('/api/auth/login', { method: 'POST', body: { username: u, password: pass(u) } });
+  try {
+    compose('stop db-users-1');
+    const r2 = await loginAs(u2);
+    assert.equal(r2.status, 200, JSON.stringify(r2.body));
+    // Bãi C: sau TC68 bản sao của A đã thành primary riêng, đọc chỗ trống ở A có thể cũ
+    const slot = await freeSlot('C');
+    const b = await agg('/api/parkings/C/reservations', {
+      method: 'POST', token: r2.body.token, key: randomUUID(), body: { slotCode: slot, licensePlate: plate() } });
+    assert.equal(b.status, 201, JSON.stringify(b.body));
+    cancelLater('C', b.body.id);
+    assert.notEqual((await loginAs(u1)).status, 200, 'người ở phân mảnh đã tắt không đăng nhập được');
+  } finally {
+    compose('start db-users-1');
+    await until('db-users-1 chạy lại', async () => { try { return sql('db-users-1', 'SELECT 1') === '1'; } catch { return false; } }, 30_000);
+  }
+});
+
+// --- PD-07: saga đặt nhiều bãi qua broker (COMMAND_MODE=broker cho cả compose và test) ---
+const BROKER = process.env.COMMAND_MODE === 'broker';
+const groupBooking = async (token, items) =>
+  agg('/api/group-reservations', { method: 'POST', token, key: `e2e-saga-${randomUUID()}`, body: { items } });
+
+test('TC75 saga 3 bãi qua broker: mọi bước giữ chỗ rồi xác nhận, saga COMPLETED', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const items = [];
+  for (const id of ['A', 'B', 'C']) items.push({ parkingId: id, slotCode: await freeSlot(id), licensePlate: plate() });
+  const r = await groupBooking(token, items);
+  assert.equal(r.status, 201, JSON.stringify(r.body));
+  assert.equal(r.body.status, 'COMPLETED', JSON.stringify(r.body));
+  for (const [i, step] of r.body.steps.entries()) {
+    assert.ok(step.reservationId, `bước ${i} thiếu reservationId`);
+    undo.push(() => node(step.parkingId, `/api/reservations/${step.reservationId}`, { method: 'DELETE' }));
+    const st = sql(`db-${step.parkingId.toLowerCase()}`, `SELECT status FROM reservations WHERE id='${step.reservationId}'`);
+    assert.equal(st, 'ACTIVE', `bãi ${step.parkingId}`);
+  }
+});
+
+test('TC76 saga qua broker: bước 3 lỗi -> bù trừ 2 bước trước, không còn chỗ giữ', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const items = [
+    { parkingId: 'A', slotCode: await freeSlot('A'), licensePlate: plate() },
+    { parkingId: 'B', slotCode: await freeSlot('B'), licensePlate: plate() },
+    { parkingId: 'C', slotCode: 'KHONG-CO', licensePlate: plate() },
+  ];
+  const r = await groupBooking(token, items);
+  assert.equal(r.body.status, 'FAILED', JSON.stringify(r.body));
+  for (const step of r.body.steps.slice(0, 2)) {
+    assert.equal(step.state, 'COMPENSATED', JSON.stringify(step));
+    const st = sql(`db-${step.parkingId.toLowerCase()}`, `SELECT status FROM reservations WHERE id='${step.reservationId}'`);
+    assert.equal(st, 'CANCELLED');
+  }
+});
+
+// --- PD-06: TTL lệnh và back-pressure (COMMAND_MODE=broker) ---
+const reserveVia = (token, id, slotCode) => agg(`/api/parkings/${id}/reservations`, {
+  method: 'POST', token, key: `e2e-pd06-${randomUUID()}`, body: { slotCode, licensePlate: plate() } });
+
+test('TC55 bãi tắt lâu hơn TTL: lệnh EXPIRED, bật lại không bị đặt muộn', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const slot = await freeSlot('B');
+  compose('stop parking-b');
+  try {
+    const r = await reserveVia(token, 'B', slot);
+    assert.equal(r.status, 202, JSON.stringify(r.body));
+    const id = r.body.commandId;
+    const final = await until('lệnh hết hạn', async () => {
+      const c = await agg(`/api/commands/${encodeURIComponent(id)}`, { token });
+      return c.body?.status === 'EXPIRED' && c.body;
+    }, 40_000);
+    assert.equal(final.statusCode, 410);
+  } finally {
+    compose('start parking-b');
+  }
+  await until('bãi B chạy lại', async () => (await node('B', '/health')).status === 200, 30_000);
+  await sleep(3000);
+  const st = sql('db-b', `SELECT status FROM parking_slots WHERE slot_code='${slot}'`);
+  assert.equal(st, 'AVAILABLE', 'lệnh đã hết hạn không được đặt muộn');
+});
+
+test('TC59 hàng đợi lệnh đầy: trả 503 kèm Retry-After, không mất lệnh đã nhận', { ...T, skip: !BROKER }, async () => {
+  const token = await login('user1');
+  const policy = '{"max-length":2,"overflow":"reject-publish","dead-letter-exchange":"parking.dlx","dead-letter-routing-key":"expired"}';
+  // gọi docker trực tiếp (không qua shell) để JSON của policy không bị shell Windows làm hỏng dấu nháy
+  const rabbitctl = (...args) => execFileSync('docker', ['compose', 'exec', '-T', 'rabbitmq', 'rabbitmqctl', ...args], { cwd: ROOT, stdio: 'pipe' });
+  rabbitctl('set_policy', '-p', '/', '--priority', '20', '--apply-to', 'quorum_queues', 'tc59-small', '^cmd\.C$', policy);
+  compose('stop parking-c');
+  const accepted = [];
+  try {
+    let full;
+    for (let i = 0; i < 6 && !full; i++) {
+      const r = await reserveVia(token, 'C', `TC59-${i}`);
+      if (r.status === 503) full = r; else accepted.push(r.body.commandId);
+    }
+    assert.ok(full, 'phải có một lần trả 503 khi hàng đợi đầy');
+    assert.equal(full.body.error, 'QUEUE_FULL');
+    assert.ok(full.headers.get('retry-after'), 'thiếu Retry-After');
+    for (const id of accepted) {
+      const c = await agg(`/api/commands/${encodeURIComponent(id)}`, { token });
+      assert.notEqual(c.body?.status, 'FAILED', `lệnh đã nhận ${id} không được mất`);
+    }
+  } finally {
+    rabbitctl('clear_policy', '-p', '/', 'tc59-small');
+    compose('start parking-c');
+  }
 });
