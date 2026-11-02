@@ -1,146 +1,277 @@
-# Nhận xét và chấm điểm thành viên – Giai đoạn 2
+# Nhận xét thành viên – Giai đoạn 2
 
-Nhóm 16 · Cập nhật 25/10/2026 · Người test và nhận xét: Hoàng Văn Huynh
+Nhóm 16 · 01/11/2026 (tuần 25/10 → 01/11) · Người nhận xét: Hoàng Văn Huynh
 
-Mỗi lỗi dưới đây có link tới đúng dòng code trên GitHub, ghim theo commit lúc review. Sửa xong thì đẩy commit mới lên nhánh của mình, không amend, không force-push.
+Mọi kết quả dưới đây do Huynh tự chạy lại ngày 01/11 trên Docker, mỗi nhánh một stack sạch. Sửa xong thì đẩy commit mới lên nhánh của mình, không amend, không force-push.
+
+Ký hiệu:
+- ✅ đạt
+- ❌ lỗi
+- ⚠️ đạt có điều kiện
+- ⛔ không chạy được
+- ⏸ chưa có code
 
 ## Bảng điểm
 
-| Thành viên | Điểm | Việc đã vào `main` / tổng | Việc có code | Tiến độ tuần (mục tiêu 30–50%) |
+| Thành viên | 25/10 | 01/11 | Đã merge / tổng | Tuần này |
 |---|---|---|---|---|
-| Vũ Văn Hùng | **80** | 2/5 (PD-01, PD-02) | 5/5 | 40% – đạt |
-| Nguyễn Văn Luận | **72** | 2/5 (PD-09, PD-11) | 4/5 | 40% – đạt |
-| Đỗ Huyền Trang | **66** | 1/7 (PD-18) | 2/7 | 14% – chưa đạt |
-| Trịnh Kim Loan | **54** | 0/6 | 3/6 | 0% – chưa đạt |
-| Phạm Sỹ Hiệp | **45** | 0/5 | 2/5 | 0% – chưa đạt |
+| Nguyễn Văn Luận | 72 | **77** | 3/5 | Sửa đủ lỗi PD-10 → merge #60 |
+| Vũ Văn Hùng | 80 | **76** | 2/5 | Không có commit |
+| Trịnh Kim Loan | 54 | **70** | 1/6 | PD-13 merge #61; PD-17, PD-14a, PD-05 còn lỗi |
+| Đỗ Huyền Trang | 66 | **62** | 1/7 | PD-23 mới, chưa chạy được |
+| Phạm Sỹ Hiệp | 45 | **56** | 0/5 | PD-12 đạt nhưng chưa PR; PD-24, PD-26 sai nền |
 
-**Điểm từng việc (100):** đúng yêu cầu issue 30 · chất lượng code và an toàn 25 · test 20 · quy trình (PR theo mẫu, duyệt thiết kế, tối đa 2 PR chờ) 15 · sẵn sàng tích hợp 10. Ngưỡng merge: ≥ 75, không lỗi chặn, test đạt khi chạy lại.
+Điểm = 50% chất lượng + 30% khối lượng + 20% quy trình. Một việc được merge khi đạt ≥ 75 điểm, không có lỗi chặn và test đạt khi chạy lại.
 
-**Điểm thành viên:** 50% chất lượng các việc đã làm + 30% khối lượng so với kế hoạch + 20% quy trình và phối hợp.
-
-**Kết quả test lần này** (dev + PD-09 + PD-11 + PD-18, Docker volume mới): unit node 66, aggregator 55, notification 2 đều đạt; e2e chế độ mặc định 16/16; e2e bật `coord` + `ha` 22 đạt (TC43 chạy tay qua nginx 20/20); CI của PR #59 xanh cả test, frontend, e2e.
+`main` sau merge #65: unit 74/59/2, e2e `coord` 22/22; `ha` đạt TC43–TC49 và TC63–TC67.
 
 ---
 
-## Vũ Văn Hùng – 80/100
+## Luận – 77
 
-| Việc | Trạng thái | Điểm |
-|---|---|---|
-| PD-01 Topology kênh lệnh | ✅ main | 92 |
-| PD-02 Inbox ở node | ✅ main | 88 |
-| PD-08 Retry, DLQ | PR #49, chưa merge | 70 |
-| PD-03 Request–reply | PR #52, chưa merge | 68 |
-| PD-04 Phát lệnh nhiều bãi | PR #53, chưa merge | 60 |
+**Tiến độ:**
+- Đã merge: PD-09, PD-11, PD-10.
+- PD-14b: có nhánh, chưa PR.
+- PD-07: chưa làm.
 
-**Điểm mạnh:** làm nhanh và chắc nhất nhóm; PD-01/PD-02 có transaction đúng, HMAC, test e2e thật (TC52, TC53, TC56), tài liệu bằng chứng đầy đủ.
+**Kết quả test**
 
-**Lỗi cần sửa**
+| Việc | Kết quả |
+|---|---|
+| PD-10: TC43, TC44, TC65, TC66 cùng một lượt (`COORD=1 HA=1`) | ✅ 4/4 |
+| PD-10: `docker compose pause` leader thật 15 s | ✅ bản kia lên leader; sau unpause chỉ còn 1 leader |
+| PD-10: trạng thái sau lượt test trên | ❌ `aggregator-2` bị tắt; 2 bản cùng `isLeader: true` (token 23, 27) |
+| PD-14b: TC68 promote replica, TC70 hạ async | ✅ |
+| PD-14b: TC69 zombie primary | ⚠️ chỉ đạt khi chạy riêng, và là test giả |
+| PD-07: TC75–76 | ⏸ |
 
-1. **PD-08, PD-03, PD-04 nối vào PD-02 bằng file `.patch` thay vì code thật.** PD-02 đã ở `dev`, cần rebase từng nhánh lên `dev`, nối hook trực tiếp, xoá các file sau:
-   - PD-08: [`scripts/pd08-pd02-integration.patch`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/c20c084638ac275c439a7f55974e25850d4e4d29/scripts/pd08-pd02-integration.patch), [`parking-node/src/retry-integration.js`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/c20c084638ac275c439a7f55974e25850d4e4d29/parking-node/src/retry-integration.js)
-   - PD-03: [`scripts/pd03-pd02-reply.patch`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/fd9d78131c02b31a11838114997cc7856bbd3d45/scripts/pd03-pd02-reply.patch)
-   - PD-04: [`scripts/pd04-pd02-integration.patch`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/e8dc90ffca0e5efdf03ab0d24d9e5f093086d420/scripts/pd04-pd02-integration.patch), [`scripts/prepare-pd04-candidate.mjs`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/e8dc90ffca0e5efdf03ab0d24d9e5f093086d420/scripts/prepare-pd04-candidate.mjs), [`parking-node/src/admin-integration.js`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/e8dc90ffca0e5efdf03ab0d24d9e5f093086d420/parking-node/src/admin-integration.js)
-2. **PD-03: code viết dồn, khó đọc.** [`aggregator-service/src/command-flow.js`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/fd9d78131c02b31a11838114997cc7856bbd3d45/aggregator-service/src/command-flow.js) bỏ hết khoảng trắng, nhiều lệnh trên một dòng (dòng dài nhất 221 ký tự), khác hẳn phong cách repo. Viết lại cho dễ đọc như `commands.js` của PD-01.
-3. **PD-03: đổi mặc định sang broker** → đổi hành vi API đặt/huỷ/trả tiền của cả nhóm:
-   - [`aggregator-service/src/routes.js:10`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/fd9d78131c02b31a11838114997cc7856bbd3d45/aggregator-service/src/routes.js#L10) `commandMode = 'broker'`
-   - [`aggregator-service/src/index.js:50`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/fd9d78131c02b31a11838114997cc7856bbd3d45/aggregator-service/src/index.js#L50) `env('COMMAND_MODE','broker')`
-   - [`docker-compose.yml:27`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/fd9d78131c02b31a11838114997cc7856bbd3d45/docker-compose.yml#L27), [`:97`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/fd9d78131c02b31a11838114997cc7856bbd3d45/docker-compose.yml#L97) `${COMMAND_MODE:-broker}`
+**Cần sửa**
+1. **PD-10 – giả lập pause để lại 2 leader.**
+   - `simulatePause` đặt `activeLease = null`, nên sự kiện `lost` bị bỏ qua ([leader.js:175](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/38bc9bcd65520d6dddeb9b019b2b41318f9d609e/aggregator-service/src/leader.js#L175), [:119](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/38bc9bcd65520d6dddeb9b019b2b41318f9d609e/aggregator-service/src/leader.js#L119)).
+   - Sửa: hẹn `setTimeout(handleLoseLeadership, durationMs)`. Hoặc bỏ endpoint này và cho TC66 dùng `docker compose pause`.
+2. **PD-10 – TC65/66 luôn dừng `aggregator-2` trong `finally`** ([e2e.test.mjs:729](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/38bc9bcd65520d6dddeb9b019b2b41318f9d609e/tests/e2e.test.mjs#L729), [:786](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/38bc9bcd65520d6dddeb9b019b2b41318f9d609e/tests/e2e.test.mjs#L786)). Hậu quả: TC43 chạy sau đó sẽ lỗi.
+   - Sửa: chỉ dừng nếu chính test đã bật nó.
+3. **PD-10 – request của người dùng cũng mang fencing token** ([nodes.js:91](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/38bc9bcd65520d6dddeb9b019b2b41318f9d609e/aggregator-service/src/nodes.js#L91)). Hậu quả: khoá dòng `fencing` làm các lệnh ghi phải xếp hàng, và người dùng nhận `409`.
+   - Sửa: chỉ gắn token khi có `job`.
+4. **PD-10 – lệnh qua broker chưa kiểm fencing** ([commands.js:85](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/38bc9bcd65520d6dddeb9b019b2b41318f9d609e/parking-node/src/commands.js#L85)).
+   - Sửa: gọi `checkFencing` ngay sau `BEGIN`. Token cũ thì ghi `409 STALE_LEADER` vào inbox.
+5. **PD-14b – TC69 là test giả.** Gặp header `x-test-simulate-stale-epoch` là [app.js:120](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/088def2/parking-node/src/app.js#L120) trả `409` ngay, không đụng DB. Chạy ngay sau TC68 thì lỗi `status 0`, vì node A chưa nối lại xong.
+   - Sửa: bật lại primary cũ thật rồi ghi qua node.
+   - Sửa: chờ node A sẵn sàng trước khi gửi.
+6. **PD-14b – nhánh còn chứa PD-10 bản cũ, xung đột với `dev`.**
+   - Sửa: tạo nhánh mới từ `origin/dev`, cherry-pick `a613d05 c13fc62 5129966 088def2`.
+   - Chỉ giữ `failover-manager/`, `dynamic-pool.js`, `epoch.test.js`, rồi mở PR.
 
-   Để mặc định `http` tới khi e2e chế độ broker chạy trong CI.
-4. **PD-02 (đã merge, sửa nhỏ):** [`parking-node/src/command-replies.js:76`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/72c9d70a929d7de33263f2f18710d281ae81b3e0/parking-node/src/command-replies.js#L76) gặp phản hồi không có queue nhận thì `break` → cả hàng đợi phản hồi kẹt ở tin đó (trên dev chưa có queue `agg.<id>`). Merge PD-03 sẽ hết; hoặc đánh dấu tin không route được rồi đi tiếp. [`parking-node/src/commands.js:151`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/72c9d70a929d7de33263f2f18710d281ae81b3e0/parking-node/src/commands.js#L151) bãi chưa có queue `cmd.D/E/F` sẽ reconnect và ghi log lỗi mỗi 5 s. Sửa: khi `checkQueue` báo 404 thì ghi log một lần rồi tăng dần thời gian chờ (tối đa 60 s).
-5. **Quy trình:** đang để 3 PR chờ (#49, #52, #53; quy định tối đa 2). PD-02, PD-03 là việc khó nhưng #19, #20 không có thiết kế được duyệt trước. Sửa: chuyển #52, #53 sang Draft tới khi #49 merge; đăng nửa trang thiết kế PD-03 lên #20 và chờ duyệt trước khi sửa tiếp.
+**Đã sửa hộ:** PD-09 làm node sập khi không nối được etcd lúc khởi động, vì [index.js:73](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/2b9cb9d/parking-node/src/index.js#L73) gọi `log.warn` mà `log.js` không có hàm này. Huynh đã thêm `log.warn` trong [`734860a`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/commit/734860a); Luận không cần làm gì.
 
----
-
-## Nguyễn Văn Luận – 72/100
-
-| Việc | Trạng thái | Điểm |
-|---|---|---|
-| PD-09 etcd, lease discovery | ✅ dev → main (#59) | 83 |
-| PD-11 Cấu hình động | ✅ dev → main (#59) | 82 |
-| PD-10 Bầu leader, fencing | Nhánh, chưa PR | 56 |
-| PD-14b Failover tự động | Nhánh, chưa PR | 66 |
-| PD-07 Saga qua broker | Chưa làm (tuần M4) | — |
-
-**Điểm mạnh:** sửa đủ 7 điểm review PD-09 trong chưa tới một ngày; thiết kế #27, #32 đăng lại đầy đủ và trả lời đúng các câu hỏi (thứ tự CAS → chờ → promote, kiểm epoch trong transaction, đánh đổi sync/async).
-
-**Lỗi cần sửa**
-
-1. **PD-10: kiểm fencing nằm ngoài transaction ghi.** [`parking-node/src/app.js:59-63`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/84ee4c8156d05c75b8313460547da83f2547b490/parking-node/src/app.js#L59-L63) middleware gọi `checkFencing(pool, …)` (tự commit) rồi `next()`. Leader cũ có thể qua bước kiểm rồi mới bị thay → vẫn ghi được. Đúng khe hở thiết kế #27 hứa tránh. Sửa: truyền client transaction vào từng thao tác ghi của job và chạy câu ở [`fencing.js:21`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/84ee4c8156d05c75b8313460547da83f2547b490/parking-node/src/fencing.js#L21) trong cùng `BEGIN … COMMIT` với lệnh ghi.
-2. **PD-10: nhân viên bãi chặn được leader.** Middleware ở [`app.js:59`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/84ee4c8156d05c75b8313460547da83f2547b490/parking-node/src/app.js#L59) chạy sau bước xác thực [`app.js:45`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/84ee4c8156d05c75b8313460547da83f2547b490/parking-node/src/app.js#L45), mà bước đó cho nhân viên có JWT gọi GET. Gửi `x-fencing-token: 999999999` là `max_token` tăng vọt, leader thật bị `STALE_LEADER`. Chỉ đọc token khi request có `x-internal-key`.
-3. **PD-10:** [`app.js:74`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/84ee4c8156d05c75b8313460547da83f2547b490/parking-node/src/app.js#L74) `/api/internal/fenced-job` có transaction nhưng không làm việc gì — bỏ hoặc nối vào job thật.
-4. **PD-14b:** [`failover-manager/src/manager.js:3`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5129966156b31946dbf93e7e1bbd736316cf85e1/failover-manager/src/manager.js#L3) comment đầu file còn ghi thứ tự cũ (promote trước, CAS sau), ngược với code — sửa cho khớp.
-5. **Quy trình:** lần đầu báo đã mở PR khi chưa có; thiết kế lần đầu bị cắt cụt và còn dấu `[cite]`. Các nhánh PD-11 → PD-10 → PD-14b xếp chồng nên mỗi lần sửa phải merge dây chuyền. Sửa: PD-10 và PD-14b tách lại từ `dev` mới nhất (PD-09, PD-11 đã ở đó), mỗi việc một nhánh riêng; chỉ báo đã mở PR khi gửi kèm link PR.
-
-Hai điểm "làm tiếp" của PD-11 (`reserveTimeoutMs`, `healthIntervalMs` chưa đổi động) đã được sửa ở commit `72c9d70` theo review Codex trên PR #59.
+**Sau khi sửa phải tự chạy**
+- `COORD=1 HA=1`: TC43, TC44, TC65, TC66 đạt.
+  - Sau lượt đó `aggregator-2` vẫn chạy.
+  - `/api/leader` chỉ 1 bản trả `isLeader: true`.
+- TC68, TC69, TC70 đạt cùng một lượt; TC69 dùng primary cũ thật.
+- PD-07: TC75–76.
 
 ---
 
-## Đỗ Huyền Trang – 66/100
+## Hùng – 76
 
-| Việc | Trạng thái | Điểm |
-|---|---|---|
-| PD-18 Relay LISTEN/NOTIFY, SKIP LOCKED | ✅ dev → main (#59) | 79 |
-| PD-22 Replay events.stream | PR #58, chưa merge | 70 |
-| PD-06, 20, 21, 23, 25 | Chưa làm | — |
+**Tiến độ:**
+- Đã merge: PD-01, PD-02.
+- Còn mở: PR #49 (PD-08), #52 (PD-03), #53 (PD-04), không cập nhật từ 22–23/10.
+- Tuần này không có commit. Trừ 4 điểm vì không phản hồi review.
 
-**Điểm mạnh:** mô tả PR tốt nhất nhóm (có số đo, nói rõ phần chưa kiểm được). PD-18 đạt tiêu chí: đo 40 sự kiện ở bãi A, 100% dưới 20 ms, trung bình 9,4 ms.
+**Kết quả test**
 
-**Lỗi cần sửa**
+| Việc | Kết quả |
+|---|---|
+| PD-08: TC57, TC58 | ⛔ |
+| PD-03: TC51, TC54, TC62 | ⛔ |
+| PD-04: TC61 | ⛔ |
 
-1. **PD-18 (đã merge): LISTEN không nối lại khi DB khởi động lại.** [`parking-node/src/index.js:89`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/72c9d70a929d7de33263f2f18710d281ae81b3e0/parking-node/src/index.js#L89) chỉ ghi log lỗi; client tạo một lần ở [`:93`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/72c9d70a929d7de33263f2f18710d281ae81b3e0/parking-node/src/index.js#L93). Đo ở bãi C sau khi restart DB: 0/40 dưới 20 ms, trung bình 257 ms (rơi về quét 500 ms). Sửa: khi `error`/`end` thì tạo Client mới, `LISTEN outbox` lại, backoff 1–5 s.
-2. **PD-18:** [`index.js:100`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/72c9d70a929d7de33263f2f18710d281ae81b3e0/parking-node/src/index.js#L100) ghi log info cho mỗi NOTIFY — quá ồn khi tải cao, bỏ hoặc đổi sang debug.
-3. **PD-22: channel đọc stream không bắt lỗi.** [`aggregator-service/src/events.js:103`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/events.js#L103) tạo channel mà không có `ch.on('error')` (chỉ có `conn.on('error')` ở dòng 101). Server đóng channel (queue thiếu, đổi leader stream) sẽ phát `error` không ai bắt. Sửa: thêm `ch.on('error', (e) => finish(e))` ngay sau khi tạo channel.
-4. **PD-22: replay có thể treo mãi.** [`events.js:80`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/events.js#L80) Promise chỉ xong khi gặp marker ([`:121`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/events.js#L121)). Mất marker thì [`index.js:110-111`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/index.js#L110-L111) không chạy → **`sagas.recover()` không bao giờ được gọi**. Thêm timeout (ví dụ 10 s) rồi tiếp tục khởi động.
-5. **PD-22:** chưa có số đo trước/sau theo "Xong khi". Sửa: đo thời gian từ lúc Aggregator khởi động tới khi phục vụ được và số request `/api/slots` gửi tới các bãi, khi chưa có và khi có replay; ghi bảng số liệu vào mô tả PR. [`index.js:89`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/index.js#L89) thụt lề lệch 4 dấu cách, sửa cho thẳng hàng với khối xung quanh.
+Lý do không chạy được:
+- Merge thử vào `dev` thì xung đột: PD-08 4 file, PD-03 7 file, PD-04 6 file.
+- Test PD-08 cần biến `PD02_SOURCE_ROOT` trỏ tới một checkout riêng.
+- Test PD-03 cần bản ghép bằng patch.
+- TC61 tự skip trong code ([pd04-broadcast.test.mjs:124](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/e8dc90f/tests/pd04-broadcast.test.mjs#L124)).
 
----
+**Cần sửa**
+1. **PD-08/03/04 nối vào PD-02 bằng file `.patch`.**
+   - Sửa: rebase từng nhánh lên `dev` (PD-02 đã có trên `dev`) và nối hook trực tiếp.
+   - Xoá `scripts/pd0*-pd02*.patch`, `retry-integration.js`, `admin-integration.js`, `prepare-pd04-candidate.mjs`.
+   - Test chạy được bằng `node --test` trên stack thường.
+2. **PD-03 – `command-flow.js` viết dồn**, có dòng dài 221 ký tự.
+   - Sửa: viết lại cho dễ đọc.
+3. **PD-03 – đổi mặc định sang `broker`** ([routes.js:10](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/fd9d78131c02b31a11838114997cc7856bbd3d45/aggregator-service/src/routes.js#L10)).
+   - Sửa: giữ `http` cho tới khi e2e chế độ broker chạy trong CI.
+4. **PD-02 – kẹt hàng đợi phản hồi.**
+   - Gặp tin không có queue nhận thì `break`, cả hàng đợi kẹt ([command-replies.js:76](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/72c9d70a929d7de33263f2f18710d281ae81b3e0/parking-node/src/command-replies.js#L76)). Sửa: đánh dấu tin đó rồi đi tiếp.
+   - Bãi chưa có queue thì cứ 5 s reconnect một lần ([commands.js:151](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/72c9d70a929d7de33263f2f18710d281ae81b3e0/parking-node/src/commands.js#L151)). Sửa: tăng dần thời gian chờ, tối đa 60 s.
+5. **Quy trình – 3 PR cùng chờ, quy định tối đa 2.**
+   - Sửa: chuyển #52, #53 sang Draft.
+   - Đăng thiết kế PD-03 lên issue #20.
 
-## Trịnh Kim Loan – 54/100
-
-| Việc | Trạng thái | Điểm |
-|---|---|---|
-| PD-17 HLC | PR #55, chưa merge | 66 |
-| PD-14a Bản sao DB | Nhánh, chưa PR | 45 |
-| PD-13 Hai bản node | Nhánh, chưa PR | 32 |
-| PD-05, 15, 16 | Chưa làm | — |
-
-**Điểm mạnh:** thuật toán HLC đúng (gửi/nhận, tràn bộ đếm), có TC74 và unit test. PD-14a mới thêm `init-primary.sh` chạy lại được nhiều lần và script đo độ trễ `scripts/do-tre-ban-sao.mjs` đúng tiêu chí "Xong khi".
-
-**Lỗi cần sửa**
-
-1. **PD-17: tự đổi công thức chống trùng của PD-02.** [`parking-node/src/commands.js:95-98`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/55ea917b9fef7f46011dd4aaaead27e1602b4f6e/parking-node/src/commands.js#L95-L98) bỏ `actor`, `parkingId` khỏi `request_hash`. Ngoài phạm vi PD-17, và lệnh gửi lại sau khi nâng cấp sẽ bị 422. Giữ nguyên công thức cũ `canonical({ type, parkingId, actor, payload })`.
-2. **PD-17: lịch sử quét cả bảng sự kiện.** [`parking-node/src/slots.js:272-275`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/55ea917b9fef7f46011dd4aaaead27e1602b4f6e/parking-node/src/slots.js#L272-L275) `LEFT JOIN LATERAL … WHERE pe.payload->>'sessionId' = …` không có index → mỗi phiên quét toàn bộ `parking_events`. Lưu `hlc` vào `parking_sessions` lúc xe vào (cùng transaction) rồi sắp theo cột đó.
-3. **PD-17: PR #55** tên là "Feature/pd 17 hlc" (tên nhánh tự sinh), mô tả chưa theo mẫu (`Đã làm`, `Cách kiểm tra`). 7 test aggregator lỗi trên máy Loan trong khi CI xanh → chạy lại sau `npm ci` để biết do môi trường.
-4. **PD-13: chưa chạy được 2 bản node.** [`parking-node/src/index.js:23`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/99e4b9a32fbfc63bbdac3bec2f76da93fb625c14/parking-node/src/index.js#L23) advisory lock viết cẩn thận nhưng 180 dòng nằm thẳng trong `index.js` (tới dòng 196) → tách `scheduled-lock.js` có unit test. Chưa có compose cho 2 bản sau 1 alias DNS, chưa có test TC60.
-5. **PD-14a:** còn thiếu script `pg_rewind` + runbook, metric độ trễ theo bãi, bãi D/E/F, hướng dẫn dùng `docker-compose.ha.yml`. Chưa mở PR.
-
----
-
-## Phạm Sỹ Hiệp – 45/100
-
-| Việc | Trạng thái | Điểm |
-|---|---|---|
-| PD-12 Mở rộng 6 bãi, 2 vùng | PR #56, xung đột | 53 |
-| PD-19 Aggregator theo vùng | Nhánh, chưa PR | 48 |
-| PD-24, 26, 27 | Chưa làm | — |
-
-**Điểm mạnh:** phần sinh compose 6 bãi (`scripts/gen-lots.mjs`), toxiproxy giả lập độ trễ liên vùng và test `gen-lots` có giá trị thật.
-
-**Lỗi cần sửa**
-
-1. **PD-12 dựa trên PD-09 bản cũ, chưa rebase dù đã được nhắc.** Nhánh tách từ `e7cf08c` (16/10), chậm hơn `dev` 18 commit, và chứa commit [`043a071 pd-09`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/commit/043a071) bản chưa sửa của Luận. PR #56 xung đột nên CI không chạy. [`aggregator-service/src/index.js:42-49`](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/cc4c9040eb65422369710b3338fcbb661852ff5c/aggregator-service/src/index.js#L42-L49) nối vào `discovery` bản cũ.
-   ```bash
-   git fetch origin
-   git checkout feature/PD-12-six-parking
-   git rebase origin/dev
-   ```
-   Khi rebase bỏ commit `043a071` và phần sửa `discovery.js` cũ, dùng PD-09 mới đã có trên `dev`; chạy lại e2e trên 6 bãi theo "Xong khi".
-2. **PD-19 làm trước việc bắt buộc.** Issue #37 ghi "Nếu kịp" và cần PD-12; nhánh xây chồng lên PD-12 chưa rebase. Trong khi PD-24, PD-26, PD-27 (bắt buộc) chưa bắt đầu. Sửa: sau khi PD-12 rebase xong thì rebase PD-19 lên nhánh PD-12 mới; chưa mở PR PD-19 cho tới khi PD-12 merge.
+**Sau khi sửa phải tự chạy**
+- TC57: lỗi tạm thời → thử lại rồi thành công, không trùng.
+- TC58: tin sai schema → vào `cmd.dead`, đẩy lại được.
+- TC51, TC54, TC62 với `COMMAND_MODE=broker`.
+- TC61: tắt F khi phát lệnh 3 bãi → kết quả 2/3.
+- e2e trên `dev` mới nhất không đỏ.
 
 ---
 
-## Việc chung
+## Loan – 70
 
-- Test UX-02 `byHour` trên `dev` phụ thuộc giờ chạy, đôi khi làm CI đỏ — cần một người sửa.
-- TC43 viết cứng `localhost:3000`; máy bị chiếm cổng 3000 sẽ lỗi giả — nên đọc từ biến môi trường.
+**Tiến độ:** làm nhiều nhất nhóm tuần này.
+- Đã merge: PD-13.
+- Còn lỗi: PR #55 (PD-17), #63 (PD-14a), #64 (PD-05, mở 31/10).
+- PD-15, PD-16: chưa làm.
+
+**Kết quả test**
+
+| Việc | Kết quả |
+|---|---|
+| PD-13: TC60; tắt `parking-a` | ✅ 4/4; 20/20 request vẫn 200 |
+| PD-17: TC74 với D lệch `+30000` | ✅ |
+| PD-17: TC74 với D lệch `-30000` | ❌ vào D đứng trước ra A |
+| PD-14a: `pg_stat_replication` | ✅ A, D `quorum`; B, C `async` |
+| PD-14a: bật `ha` → `down` → `up` không `ha` → ghi vào A | ❌ treo vô hạn |
+| PD-14a: `config -q` | ❌ lỗi khi không có profile, hoặc chỉ có `ha`; ✅ đạt với `ha` + `extra` |
+| PD-05: TC52, TC53 | ✅ |
+| PD-05: TC60 SAC | ❌ 3/3 lần trượt, đo được 7,2–7,7 s (yêu cầu ≤ 5 s) |
+| PD-15 TC71, PD-16 TC72–73 | ⏸ |
+
+**Cần sửa**
+1. **PD-17 – HLC không truyền qua HTTP.** TC74 đạt chỉ vì D chạy nhanh hơn.
+   - [nodes.js:94](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/d7fc04c2ee42caa9a04b0f5a51b2644aba7dd56c/aggregator-service/src/nodes.js#L94): gửi header `x-hlc: hlc.now()`.
+   - Node: có `x-hlc` và `x-internal-key` thì gọi `hlc.update`.
+   - Thêm biến thể TC74 với lệch `-30000`, xe vào D đi qua Aggregator.
+2. **PD-14a (chặn) – `ALTER SYSTEM` lưu vĩnh viễn trong volume** ([configure-sync-a.sh:25](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/3d5316980580ebae7f45d3474a20cda5df29b821/postgres/configure-sync-a.sh#L25)).
+   - Sửa: compose gốc thêm `-c synchronous_standby_names=''` cho `db-a`, `db-d`.
+   - `docker-compose.ha.yml` bỏ tham số này đi.
+3. **PD-14a – `docker-compose.ha.yml` lỗi khi thiếu profile.** Lỗi: `parking-a depends on undefined service "db-a-sync-config"` ([:31](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/3d5316980580ebae7f45d3474a20cda5df29b821/docker-compose.ha.yml#L31), [:59](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/3d5316980580ebae7f45d3474a20cda5df29b821/docker-compose.ha.yml#L59)).
+   - Sửa: dùng `depends_on … required: false`.
+   - Cho `db-d` vào cả profile `ha`.
+   - Ghi vào runbook: chạy `up -d`, không dùng `--wait`.
+4. **PD-05 – TC60 đo sai.** Thời gian đo được chủ yếu là lệnh `rabbitmqctl` chạy qua `docker compose exec` (khoảng 6 s mỗi lần gọi), không phải failover ([tc60.pd05.test.mjs:402](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/044715e/tests/tc60.pd05.test.mjs#L402)).
+   - Sửa: đo bằng Management API (`GET :15672/api/consumers/%2F`), hoặc bằng khoảng cách `processed_at` trong `inbox_messages`.
+   - PD-13 đã merge, nên chạy lại với `parking-a-1`/`parking-a-2`.
+5. **Nhỏ:**
+   - PD-17: comment sai ở [slots.js:275](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/d7fc04c2ee42caa9a04b0f5a51b2644aba7dd56c/parking-node/src/slots.js#L275); thụt lề sai ở `commands.js:52`.
+   - PD-14a: runbook thiếu cách chạy script đo trễ trong container; `rewind.mjs --execute` chưa chạy thật.
+   - PD-13: [tc60.pd13.test.mjs:22](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/551bd9af8a5cc366fe9fdd084477050d0661123f/tests/tc60.pd13.test.mjs#L22) viết cứng tên container, nên lấy bằng `docker compose ps -q`. `docker-compose.pd13.yml` chép lại biến môi trường, nên dùng `extends`.
+
+**Sau khi sửa phải tự chạy**
+- TC74 đạt với cả `+30000` và `-30000`.
+- Bật `ha` → `down` (không `-v`) → `up` không `ha` → đặt chỗ ở A trả 201.
+- `config -q` không lỗi với mọi tổ hợp profile.
+- TC60 PD-05 đạt 3 lần liên tiếp.
+- PD-15 TC71, PD-16 TC72–73.
+
+---
+
+## Trang – 62
+
+**Tiến độ:**
+- Đã merge: PD-18.
+- Còn mở: PR #58 (PD-22), không cập nhật từ 24/10; PR #62 (PD-23), có lỗi chặn.
+- PD-06, 20, 21, 25: chưa làm.
+- Các lỗi PD-18 và PD-22 từ tuần trước chưa sửa.
+
+**Kết quả test**
+
+| Việc | Kết quả |
+|---|---|
+| PD-18: 40 sự kiện bãi C, độ trễ outbox → broker | ❌ p50 37 ms, p95 61 ms, 0% dưới 20 ms |
+| PD-18: sau `restart db-c` | ❌ p50 338 ms, p95 690 ms (chậm gấp 10 lần) |
+| PD-22: Aggregator khởi động, có và không có `events.stream` | ✅ khoảng 2 s cả hai trường hợp |
+| PD-22: e2e | ❌ 16/17: TC37 lỗi `Cannot read properties of null (reading 'token')`; trên `dev` thì đạt |
+| PD-23: `/api/admin/stats` | ❌ toàn 0 |
+| PD-06: TC55, TC59 | ⏸ |
+
+**Cần sửa**
+1. **PD-23 (chặn) – không đọc được sự kiện nào.** [enabled_plugins](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/e0582be16c384cbb46647fb336021a4f7ec2cb1a/rabbitmq/enabled_plugins#L1) thiếu `rabbitmq_stream`, nên cổng 5552 trả `ECONNREFUSED`. `events.stream` cũng chưa có trong `definitions.json`.
+   - Sửa: bật plugin.
+   - Merge PD-22 trước, rồi rebase PD-23.
+2. **PD-23 – bật mặc định, không có đường lui** ([docker-compose.yml:115](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/e0582be16c384cbb46647fb336021a4f7ec2cb1a/docker-compose.yml#L115)).
+   - Sửa: đặt `${USE_STATS_SERVICE:-false}`.
+   - Khi stats-service lỗi thì quay về scatter–gather.
+3. **PD-23 – thiếu doanh thu tiền mặt.** Doanh thu chỉ được cộng khi có `PAYMENT_COMPLETED` ([slots.js:178](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/e0582be16c384cbb46647fb336021a4f7ec2cb1a/parking-node/src/slots.js#L178)).
+   - Sửa: cộng `fee` của `CAR_EXIT` khi trả `CASH`.
+4. **PD-23 – sự kiện thanh toán giả dạng `SLOT_UPDATED OCCUPIED`** ([slots.js:261](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/e0582be16c384cbb46647fb336021a4f7ec2cb1a/parking-node/src/slots.js#L261)).
+   - Sửa: dùng `event_type` riêng, không có `status`/`version`.
+   - Thụt lề lại khối này.
+5. **PD-23 – tin lỗi bị mất vì offset vẫn tăng** ([consumer.js:219](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/e0582be16c384cbb46647fb336021a4f7ec2cb1a/stats-service/src/consumer.js#L219)).
+   - Sửa: ghi offset trong cùng giao dịch; lỗi thì đọc lại từ offset cũ.
+   - Bỏ `console.log` ở mỗi sự kiện.
+   - Nhóm giờ theo `Asia/Ho_Chi_Minh`.
+6. **PD-23 – chưa có test.**
+   - Sửa: unit test `processEvent`, và một e2e so sánh 2 chế độ.
+7. **PD-18 – LISTEN không nối lại khi DB khởi động lại**, nên relay rơi về quét định kỳ. Cả trước khi restart cũng chưa đạt mục tiêu ≥ 95% sự kiện dưới 20 ms.
+   - Sửa: bắt sự kiện `end`/`error` của client LISTEN rồi nối lại.
+   - Đo lại và tìm chỗ chậm.
+8. **PD-22 – TC37 lỗi trên nhánh, thiếu xử lý lỗi.**
+   - Sửa: rebase #58 lên `dev` và kiểm lại TC37.
+   - Thêm `ch.on('error')` ([events.js:103](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/5c4cf8245e46ab214cae9b926d1989ea7324c3a9/aggregator-service/src/events.js#L103)).
+   - Thêm timeout cho replay.
+   - Thêm bảng số đo trước/sau.
+
+**Sau khi sửa phải tự chạy**
+- `restart db-c` → 40 sự kiện bãi C, ≥ 95% dưới 20 ms.
+- PD-22 e2e đạt hết; xoá stream thì Aggregator vẫn khởi động trong ≤ 10 s.
+- PD-23: tạo 150 phiên mẫu → `/api/admin/stats` khớp nhau giữa `true` và `false`.
+- PD-23: `restart stats-service` → không đếm trùng, không thiếu.
+- PD-06: TC55, TC59.
+
+---
+
+## Hiệp – 56
+
+**Tiến độ:**
+- PD-12: đã rebase và test đạt nhưng chưa có PR.
+- PD-24, PD-26, PD-19: chưa có PR.
+- PD-27: chưa làm.
+
+**Kết quả test**
+
+| Việc | Kết quả |
+|---|---|
+| PD-12: e2e `SCALE=1 COORD=1` trên 6 bãi | ✅ 21/21 |
+| PD-12: ưu tiên gọi bãi cùng `zone` | ❌ chưa làm: `zone` chỉ được lưu, không dùng |
+| PD-24: TC77 trace trên Jaeger | ⛔ máy Huynh không tải được image Jaeger/OTel |
+| PD-26: TC78 `--seed 42 --nemesis partition --time 120` | ❌ 5/6 bất biến (469 lệnh thành công, 475 lệnh đã nhận) |
+| PD-26: TC79, PD-27: TC80 | ⏸ |
+
+**Cần sửa**
+1. **PD-12 – chưa có PR, thiếu ưu tiên vùng.**
+   - Sửa: mở PR từ `feature/PD-12-six-parking-rebased`, đóng #56.
+   - Aggregator ưu tiên gọi bãi cùng `zone` trước.
+   - Bỏ cột `managed_by_etcd` ([schema.sql:24](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/0af30c8920491a7fd18e712ae83943e322cc259b/aggregator-service/src/schema.sql#L24)).
+   - `gen-lots.mjs` sinh cả 6 bãi từ một mẫu.
+2. **PD-24 – làm trên nhánh PD-03 chưa merge, xung đột 17 file.**
+   - Sửa: tạo nhánh mới từ `origin/dev`.
+   - Chỉ lấy `tracing.js`, `otel-collector.yml`, `docker-compose.tracing.yml`, tài liệu và test từ `1ebd265`.
+   - Không đụng `commands.js`, `saga.js`.
+3. **PD-26 – bất biến 4 lỗi: `did not converge within 30s: fetch failed`.** Mỗi vòng kiểm tra gọi `docker compose exec` 18 lần, nên một vòng đã gần hết 30 s ([checkers.mjs:145](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/7713dfd/tests/jepsen/checkers.mjs#L145)). Lần chạy đầu, RabbitMQ lỗi lúc khởi động và runner dừng hẳn.
+   - Sửa: gộp truy vấn mỗi DB thành một lần gọi.
+   - Ghi rõ bãi nào lỗi `fetch`.
+   - Thêm bước thử lại `up`.
+4. **PD-26 – chưa duyệt thiết kế, làm trên nhánh tích hợp.** [index.js:21](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/blob/7713dfd26422d3486638c6598ef6be557cc1864f/parking-node/src/index.js#L21) ghi đè `Date.now`, làm lệch hạn JWT và hạn giữ chỗ. `ket-qua-jepsen.md` dài 1466 dòng, phần lớn là log.
+   - Sửa: đăng thiết kế lên issue #44 và chờ duyệt.
+   - Tách `tests/jepsen/` ra nhánh mới từ `dev`.
+   - Bỏ ghi đè `Date.now`.
+   - File kết quả chỉ giữ bảng.
+5. **PD-19:** rebase sau khi PD-12 merge.
+
+**Sau khi sửa phải tự chạy**
+- PD-12: e2e `SCALE=1 COORD=1` đạt hết. Với `ZONE=bac`, log cho thấy gọi A–C trước.
+- PD-24 TC77: một trace đủ chặng HTTP → AMQP → DB → outbox → AMQP → Socket.IO; chụp ảnh vào PR.
+- PD-26 TC78: đạt 6/6 bất biến với `--seed 42`. TC79: cô lập 1 nút RabbitMQ, không mất lệnh.
+- PD-27 TC80: bảng trước/sau với k6.
+
+---
+
+## Lưu ý chung
+
+- TC43 viết cứng cổng 3000. Nên đọc từ biến `FRONTEND_URL`.
+- Windows: cổng 2379 có thể bị hệ điều hành giữ. Khi đó đổi cổng host trong `docker-compose.override.yml`.
+- Máy 16 GB: chạy `node --test --test-concurrency=2 test/*.test.js`.

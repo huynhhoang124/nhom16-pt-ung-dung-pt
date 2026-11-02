@@ -6,7 +6,9 @@ const os = require('node:os');
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
 const { canonical, verifySignature } = require('./command-signature');
-const { reserveIn, endReservationIn, payIn } = require('./slots');
+const { enrichReply } = require('./reply-envelope');
+const { reserveIn, endReservationIn, confirmSagaIn, payIn } = require('./slots');
+const { checkFencing } = require('./fencing');
 const { normalizePlate, isPlate } = require('./plate');
 const { tokenFor } = require('./gate');
 
@@ -22,21 +24,33 @@ function decodeCommand(m, parkingId, internalKey) {
   try { body = JSON.parse(m.content.toString()); } catch { throw new InvalidCommand('INVALID_JSON'); }
   const p = m.properties ?? {};
   if (!object(body) || !verifySignature(internalKey, body, p)) throw new InvalidCommand('UNTRUSTED_COMMAND');
-  if (body.schemaVersion !== 1 || !['reserve', 'cancel', 'pay'].includes(body.type) || body.parkingId !== parkingId || !object(body.payload)) {
+  if (body.schemaVersion !== 1 || !['reserve', 'cancel', 'pay', 'confirm'].includes(body.type) || body.parkingId !== parkingId || !object(body.payload)) {
     throw new InvalidCommand('INVALID_ENVELOPE');
   }
   if (!object(body.actor) || !str(body.actor.userId, 64) || !/^[A-Za-z0-9_-]+$/.test(body.actor.userId) || !['USER', 'STAFF', 'ADMIN'].includes(body.actor.role)) {
     throw new InvalidCommand('INVALID_ACTOR');
   }
   const prefix = `${body.actor.userId}:`;
-  if (!str(p.messageId) || !p.messageId.startsWith(prefix) || !str(p.messageId.slice(prefix.length), 64) ||
+  const saga = body.payload.sagaId;
+  if (saga !== undefined && (!UUID.test(saga) || body.fencingToken === undefined ||
+      !['reserve', 'cancel', 'confirm'].includes(body.type) ||
+      p.messageId !== `${saga}:${body.payload.step}:${body.type}` ||
+      !Number.isInteger(body.payload.step) || body.payload.step < 0 || body.payload.step > 4 ||
+      (body.type === 'reserve' && body.payload.requestId !== undefined && body.payload.requestId !== p.messageId))) {
+    throw new InvalidCommand('INVALID_SAGA_COMMAND');
+  }
+  if (body.type === 'confirm' && saga === undefined) throw new InvalidCommand('INVALID_SAGA_COMMAND');
+  if (saga !== undefined && body.type !== 'reserve' && !UUID.test(body.payload.reservationId ?? '')) {
+    throw new InvalidCommand('INVALID_SAGA_COMMAND');
+  }
+  if (!str(p.messageId, 128) || (saga === undefined && (!p.messageId.startsWith(prefix) || !str(p.messageId.slice(prefix.length), 64))) ||
       !str(p.correlationId, 255) || !str(p.replyTo) || !/^[A-Za-z0-9._-]+$/.test(p.replyTo) ||
       (p.expiration !== undefined && !/^\d+$/.test(p.expiration))) throw new InvalidCommand('INVALID_PROPERTIES');
   for (const k of ['messageId', 'correlationId', 'replyTo', 'expiration']) {
     if (body[k] !== undefined && body[k] !== p[k]) throw new InvalidCommand('PROPERTY_MISMATCH');
   }
   if (p.type !== undefined && p.type !== body.type) throw new InvalidCommand('TYPE_MISMATCH');
-  if (m.fields?.routingKey && m.fields.routingKey !== `cmd.${parkingId}.${body.type}`) throw new InvalidCommand('ROUTING_MISMATCH');
+  if (m.fields?.routingKey && ![`cmd.${parkingId}.${body.type}`, `cmd.${parkingId}.${body.type}.admin`].includes(m.fields.routingKey)) throw new InvalidCommand('ROUTING_MISMATCH');
   for (const k of ['schemaVersion', 'actor', ...META]) {
     if (p.headers?.[k] !== undefined && canonical(p.headers[k]) !== canonical(body[k])) throw new InvalidCommand('HEADER_MISMATCH');
   }
@@ -61,6 +75,7 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
       (b.requestId !== undefined && b.requestId !== env.messageId) ||
       (b.paymentKey !== undefined && b.paymentKey !== env.messageId)) return error(403, 'IDENTITY_MISMATCH');
   if (actor.role === 'STAFF' && actor.parkingId !== parkingId) return error(403, 'FORBIDDEN');
+  if (b.sagaId && (!['USER', 'ADMIN'].includes(actor.role) || env.fencingToken === undefined)) return error(403, 'FORBIDDEN');
   if (env.type === 'reserve') {
     if (!['USER', 'ADMIN'].includes(actor.role)) return error(403, 'FORBIDDEN');
     if (!str(b.slotCode) || !str(b.licensePlate)) return error(400, 'INVALID_RESERVATION');
@@ -73,9 +88,11 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
     if (out.code < 300) out.body = { ...out.body, qrToken: tokenFor(qrSecret, parkingId, out.body) };
     return out;
   }
-  if (env.type === 'cancel') {
+  if (env.type === 'cancel' || env.type === 'confirm') {
     if (!UUID.test(b.reservationId ?? '')) return error(404, 'RESERVATION_NOT_ACTIVE');
-    return endReservationIn(c, parkingId, b.reservationId, 'CANCELLED', actor.role === 'USER' ? actor.userId : undefined);
+    if (env.type === 'confirm') return confirmSagaIn(c, b.reservationId, actor.userId, b.sagaId, b.step);
+    return endReservationIn(c, parkingId, b.reservationId, 'CANCELLED',
+      actor.role === 'USER' || b.sagaId ? actor.userId : undefined, b.sagaId, b.step);
   }
   if (!['USER', 'ADMIN'].includes(actor.role)) return error(403, 'FORBIDDEN');
   if (!UUID.test(b.sessionId ?? '')) return error(404, 'SESSION_NOT_FOUND');
@@ -83,7 +100,16 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
   return payIn(c, { sessionId: b.sessionId, method: 'ONLINE', paymentKey: env.messageId, userId: actor.userId });
 }
 
-function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}` }) {
+// PD-14b: DB lệch epoch etcd (primary cũ) hoặc mất etcd quá lâu -> trả mã lỗi, không ghi. Không lưu inbox để gửi lại được.
+async function epochError(pool, c) {
+  if (typeof pool.checkEpoch !== 'function') return null;
+  try { await pool.checkEpoch(c); return null; } catch (e) {
+    if (e.code === 'STALE_DB_EPOCH' || e.code === 'ETCD_UNREACHABLE') return { code: e.status, body: { error: e.code, ...e.details } };
+    throw e;
+  }
+}
+
+function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now }) {
   return async (m) => {
     const env = decodeCommand(m, parkingId, internalKey);
 
@@ -103,9 +129,18 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
+      const stale = await epochError(pool, c);
+      if (stale) { await c.query('ROLLBACK'); return { ...stale, messageId: env.messageId }; }
+      // Token và ghi nghiệp vụ nằm trong cùng giao dịch inbox.
+      const fence = await checkFencing(c, env.payload.sagaId ? 'reconcile' : 'default', env.fencingToken);
+      let out;
+      if (!fence.ok) {
+        // Không lưu lỗi token cũ vào inbox: leader mới phải được gửi lại cùng messageId.
+        await c.query('ROLLBACK');
+        return { code: fence.code, body: { error: fence.error }, messageId: env.messageId };
+      }
       const inserted = await c.query(`INSERT INTO inbox_messages(message_id, command_type, request_hash)
         VALUES ($1,$2,$3) ON CONFLICT (message_id) DO NOTHING RETURNING message_id`, [env.messageId, env.type, hash]);
-      let out;
       if (!inserted.rowCount) {
         const prior = (await c.query('SELECT command_type, request_hash, result, status_code FROM inbox_messages WHERE message_id=$1', [env.messageId])).rows[0];
         if (!prior) throw new Error('Inbox row disappeared');
@@ -113,6 +148,11 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
           ? { code: 422, body: { error: 'IDEMPOTENCY_KEY_REUSED' } }
           : { code: prior.status_code, body: prior.result };
         if (out.code == null || out.body == null) throw new Error('Incomplete inbox result');
+      } else if (Number.isSafeInteger(env.deadlineAt) && now() > env.deadlineAt) {
+        // PD-06: TTL của RabbitMQ chỉ tính lúc tin nằm trong queue; tin đã prefetch rồi chờ s.tail có thể quá hạn.
+        // Không áp dụng nữa, lưu kết quả 410 vào inbox để gửi lại cùng messageId cũng nhận đúng kết quả này.
+        out = { code: 410, body: { error: 'COMMAND_EXPIRED' } };
+        await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
       } else {
         out = await dispatch(c, env, { parkingId, reservationMinutes, qrSecret });
         // Normalize Date values once: first delivery and replay return identical JSON.
@@ -131,8 +171,12 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         actor: env.actor, statusCode: out.code, result: out.body, ...metadata };
       const properties = { messageId: randomUUID(), correlationId: env.correlationId, type: 'COMMAND_RESULT',
         headers: { schemaVersion: 1, ...metadata, causationId: env.causationId ?? env.messageId } };
+      await enrichReply(c, env, payload, properties, internalKey);
       await c.query('INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties) VALUES ($1,$2,$3,$4)',
         [env.messageId, env.replyTo, payload, properties]);
+      // Kiểm lại trước COMMIT: giao dịch đã qua lần kiểm đầu rồi bị chậm thì không được commit vào primary cũ sau failover
+      const late = await epochError(pool, c);
+      if (late) { await c.query('ROLLBACK'); return { ...late, messageId: env.messageId }; }
       await c.query('COMMIT');
       return { ...out, messageId: env.messageId, duplicate: !inserted.rowCount };
     } catch (e) {
@@ -173,34 +217,52 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
         const closed = new Promise((r) => { s.closed = r; });
         conn.on('error', () => end(s)); conn.on('close', () => end(s));
         if (stopped) { end(s); break; }
-        const ch = await conn.createChannel(); s.ch = ch;
-        ch.on('error', () => end(s)); ch.on('close', () => end(s));
-        await ch.checkQueue(`cmd.${parkingId}`); // Topology owned by definitions/policy, not redeclared here.
-        await ch.prefetch(20);
-        if (stopped) { end(s); break; }
-        if (s.dead) throw new Error('Command channel closed during setup');
-        const { consumerTag } = await ch.consume(`cmd.${parkingId}`, (m) => {
-          if (!m) { end(s); return; }
-          // SAC chooses a consumer, NOT a serial async callback execution order.
-          s.tail = s.tail.then(async () => {
-            if (s.dead || stopped) return;
-            try {
-              const result = await processCommand(m);
-              await afterCommit(result);
-              if (!s.dead) ch.ack(m); // processor returns only after COMMIT succeeds.
-            } catch (error) {
-              log.error('command processing failed', { parkingId, error: error.message });
-              if (s.dead) return;
-              // PD-08 may replace this hook with confirmed delayed retry/dead transfer.
-              const transferred = await retryOrDead?.({ ch, message: m, error, permanent: error instanceof InvalidCommand });
-              if (transferred === true) ch.ack(m);
-              else if (error instanceof InvalidCommand) ch.nack(m, false, false); // durable DLX target; no hot requeue.
-              else end(s); // Leave unacked, close/reconnect with backoff after rollback.
+        s.channels = [];
+        // PD-06: hàng thường prefetch 16, hàng quản trị prefetch 4. Hàng admin là tuỳ chọn: bãi chưa có
+        // queue admin (vd D–F của overlay 6 bãi) thì bỏ qua, không làm hỏng consumer hàng thường.
+        for (const [queue, prefetch, optional] of [[`cmd.${parkingId}`, 16, false], [`cmd.${parkingId}.admin`, 4, true]]) {
+          const ch = await conn.createChannel();
+          if (optional) {
+            ch.on('error', () => {});
+            const ok = await ch.checkQueue(queue).then(() => true, () => false);
+            if (!ok) {
+              if (!s.adminWarned) log.info?.('không có hàng đợi lệnh quản trị, bỏ qua', { parkingId, queue });
+              s.adminWarned = true;
+              try { await ch.close(); } catch { /* channel đã đóng do lỗi 404 */ }
+              continue;
             }
-          }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
-        }, { noAck: false });
-        s.tag = consumerTag;
-        log.info?.('command consumer ready', { parkingId, consumerTag, prefetch: 20 });
+          } else {
+            await ch.checkQueue(queue); // Topology owned by definitions/policy, not redeclared here.
+          }
+          ch.on('error', () => end(s)); ch.on('close', () => end(s));
+          const entry = { ch }; s.channels.push(entry);
+          await ch.prefetch(prefetch);
+          if (stopped) { end(s); break; }
+          if (s.dead) throw new Error('Command channel closed during setup');
+          const { consumerTag } = await ch.consume(queue, (m) => {
+            if (!m) { end(s); return; }
+            if (m.fields?.redelivered) require('./metrics').incRedelivered();   // PD-25
+            // SAC chooses a consumer, NOT a serial async callback execution order.
+            s.tail = s.tail.then(async () => {
+              if (s.dead || stopped) return;
+              try {
+                const result = await processCommand(m);
+                await afterCommit(result);
+                if (!s.dead) ch.ack(m); // processor returns only after COMMIT succeeds.
+              } catch (error) {
+                log.error('command processing failed', { parkingId, error: error.message });
+                if (s.dead) return;
+                // PD-08 may replace this hook with confirmed delayed retry/dead transfer.
+                const transferred = await retryOrDead?.({ ch, message: m, error, permanent: error instanceof InvalidCommand });
+                if (transferred === true) ch.ack(m);
+                else if (error instanceof InvalidCommand) ch.nack(m, false, false); // durable DLX target; no hot requeue.
+                else end(s); // Leave unacked, close/reconnect with backoff after rollback.
+              }
+            }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
+          }, { noAck: false });
+          entry.tag = consumerTag;
+          log.info?.('command consumer ready', { parkingId, queue, consumerTag, prefetch });
+        }
         await closed;
       } catch (e) {
         log.error('command consumer reconnect', { parkingId, error: e.message });
@@ -216,7 +278,7 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
       stopped = true; clearTimeout(retryTimer); wake?.();
       const s = state;
       if (s && !s.dead) {
-        if (s.tag) await s.ch.cancel(s.tag).catch(() => {});
+        for (const { ch, tag } of s.channels ?? []) if (tag) await ch.cancel(tag).catch(() => {});
         await s.tail;
         end(s);
       }

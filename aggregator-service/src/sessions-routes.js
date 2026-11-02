@@ -15,7 +15,7 @@ function sessionHlcKey(session) {
   return `${String(ms).padStart(13, '0')}-0000`;
 }
 
-function mountSessions(app, { reg, need, forward, reserveTimeoutMs }) {
+function mountSessions(app, { reg, need, forward, reserveTimeoutMs, commandMode, broker }) {
   const gatherSessions = async (query) => {
     const parts = await reg.gather(async (n) => ({ sessions: await reg.json(n, `/api/sessions?${query}`) }));
     return {
@@ -60,6 +60,7 @@ function mountSessions(app, { reg, need, forward, reserveTimeoutMs }) {
   app.post('/api/me/sessions/:id/:sid/pay', need('USER'), async (req, res) => {
     const key = req.get('idempotency-key');
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
+    if(commandMode==='broker')return broker(req,res,'pay',{sessionId:req.params.sid,method:'ONLINE'},key);
     await forward(res, reg.get(req.params.id), `/api/sessions/${enc(req.params.sid)}/pay`, {
       method: 'POST', ms: reserveTimeoutMs(), retry: true,
       body: { method: 'ONLINE', paymentKey: `${req.user.sub}:${key}`, userId: req.user.sub },

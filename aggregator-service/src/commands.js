@@ -16,7 +16,7 @@ function routingKey(parkingId, type) {
   return `cmd.${parkingId}.${type}`;
 }
 
-function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey = process.env.INTERNAL_KEY } = {}) {
+function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey = process.env.INTERNAL_KEY, config } = {}) {
   const connectAny = makeConnector(url, connect);
   let current;
   let opening;
@@ -78,7 +78,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
   }
 
   async function send(parkingId, type, body, opts = {}) {
-    const key = routingKey(parkingId, type);
+    const key = opts.admin ? `${routingKey(parkingId, type)}.admin` : routingKey(parkingId, type);
     const messageId = opts.messageId ?? randomUUID();
     const correlationId = opts.correlationId ?? messageId;
     if (![messageId, correlationId].every((s) => typeof s === 'string' && s.length > 0 && Buffer.byteLength(s) <= 255)) {
@@ -101,6 +101,13 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       schemaVersion: opts.schemaVersion ?? headers.schemaVersion ?? 1,
       payload: body,
     };
+
+    // Giữ thời điểm phát hành và hạn xử lý của command từ dev.
+    for (const field of ['issuedAt', 'deadlineAt']) {
+      if (opts[field] !== undefined) {
+        envelope[field] = opts[field];
+      }
+    }
 
     for (const field of [
       'causationId',
@@ -126,7 +133,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       mandatory: true, persistent: true, contentType: 'application/json',
       messageId, correlationId, type, headers,
       ...(opts.replyTo !== undefined && { replyTo: opts.replyTo }),
-      ...(opts.expiration !== undefined && { expiration: String(opts.expiration) }),
+      expiration: String(opts.expiration ?? config?.get('commandTtlMs', 10000) ?? 10000),
     };
     // Only trusted server code supplies signingKey/actor; HTTP never accepts a client actor.
     if (signingKey) properties.headers['x-command-signature'] = signature(signingKey, JSON.parse(content), properties);
@@ -148,6 +155,12 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       const publishTimer = setTimeout(() => discard(state, new Error('Publisher confirm timeout')), timeoutMs);
       state.pending.set(attempt, { finish });
       if (state.dead) return finish(failure('BROKER_UNAVAILABLE', 503));
+      if (opts.deadlineAt !== undefined) {
+        const remaining=opts.deadlineAt-Date.now();
+        if (!Number.isSafeInteger(remaining)||remaining<=0) return finish(failure('COMMAND_DEADLINE_BEFORE_SEND',410));
+        properties.expiration=String(Math.min(Number(properties.expiration), remaining));
+      }
+      if (signingKey) headers['x-command-signature']=signature(signingKey,envelope,properties);
       try {
         // RabbitMQ sends basic.return BEFORE the confirm for an unroutable mandatory message.
         // Individual confirm callbacks avoid waitForConfirms() mixing concurrent sends.
@@ -155,7 +168,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
           if (e) {
             // amqplib uses this exact error for a broker basic.nack. Channel-close errors
             // do not establish whether the broker accepted the message.
-            finish(failure(e.message === 'message nacked' ? 'PUBLISH_NACKED' : 'PUBLISH_UNKNOWN_RESULT', e.message === 'message nacked' ? 503 : 504, e));
+            finish(failure(e.message === 'message nacked' ? 'QUEUE_FULL' : 'PUBLISH_UNKNOWN_RESULT', e.message === 'message nacked' ? 503 : 504, e));
           } else finish();
         });
       } catch (e) { discard(state, e); }

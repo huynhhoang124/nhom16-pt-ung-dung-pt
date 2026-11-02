@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { io } from 'socket.io-client';
+import { makeCommandClient } from './command-client.js';
 
 const KEY = 'parking.session';
 
@@ -80,6 +81,10 @@ const MESSAGES = {
   SLOT_IN_USE: 'Slot đang có xe hoặc có lượt đặt còn hiệu lực.',
   INVALID_QR: 'Mã QR không hợp lệ.',
   QR_EXPIRED: 'Mã QR đã hết hạn.',
+  IDEMPOTENCY_KEY_REUSED: 'Khoá yêu cầu đã được dùng cho thao tác khác.',
+  BROKER_UNAVAILABLE: 'Kênh lệnh đang gián đoạn. Hãy thử lại cùng yêu cầu.',
+  COMMAND_EXPIRED: 'Lệnh đã hết hạn.',
+  COMMAND_DEADLINE_BEFORE_SEND: 'Lệnh hết hạn trước khi được gửi.',
   QR_USED: 'Mã QR đã được dùng.',
   WRONG_PARKING: 'Mã QR của bãi khác.',
   NOT_INSIDE: 'Xe không có trong bãi.',
@@ -102,6 +107,12 @@ export const toast = (text, kind = 'info') => window.dispatchEvent(new CustomEve
 // auth là hàm: mỗi lần (re)connect lấy token mới nhất (NV-08: nhận thông báo riêng của mình)
 // transports websocket: một kết nối gắn chặt với một bản Aggregator, không cần sticky session khi có nhiều bản (PT-01)
 export const socket = io({ transports: ['websocket'], auth: (cb) => cb({ token: session.get()?.token }) });
+export const commandTracker=makeCommandClient({api,socket,storage:localStorage,user:()=>session.get()?.user,newKey,
+  digest:async value=>{
+    if(crypto.subtle)return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value))),b=>b.toString(16).padStart(2,'0')).join('');
+    let a=2166136261,b=5381;for(const ch of value){a=Math.imul(a^ch.charCodeAt(0),16777619);b=Math.imul(b,33)^ch.charCodeAt(0);}return `${a>>>0}:${b>>>0}`;
+  }});
+export const commandRequest=(...args)=>commandTracker.request(...args);
 
 export function useLive(events, reload, ms = 300) {
   const ref = useRef(reload);
