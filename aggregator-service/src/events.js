@@ -18,7 +18,7 @@ function applyEvent(cache, e) {
 // Phép gộp này giao hoán, kết hợp, idempotent => chạy bao nhiêu lần, theo thứ tự nào cũng ra cùng kết quả.
 async function reconcile(reg, cache, n, onApplied) {
   let applied = 0;
-  for (const s of await reg.json(n, '/api/slots')) {
+  for (const s of await reg.json(n, '/api/slots', { job: 'reconcile' })) {   // PD-10: việc của leader, mang fencing token
     const e = { event: 'SLOT_UPDATED', type: 'RECONCILE', parkingId: n.id, slot: s.slotCode, status: s.status, version: s.version };
     if (applyEvent(cache, e)) { applied++; onApplied?.(e); }
   }

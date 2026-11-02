@@ -89,14 +89,16 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   };
 
   // Timeout dùng AbortSignal.timeout: bộ đếm của runtime, không phụ thuộc giờ hệ thống bị chỉnh.
+  // job: chỉ việc của leader (đối soát, khôi phục saga) mới mang fencing token. Request của người dùng không gắn:
+  // gắn vào thì mọi lệnh ghi phải xếp hàng trên dòng `fencing` ở node và người dùng có thể nhận 409.
   // fencingToken: việc của leader (khôi phục saga) truyền token lúc lên leader, để vẫn gửi token đó sau khi mất quyền
   // và node từ chối khi đã thấy token mới hơn; không truyền thì lấy token hiện tại.
   const raw = (n, path, { method = 'GET', body, ms, job, fencingToken } = {}) => {
     const effectiveMs = ms ?? getTimeout();
-    const token = fencingToken ?? leader?.getToken?.();
+    const token = job ? (fencingToken ?? leader?.getToken?.()) : null;
     const fencingHeaders = token ? {
       'x-fencing-token': String(token),
-      'x-fencing-job': job || 'reconcile',
+      'x-fencing-job': job,
     } : {};
 
     return fetch((n.target ?? n.url) + path, {
