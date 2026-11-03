@@ -7,8 +7,11 @@
 import { execSync } from 'node:child_process';
 
 const ROOT = new URL('../..', import.meta.url);
-const sql = (db, q) => execSync(`docker compose exec -T ${db} psql -U postgres -d parking -tAc "${q}"`, { cwd: ROOT, encoding: 'utf8' }).trim();
-const DBS = ['db-a', 'db-b', 'db-c'];
+const COMPOSE = process.env.SCALE === '1'
+  ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord'
+  : 'docker compose';
+const sql = (db, q) => execSync(`${COMPOSE} exec -T ${db} psql -U postgres -d parking -tAc "${q}"`, { cwd: ROOT, encoding: 'utf8' }).trim();
+const DBS = process.env.SCALE === '1' ? ['db-a', 'db-b', 'db-c', 'db-d', 'db-e', 'db-f'] : ['db-a', 'db-b', 'db-c'];
 const checks = {
   'đặt chồng giờ': `SELECT count(*) FROM reservations a JOIN reservations b ON a.slot_id=b.slot_id AND a.id<b.id
     AND a.status IN ('ACTIVE','USED') AND b.status IN ('ACTIVE','USED')

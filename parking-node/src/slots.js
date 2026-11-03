@@ -3,6 +3,7 @@
 
 const { calcFee, fromRow } = require('./pricing');
 const { requestId } = require('./log');
+const { fenceIn } = require('./fencing');
 
 // Dừng giao dịch với kết quả nghiệp vụ (409, 404...) thay vì lỗi hệ thống.
 class Abort {
@@ -13,12 +14,25 @@ async function tx(pool, fn) {
   const c = await pool.connect();
   try {
     await c.query('BEGIN');
+    // PD-14b: DB không khớp epoch trên etcd (primary cũ sống lại) thì từ chối ghi
+    if (typeof pool.checkEpoch === 'function') await pool.checkEpoch(c);
+    // PD-10: lệnh của leader (có fencing token) kiểm token trong CÙNG giao dịch với lệnh ghi
+    const fence = await fenceIn(c);
+    if (!fence.ok) throw new Abort(fence.code, { error: fence.error, job: fence.job, token: fence.token });
     const out = await fn(c);
+    // Kiểm lại trước COMMIT: giao dịch chậm qua lúc failover không được commit vào primary cũ
+    if (typeof pool.checkEpoch === 'function') await pool.checkEpoch(c);
     await c.query('COMMIT');
     return out;
   } catch (e) {
     await c.query('ROLLBACK');
     if (e instanceof Abort) return { code: e.code, body: e.body };
+    if (e.code === 'ETCD_UNREACHABLE' || e.status === 503) {
+      return { code: 503, body: { error: 'ETCD_UNREACHABLE', message: e.message, ...e.details } };
+    }
+    if (e.code === 'STALE_DB_EPOCH' || e.status === 409) {
+      return { code: 409, body: { error: 'STALE_DB_EPOCH', message: e.message, ...e.details } };
+    }
     throw e;
   } finally {
     c.release();
@@ -87,9 +101,9 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     }
     if (!slot) throw new Abort(409, { error: 'SLOT_TAKEN' });
     const r = await c.query(
-      `INSERT INTO reservations(request_id, user_id, slot_id, license_plate, start_time, end_time, expire_time)
-       VALUES ($1,$2,$3,$4, $5::timestamptz, $5::timestamptz + make_interval(mins => $6), $5::timestamptz + make_interval(mins => $7)) RETURNING *`,
-      [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes]);
+      `INSERT INTO reservations(request_id, user_id, slot_id, license_plate, start_time, end_time, expire_time, status)
+       VALUES ($1,$2,$3,$4, $5::timestamptz, $5::timestamptz + make_interval(mins => $6), $5::timestamptz + make_interval(mins => $7), $8) RETURNING *`,
+      [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes, input.sagaId ? 'PENDING_SAGA' : 'ACTIVE']);
     if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', slot.version, licensePlate, { userId, reservationId: r.rows[0].id });
     return { code: 201, body: { ...r.rows[0], slot_code: slotCode } };
   }, async (e) => {
@@ -231,18 +245,20 @@ const listSessions = async (pool, { plate, userId, from, to } = {}) => (await po
    ORDER BY ps.entered_at DESC LIMIT 200`, [plate || null, userId || null, from || null, to || null])).rows;
 
 // Kết thúc một reservation ACTIVE (huỷ hoặc hết hạn): không xoá cứng, đổi status (dấu vết để đối soát).
-function endReservationIn(c, parkingId, id, status, userId) {
+function endReservationIn(c, parkingId, id, status, userId, sagaId, step) {
   return business(c, async () => {
     const r = await c.query(
-      `UPDATE reservations SET status=$2 WHERE id=$1 AND status='ACTIVE'
-       AND ($3::text IS NULL OR user_id=$3) RETURNING slot_id, license_plate, start_time, user_id`, [id, status, userId ?? null]);
+      `UPDATE reservations SET status=$2 WHERE id=$1 AND status IN ('ACTIVE','PENDING_SAGA')
+       AND ($3::text IS NULL OR user_id=$3)
+       AND ($4::text IS NULL OR request_id=$4 || ':' || $5::int || ':reserve')
+       RETURNING slot_id, license_plate, start_time, user_id`, [id, status, userId ?? null, sagaId ?? null, step ?? null]);
     if (!r.rowCount) throw new Abort(404, { error: 'RESERVATION_NOT_ACTIVE' });
     // Chỉ trả slot khi lượt này là lượt đang giữ chỗ (không còn lượt ACTIVE nào giờ sớm hơn).
     // Huỷ lượt đặt cho ngày mai không được nhả chỗ đang giữ cho người khác hôm nay.
     const s = await c.query(
       `UPDATE parking_slots SET status='AVAILABLE', version=version+1, updated_at=now()
        WHERE id=$1 AND status='RESERVED'
-         AND NOT EXISTS (SELECT 1 FROM reservations WHERE slot_id=$1 AND status='ACTIVE' AND start_time < $2)
+         AND NOT EXISTS (SELECT 1 FROM reservations WHERE slot_id=$1 AND status IN ('ACTIVE','PENDING_SAGA') AND start_time <= $2)
        RETURNING slot_code, version`, [r.rows[0].slot_id, r.rows[0].start_time]);
     if (s.rowCount) {
       await emit(c, parkingId, status, s.rows[0].slot_code, 'AVAILABLE', s.rows[0].version, r.rows[0].license_plate,
@@ -254,6 +270,16 @@ function endReservationIn(c, parkingId, id, status, userId) {
 
 function endReservation(pool, parkingId, id, status, userId) {
   return tx(pool, (c) => endReservationIn(c, parkingId, id, status, userId));
+}
+
+function confirmSagaIn(c, id, userId, sagaId, step) {
+  return business(c, async () => {
+    const r = await c.query(
+      `UPDATE reservations SET status='ACTIVE' WHERE id=$1 AND user_id=$2
+       AND status='PENDING_SAGA' AND request_id=$3 || ':' || $4::int || ':reserve' RETURNING id`, [id, userId, sagaId, step]);
+    if (!r.rowCount) throw new Abort(404, { error: 'RESERVATION_NOT_PENDING_SAGA' });
+    return { code: 200, body: { id, status: 'ACTIVE' } };
+  });
 }
 
 // Hết hạn theo đồng hồ DB của CHÍNH bãi này (một nguồn thời gian duy nhất, không tin giờ client).
@@ -416,4 +442,4 @@ const listReservations = async (pool, userId) => (await pool.query(
    FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
    WHERE ($1::text IS NULL OR r.user_id = $1) ORDER BY r.created_at DESC`, [userId ?? null])).rows;
 
-module.exports = { reserveIn, endReservationIn, payIn, reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };
+module.exports = { tx, reserveIn, endReservationIn, confirmSagaIn, payIn, reserve, moveSlot, endReservation, expireDue, activateDue, warnExpiring, slotSchedule, stats, addSlot, updateSlot, hideSlot, availability, listSlots, listReservations, listSessions, quote, pay, listPricing, emit };

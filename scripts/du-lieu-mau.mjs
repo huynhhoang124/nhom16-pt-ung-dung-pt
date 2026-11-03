@@ -12,11 +12,17 @@ const ROOT = new URL('..', import.meta.url);
 const INTERNAL_KEY = process.env.INTERNAL_KEY ?? 'dev';
 const AGG_PORT = process.env.AGGREGATOR_PORT ?? 8000;
 const AGG = process.env.AGGREGATOR_URL || `http://localhost:${AGG_PORT}`;
+const COMPOSE = process.env.SCALE === '1'
+  ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord'
+  : 'docker compose';
 
 const NODES = {
   A: { port: 8001, db: 'db-a', name: 'Bãi A – PTIT Hà Đông' },
   B: { port: 8002, db: 'db-b', name: 'Bãi B – Cầu Giấy' },
   C: { port: 8003, db: 'db-c', name: 'Bãi C – Hoàn Kiếm' },
+  D: { port: 8004, db: 'db-d', name: 'Bãi D – miền Nam' },
+  E: { port: 8005, db: 'db-e', name: 'Bãi E – miền Nam' },
+  F: { port: 8006, db: 'db-f', name: 'Bãi F – miền Nam' },
 };
 
 const TOTAL_TRIPS = Number.parseInt(process.argv[2], 10) > 0 ? Number.parseInt(process.argv[2], 10) : 150;
@@ -71,7 +77,7 @@ async function exitSlot(port, slotCode) {
 function updateSessionTimes(db, sessionId, minutesAgo, durationMinutes) {
   try {
     const q = `UPDATE parking_sessions SET entered_at = now() - interval '${minutesAgo} minutes', exited_at = now() - interval '${Math.max(1, minutesAgo - durationMinutes)} minutes' WHERE id='${sessionId}'`;
-    execSync(`docker compose exec -T ${db} psql -U postgres -d parking -tAc "${q}"`, {
+    execSync(`${COMPOSE} exec -T ${db} psql -U postgres -d parking -tAc "${q}"`, {
       cwd: ROOT,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
@@ -96,9 +102,8 @@ async function getAdminToken() {
 
 async function main() {
   console.log(`=== UX-02.7: SINH DỮ LIỆU MẪU CHO TRANG THỐNG KÊ ===`);
-  console.log(`Số lượt xe dự kiến sinh: ${TOTAL_TRIPS} lượt trên 3 bãi (A, B, C)\n`);
-
-  const parkingKeys = ['A', 'B', 'C'];
+  const parkingKeys = process.env.SCALE === '1' ? Object.keys(NODES) : ['A', 'B', 'C'];
+  console.log(`Số lượt xe dự kiến sinh: ${TOTAL_TRIPS} lượt trên ${parkingKeys.length} bãi (${parkingKeys.join(', ')})\n`);
   let successfulTrips = 0;
 
   for (let i = 1; i <= TOTAL_TRIPS; i++) {

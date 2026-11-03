@@ -1,5 +1,6 @@
 const { Pool, Client } = require('pg');
-const { init, readThrough } = require('./db');
+const { createScheduledJobsLock } = require('./scheduled-lock');
+const { init, readThrough, makeDynamicPool } = require('./db');
 const { makeApp } = require('./app');
 const { amqpPublisher, makeRelay } = require('./relay');
 const { expireDue, activateDue, warnExpiring } = require('./slots');
@@ -17,7 +18,12 @@ const port = Number(env('PORT', 8001));
 const pricing = process.env.PRICING ? JSON.parse(process.env.PRICING) : undefined;
 
 async function main() {
-  const pool = new Pool({ connectionString: env('DATABASE_URL') });
+  const pool = await makeDynamicPool({
+    etcdEndpoints: process.env.ETCD_ENDPOINTS,
+    parkingId,
+    defaultDatabaseUrl: env('DATABASE_URL'),
+    log,
+  });
   // DB khởi động lại / mất mạng: kết nối nhàn rỗi trong pool phát 'error'. Không bắt thì cả tiến trình sập (gặp khi tập
   // failover: stop db-a làm node A chết luôn, đọc bản sao cũng không được). Bắt rồi thì pool tự mở kết nối mới khi DB về.
   pool.on('error', (e) => log.error('mất kết nối DB chính', { error: e.message }));
@@ -123,11 +129,28 @@ async function main() {
   every(relayOnce, 500);
   every(replyOnce, 500);
   every(() => cleanupInbox(pool), 30000);
-  // Hết hạn giữ chỗ + giữ chỗ cho lượt đặt trước sắp đến giờ (NV-01), theo đồng hồ DB của bãi.
+  // Hết hạn giữ chỗ + kích hoạt lượt đặt trước + cảnh báo sắp hết hạn.
+  // Chỉ node giữ advisory lock mới được chạy các tác vụ này.
   const minutes = Number(env('RESERVATION_MINUTES', 15));
-  every(() => expireDue(pool, parkingId)
-    .then(() => activateDue(pool, parkingId, minutes))
-    .then(() => warnExpiring(pool, parkingId)), 30000);
+  const scheduledJobsLock = createScheduledJobsLock(() => pool.currentUrl ?? env('DATABASE_URL'), {
+    parkingId,
+    log,
+  });
+
+  every(async () => {
+    if (!scheduledJobsLock.isOwner()) return;
+
+    await expireDue(pool, parkingId);
+
+    // Nếu mất khóa giữa chừng, không tiếp tục các tác vụ còn lại.
+    if (!scheduledJobsLock.isOwner()) return;
+
+    await activateDue(pool, parkingId, minutes);
+
+    if (!scheduledJobsLock.isOwner()) return;
+
+    await warnExpiring(pool, parkingId);
+  }, 30000);
 
   let shuttingDown = false;
   async function shutdown() {
@@ -140,12 +163,16 @@ async function main() {
       for (const job of jobs) clearInterval(job.timer);
       await consumer.stop();
       await Promise.allSettled(jobs.map((job) => job.running));
-      await Promise.all([
-        replyPublisher.close(),
-        publishEvents.close(),
-        outboxListener.end(),
-        httpClosed,
-      ]);
+        // PD-13: Nhả advisory lock trước khi đóng pool database.
+        await scheduledJobsLock.stop();
+
+        // PD-18: Đóng kết nối LISTEN outbox khi shutdown.
+        await Promise.all([
+          replyPublisher.close(),
+          publishEvents.close(),
+          outboxListener.end(),
+          httpClosed,
+        ]);
       await Promise.all([pool.end(), replica?.end()]);
       clearTimeout(deadline);
       process.exit(0);

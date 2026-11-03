@@ -60,4 +60,9 @@ function readThrough(replica, primary, { backoffMs = 10_000, onFallback } = {}) 
   };
 }
 
-module.exports = { init, slotPlan, savePricing, readThrough };
+const { checkFencing } = require('./fencing');
+const { makeDynamicPool } = require('./dynamic-pool');
+
+module.exports = { init, slotPlan, savePricing, readThrough, checkFencing, makeDynamicPool };
+
+

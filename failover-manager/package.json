@@ -1,0 +1,22 @@
+{
+  "name": "failover-manager",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Tu dong phat hien primary chet, promote replica, CAS epoch tren etcd va giam sat sao chep dong bo",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test \"test/*.test.js\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "etcd3": "^1.1.2",
+    "express": "^5.2.1",
+    "pg": "^8.23.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8"
+  }
+}

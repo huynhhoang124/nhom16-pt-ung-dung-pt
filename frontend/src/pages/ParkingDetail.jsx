@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, centralDown, knownNode, message, newKey, nodeApi, rememberNodes, STATUS_LABEL, useLive } from '../api.js';
 import { TYPE_LABEL } from './Dashboard.jsx';
 import Pricing from './Pricing.jsx';
+import { commandRequest } from '../api.js';
 import { clock, Icon, NodeBadge, Plate, ResStatus, slotIcon, SlotStatus, TypeTag, TYPE_ICON } from '../ui.jsx';
 
 // Thao tác nhân viên theo trạng thái slot.
@@ -72,10 +73,10 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
     if (busy) return;
     // Đổi giờ/thời lượng = yêu cầu mới -> key mới; chỉ "Thử lại" mới dùng lại key cũ.
     setBusy(true);
-    const r = await api(`/api/parkings/${parkingId}/reservations`, {
+    const r = await commandRequest(`/api/parkings/${parkingId}/reservations`, {
       method: 'POST', headers: { 'idempotency-key': pending.key },
       body: { slotCode: pending.slotCode, licensePlate: plate, durationMinutes: duration, ...(when && { startTime: new Date(when).toISOString() }) },
-    });
+    }, () => setNote({ kind: 'ok', text: 'Đang xử lý yêu cầu đặt chỗ…' }));
     setBusy(false);
     if (r.ok) {
       const t = (k) => new Date(r.data[k]).toLocaleString('vi-VN');
@@ -117,7 +118,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   }
 
   async function cancel(id) {
-    const r = await api(`/api/parkings/${parkingId}/reservations/${id}`, { method: 'DELETE' });
+    const r = await commandRequest(`/api/parkings/${parkingId}/reservations/${id}`, { method: 'DELETE' },()=>setNote({kind:'ok',text:'Đang xử lý yêu cầu huỷ…'}));
     setNote(r.ok ? { kind: 'ok', text: 'Đã huỷ đặt chỗ.' } : { kind: 'error', text: message(r.data) });
     load();
   }
