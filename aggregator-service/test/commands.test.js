@@ -53,6 +53,27 @@ test('envelope and properties preserved; only resolve after individual publisher
   ack(b.sent[0]); assert.equal((await p).status, 'BROKER_CONFIRMED');
 });
 
+test('broadcast preserves signed target snapshot and admin TTL without overriding user TTL', async (t) => {
+  const b = broker();
+  const pub = makeCommands('amqp://test', { connect: b.connect, signingKey: 'key', config: {get: () => 10000} });
+  t.after(() => pub.close());
+  const issuedAt = Date.now(), deadlineAt = issuedAt + 600000;
+  const sent = pub.send('zone-bac', 'lockFloor', {floor: 1, locked: true}, {
+    targets: ['A','B','C'], issuedAt, deadlineAt, expiration: 600000,
+    messageId: 'admin:broadcast-test', correlationId: 'admin:broadcast-test', replyTo: 'agg.broadcast',
+    actor: {userId: 'admin', role: 'ADMIN'},
+  });
+  await tick();
+  const [exchange, key, content, props] = b.sent[0];
+  assert.equal(exchange, 'parking.commands'); assert.equal(key, 'cmd.zone-bac.lockFloor');
+  assert.deepEqual(JSON.parse(content).targets, ['A','B','C']);
+  assert.equal(JSON.parse(content).deadlineAt, deadlineAt);
+  assert(Number(props.expiration) > 590000 && Number(props.expiration) <= 600000);
+  assert.equal(props.mandatory, true); assert.equal(props.persistent, true);
+  assert(require('../src/command-signature').verifySignature('key', JSON.parse(content), props));
+  ack(b.sent[0]); await sent;
+});
+
 test('concurrent duplicate business IDs: return and out-of-order confirms match the exact attempt', async (t) => {
   const b = broker(); const pub = makeCommands('amqp://test', { connect: b.connect }); t.after(() => pub.close());
   const first = pub.send('A', 'reserve', {}, { messageId: 'same' });

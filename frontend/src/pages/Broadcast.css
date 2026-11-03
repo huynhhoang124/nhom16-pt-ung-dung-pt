@@ -1,0 +1,9 @@
+.broadcast-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.broadcast-form label { display: grid; gap: .4rem; min-width: 0; }
+.broadcast-form select { width: 100%; min-width: 0; }
+.broadcast-payload { grid-column: 1 / -1; }
+.broadcast-payload textarea { width: 100%; box-sizing: border-box; resize: vertical; padding: .75rem;
+  background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px;
+  font: .9rem ui-monospace, Consolas, monospace; }
+.broadcast-form button { justify-self: start; padding: .65rem 1.25rem; }
+@media (max-width: 500px) { .broadcast-form { grid-template-columns: minmax(0, 1fr); } }

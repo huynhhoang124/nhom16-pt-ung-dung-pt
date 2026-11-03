@@ -114,6 +114,7 @@ async function main() {
   const replyOnce = makeReplyRelay(pool, replyPublisher.publishDetailed);
   const consumer = startCommandConsumer({ url, pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'), log,
     processCommand: makeCommandProcessor({ pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
+      adminEnabled: env('ADMIN_BROADCAST_ENABLED', 'true') === 'true',
       reservationMinutes: Number(env('RESERVATION_MINUTES', 15)), qrSecret: env('QR_SECRET', `${env('INTERNAL_KEY', 'dev')}:qr:${parkingId}`) }),
   });
   const jobs = [];

@@ -28,6 +28,42 @@ jobs:
       - run: npm ci && npm test && npm run build
         working-directory: frontend
 
+  pd04-abc:
+    needs: [test, frontend]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      COMPOSE_PROJECT_NAME: pd04-abc-ci
+      COMPOSE_FILE: docker-compose.yml:tests/pd04-abc.compose.yml
+      COMMAND_MODE: http
+      AGGREGATOR_URL: http://localhost:18020
+      PARKING_BASE_PORT: '18201'
+      FRONTEND_URL: http://localhost:13020
+      PD02_AMQP_URL: amqp://parking:parking@localhost:5684/%2F
+      RUN_PD04_BROKER: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cp .env.example .env && node scripts/gen-keys.mjs
+      - run: npm ci
+        working-directory: aggregator-service
+      - run: npm ci
+        working-directory: frontend
+      - run: docker compose build parking-a aggregator frontend notification
+      - run: docker compose up -d --wait rabbitmq db-a db-b db-c db-agg parking-a parking-b parking-c aggregator frontend notification
+      - run: node --test tests/e2e.test.mjs
+      - run: node --test tests/pd04-abc.e2e.mjs
+      - if: failure()
+        run: docker compose logs --no-color --tail 100
+      - if: always()
+        run: |
+          test "$COMPOSE_PROJECT_NAME" = pd04-abc-ci
+          for volume in $(docker volume ls --filter label=com.docker.compose.project=pd04-abc-ci --format '{{.Name}}'); do
+            case "$volume" in pd04-abc-ci_*) ;; *) exit 1 ;; esac
+          done
+          docker compose down -v
+
   # GS-02: dựng cả hệ thống bằng docker compose rồi chạy test e2e trên Postgres/RabbitMQ thật (khoảng 5 phút).
   # Chỉ chạy cho PR vào main hoặc PR có nhãn "e2e" để không làm chậm mọi PR.
   e2e:

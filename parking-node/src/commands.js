@@ -10,6 +10,7 @@ const { reserveIn, endReservationIn, confirmSagaIn, payIn } = require('./slots')
 const { checkFencing } = require('./fencing');
 const { normalizePlate, isPlate } = require('./plate');
 const { tokenFor } = require('./gate');
+const { decodeAdmin, dispatchAdminIn } = require('./admin-commands');
 
 class InvalidCommand extends Error {}
 const object = (v) => v && typeof v === 'object' && !Array.isArray(v);
@@ -102,9 +103,16 @@ async function epochError(pool, c) {
   }
 }
 
-function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now }) {
+function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now, adminEnabled = true }) {
   return async (m) => {
-    const env = decodeCommand(m, parkingId, internalKey);
+    const adminCommand = /^cmd\.(zone-|all\.)/.test(m.fields?.routingKey ?? '');
+    let env;
+    try {
+      env = adminCommand && adminEnabled ? decodeAdmin(m, parkingId, internalKey) : decodeCommand(m, parkingId, internalKey);
+    } catch (error) {
+      if (adminCommand && !(error instanceof InvalidCommand)) throw new InvalidCommand(error.message);
+      throw error;
+    }
     const hash = createHash('sha256').update(canonical({ type: env.type, parkingId, actor: env.actor, payload: env.payload })).digest('hex');
     const c = await pool.connect();
     try {
@@ -134,7 +142,7 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         out = { code: 410, body: { error: 'COMMAND_EXPIRED' } };
         await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
       } else {
-        out = await dispatch(c, env, { parkingId, reservationMinutes, qrSecret });
+        out = adminCommand ? await dispatchAdminIn(c, env, { parkingId }) : await dispatch(c, env, { parkingId, reservationMinutes, qrSecret });
         // Normalize Date values once: first delivery and replay return identical JSON.
         out.body = JSON.parse(JSON.stringify(out.body));
         await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);

@@ -85,7 +85,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
     }
     const headers = { ...opts.headers };
     const envelope = { type, parkingId, schemaVersion: opts.schemaVersion ?? headers.schemaVersion ?? 1, payload: body };
-    for (const k of ['issuedAt','deadlineAt']) if (opts[k] !== undefined) envelope[k]=opts[k];
+    for (const k of ['issuedAt','deadlineAt','targets']) if (opts[k] !== undefined) envelope[k]=opts[k];
     for (const field of ['causationId', 'fencingToken', 'hlc', 'traceparent', 'actor']) {
       const value = opts[field] ?? headers[field];
       if (value !== undefined) envelope[field] = headers[field] = value;
