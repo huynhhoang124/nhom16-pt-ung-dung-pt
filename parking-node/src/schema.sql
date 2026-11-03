@@ -22,6 +22,11 @@ CREATE TABLE IF NOT EXISTS command_reply_outbox (
   published_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS ix_command_replies_unpublished ON command_reply_outbox(id) WHERE published_at IS NULL;
+-- PD-02 repair: retain failed replies for retry and inspection; never mark failures published.
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ;
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS last_error TEXT;
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
 
 CREATE EXTENSION IF NOT EXISTS btree_gist;   -- cho ràng buộc EXCLUDE (slot_id WITH =, khoảng thời gian WITH &&)
 

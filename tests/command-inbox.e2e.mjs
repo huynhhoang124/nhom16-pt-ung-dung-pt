@@ -23,6 +23,10 @@ export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, 
     await ch.consume(queue, (m) => { if (m) { responses.push({ ...JSON.parse(m.content), properties: m.properties }); ch.ack(m); } });
     const commands = makeCommands(url, { signingKey: KEY });
     t.after(async () => { await commands.close(); await conn.close(); });
+    // Earlier chaos tests restart RabbitMQ. HTTP readiness does not imply that the
+    // command consumer has finished its capped reconnect backoff; user TTL is 10s.
+    await until('parking A command consumer ready before dedup/crash test', async () =>
+      (await ch.checkQueue('cmd.A')).consumerCount > 0, 90000);
     const token = await login('user1');
     const actor = { userId: JSON.parse(Buffer.from(token.split('.')[1], 'base64url')).sub, role: 'USER' };
     return { commands, replyTo, responses, actor };
