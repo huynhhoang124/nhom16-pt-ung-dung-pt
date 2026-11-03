@@ -63,7 +63,7 @@ function decodeCommand(m, parkingId, internalKey) {
   ) {
     throw new InvalidCommand('INVALID_HLC');
   }
-    return { ...body, messageId: p.messageId, correlationId: p.correlationId, replyTo: p.replyTo, expiration: p.expiration };
+  return { ...body, messageId: p.messageId, correlationId: p.correlationId, replyTo: p.replyTo, expiration: p.expiration };
 }
 
 async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {

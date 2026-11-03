@@ -285,9 +285,8 @@ async function payIn(c, { sessionId, method, paymentKey, userId }) {
 }
 function pay(pool, input) { return tx(pool, (c) => payIn(c, input)); }
 
-// Lịch sử phiên gửi xe. Biển số so khớp sau khi bỏ dấu cách/chấm/gạch, không phân biệt hoa thường.
-// Lịch sử phiên gửi xe: HLC lấy từ sự kiện CAR_ENTER gắn với sessionId.
-// Phiên cũ chưa có sessionId trong payload sẽ có HLC = NULL và dùng enteredAt làm fallback.
+// Lịch sử phiên gửi xe: chuẩn hoá biển số và sắp xếp theo HLC của lần CAR_ENTER.
+// Phiên cũ chưa có HLC được xếp sau các phiên có HLC; entered_at là tiêu chí phụ.
 const listSessions = async (pool, { plate, userId, from, to } = {}) =>
   (await pool.query(
     `SELECT ${SESSION_COLS}

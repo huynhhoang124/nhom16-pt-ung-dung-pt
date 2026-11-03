@@ -1,3 +1,4 @@
+const hlc = require('./hlc');
 const express = require('express');
 const s = require('./slots');
 const { checkFencing, withFencing, parseToken } = require('./fencing');
@@ -53,7 +54,24 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     if (!ownStaff || !allowed) return res.status(403).json({ error: 'FORBIDDEN' });
     next();
   });
+  // PD-17: chỉ nhận HLC từ request nội bộ đã xác thực.
+  app.use('/api', (req, res, next) => {
+    if (!internalKey || req.get('x-internal-key') !== internalKey) {
+      return next();
+    }
 
+    const incomingHlc = req.get('x-hlc');
+    if (incomingHlc === undefined) {
+      return next();
+    }
+
+    try {
+      hlc.update(incomingHlc);
+      return next();
+    } catch {
+      return res.status(400).json({ error: 'INVALID_HLC' });
+    }
+  });
   // PD-10: fencing token chống leader cũ (split-brain). Chỉ tin header khi có khoá nội bộ (Aggregator gửi):
   // nhân viên có JWT không được tự đặt token, nếu không gửi token rất lớn là chặn được leader thật.
   // Lệnh ghi: token được kiểm trong CÙNG giao dịch với lệnh ghi (tx ở slots.js gọi fenceIn).

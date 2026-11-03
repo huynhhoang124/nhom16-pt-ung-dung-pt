@@ -7,7 +7,7 @@
 // Circuit breaker (PT-04): lỗi của request thật cũng cộng vào `fails`. Đủ ngưỡng thì "mở mạch" (OFFLINE) ngay,
 // request sau bị từ chối tức thì thay vì chờ timeout. Health check định kỳ là phép thử "nửa mở":
 // thành công thì "đóng mạch" (ONLINE) và đối soát.
-
+const hlc = require('./hlc');
 const dns = require('node:dns');
 const { requestId } = require('./log');
 
@@ -107,6 +107,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
         'x-internal-key': internalKey,
         ...(requestId() && { 'x-request-id': requestId() }),
         ...fencingHeaders,
+        ...(method !== 'GET' && { 'x-hlc': hlc.now() }),
       },
       body: body && JSON.stringify(body),
       signal: AbortSignal.timeout(effectiveMs),
