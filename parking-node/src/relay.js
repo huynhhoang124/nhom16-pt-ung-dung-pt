@@ -86,7 +86,7 @@ function makeRelay(pool, publish, logger = log, onConfirmed = () => {}) {
       await client.query('BEGIN');
 
       const { rows } = await client.query(`
-        SELECT id, payload, traceparent, created_at
+        SELECT id, payload, created_at, traceparent
         FROM parking_events
         WHERE published_at IS NULL
         ORDER BY id
