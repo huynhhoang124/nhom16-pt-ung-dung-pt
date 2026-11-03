@@ -102,7 +102,7 @@ async function epochError(pool, c) {
   }
 }
 
-function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now }) {
+function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now, beforeDispatch }) {
   return async (m) => {
     const env = decodeCommand(m, parkingId, internalKey);
     const hash = createHash('sha256').update(canonical({ type: env.type, parkingId, actor: env.actor, payload: env.payload })).digest('hex');
@@ -134,6 +134,7 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         out = { code: 410, body: { error: 'COMMAND_EXPIRED' } };
         await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
       } else {
+        await beforeDispatch?.(m, c); // Test-only faults exercise the real inbox transaction rollback.
         out = await dispatch(c, env, { parkingId, reservationMinutes, qrSecret });
         // Normalize Date values once: first delivery and replay return identical JSON.
         out.body = JSON.parse(JSON.stringify(out.body));
@@ -230,9 +231,10 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
               } catch (error) {
                 log.error('command processing failed', { parkingId, error: error.message });
                 if (s.dead) return;
-                // PD-08 may replace this hook with confirmed delayed retry/dead transfer.
+                // PD-08 transfers only after rollback; a failed transfer leaves the source unacked.
                 const transferred = await retryOrDead?.({ ch, message: m, error, permanent: error instanceof InvalidCommand });
                 if (transferred === true) ch.ack(m);
+                else if (retryOrDead) end(s); // Failed transfer: keep source unacked, including malformed messages.
                 else if (error instanceof InvalidCommand) ch.nack(m, false, false); // durable DLX target; no hot requeue.
                 else end(s); // Leave unacked, close/reconnect with backoff after rollback.
               }

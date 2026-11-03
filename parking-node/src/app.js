@@ -8,6 +8,7 @@ const { mountGate, tokenFor } = require('./gate');
 const { log, withRequestId } = require('./log');
 const { verifyRS256 } = require('./jwt');
 const { mountMetrics } = require('./metrics');
+const { mountReplayClaim } = require('./replay-claim');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -24,6 +25,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
   app.use(withRequestId);
   mountMetrics(app, { pool, parkingId, extra: metricsExtra });   // GET /metrics (không cần khoá, chỉ số đo)
   app.use(express.json({ limit: '10kb' }));
+  mountReplayClaim(app, { pool, internalKey });
 
   // /health không cần khoá: Aggregator dùng làm failure detector. Kiểm tra cả DB.
   app.get('/health', async (_req, res) => {
