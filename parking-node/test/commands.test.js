@@ -121,6 +121,7 @@ test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, re
     const relay = makeReplyRelay(pool, async () => false);
     assert.equal(await relay(), 0);
     assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, before);
+    await pool.query('UPDATE command_reply_outbox SET next_attempt_at=now() WHERE published_at IS NULL');
     const sent = [];
     assert.equal(await makeReplyRelay(pool, async (...args) => { sent.push(args); return true; })(), before);
     assert.equal(sent[0][0], 'test.replies');
