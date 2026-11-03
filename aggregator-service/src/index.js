@@ -13,8 +13,18 @@ const { makeCommandFlow } = require('./command-flow');
 const { startReplyService } = require('./command-replies');
 const { startExpiredConsumer } = require('./expired-commands');
 const { log } = require('./log');
+const { SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
 
 const env = (k, d) => process.env[k] ?? d;
+const socketTracer = trace.getTracer('aggregator/socket.io');
+
+function emitSocket(target, event, payload, parentContext) {
+  return socketTracer.startActiveSpan('socket.emit', { kind: SpanKind.PRODUCER, attributes: { 'socket.io.event': event } }, parentContext, (span) => {
+    try { target.emit(event, payload); }
+    catch (error) { span.recordException(error); span.setStatus({ code: SpanStatusCode.ERROR, message: error.message }); throw error; }
+    finally { span.end(); }
+  });
+}
 
 // NODES='[{"parkingId":"A","name":"Bãi A","apiUrl":"http://parking-a:8001","address":"..."}]'
 async function init(pool, users) {
@@ -124,14 +134,14 @@ async function main() {
       try{replies=await startReplyService({pool,url:env('RABBITMQ_URL','amqp://localhost/%2F'),instanceId,internalKey:env('INTERNAL_KEY','dev'),flow:commandFlow,cache,
         onResult:row=>{
           if(row.slot)applyEvent(cache,{parkingId:row.parking_id,slot:row.slot.slotCode,status:row.slot.status,version:row.slot.version});
-          io.to(`user:${row.user_id}`).emit('COMMAND_RESULT',{commandId:row.id,status:row.status,statusCode:row.status_code,result:row.result,parkingId:row.parking_id,slot:row.slot});
+          emitSocket(io.to(`user:${row.user_id}`), 'COMMAND_RESULT', {commandId:row.id,status:row.status,statusCode:row.status_code,result:row.result,parkingId:row.parking_id,slot:row.slot});
         },log});break;}
       catch(e){if(e.message!=='DUPLICATE_AGGREGATOR_ID'||attempt>=20)throw e;await new Promise(r=>setTimeout(r,1000));}
     }
     commandFlow.start();
     // PD-06: lệnh hết hạn / quá số lần giao -> chỉ leader xử lý cmd.expired
     startExpiredConsumer({ pool, leader, log, url: env('RABBITMQ_URL', 'amqp://localhost/%2F'),
-      notify: (row) => io.to(`user:${row.user_id}`).emit('COMMAND_RESULT', {
+      notify: (row) => emitSocket(io.to(`user:${row.user_id}`), 'COMMAND_RESULT', {
         commandId: row.id, status: row.status, statusCode: row.status_code, result: row.result, parkingId: row.parking_id,
       }) });
   }
@@ -146,22 +156,33 @@ async function main() {
     next();
   });
   const instance = instanceId; // One canonical ID for replies, events and diagnostics.
-  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (n) => {
-    (n.to === '*' ? io : io.to(`user:${n.to}`)).emit('NOTIFICATION', n);
+  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (n, parent) => {
+    emitSocket(n.to === '*' ? io : io.to(`user:${n.to}`), 'NOTIFICATION', n, parent);
   }, log, { exchange: 'user.notifications', queue: `aggregator.notifications.${instance}`, pattern: '#' });
 
-  const push = (e) => io.emit('SLOT_UPDATED', e);
+  const push = (e, parent) => emitSocket(io, 'SLOT_UPDATED', e, parent);
   // PT-01: mỗi bản Aggregator một queue riêng -> bản nào cũng nhận đủ sự kiện, đẩy cho client đang nối với nó
   // (không cần Redis adapter). Queue durable: bản này tắt thì tin chờ, bật lại xử lý tiếp.
-  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e) => {
+  const eventTracer = trace.getTracer('aggregator/events');
+  startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e, parent) => {
+    eventTracer.startActiveSpan('event.process', { kind: SpanKind.CONSUMER,
+      attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': 'parking.events' },
+    }, parent, (span) => {
+      try {
     const fresh = applyEvent(cache, e);
     log.info('nhận sự kiện', { requestId: e.requestId, type: e.type, parkingId: e.parkingId, slot: e.slot, version: e.version, fresh });
-    if (fresh) push(e);
+        if (fresh) push(e);
+      } catch (error) {
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+        throw error;
+      } finally { span.end(); }
+    });
   }, log, { queue: `aggregator.slot-updates.${instance}` });
 
   const onChange = (n, prev) => {
     log.info(`Bãi ${n.id}: ${prev} -> ${n.status}`);
-    io.emit('NODE_STATUS', { parkingId: n.id, status: n.status });
+    emitSocket(io, 'NODE_STATUS', { parkingId: n.id, status: n.status });
     // PD-10: Chỉ Leader mới chạy đối soát (reconcile)
     if (n.status === 'ONLINE' && leader.isLeader()) {
       reconcile(reg, cache, n, push)

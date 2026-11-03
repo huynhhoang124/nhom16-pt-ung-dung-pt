@@ -3,6 +3,7 @@
 
 const { calcFee, fromRow } = require('./pricing');
 const { requestId } = require('./log');
+const { context, propagation } = require('@opentelemetry/api');
 const { fenceIn } = require('./fencing');
 
 // Dừng giao dịch với kết quả nghiệp vụ (409, 404...) thay vì lỗi hệ thống.
@@ -45,10 +46,13 @@ async function emit(c, parkingId, type, slotCode, status, version, plate, extra 
   const occ = (await c.query(
     `SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available, count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total
      FROM parking_slots`)).rows[0];
+  const carrier = {};
+  propagation.inject(context.active(), carrier);
   return c.query(
-    `INSERT INTO parking_events(event_type, slot_code, license_plate, payload) VALUES ($1,$2,$3,$4)`,
+    `INSERT INTO parking_events(event_type, slot_code, license_plate, payload, traceparent) VALUES ($1,$2,$3,$4,$5)`,
     [type, slotCode, plate ?? null,
-     { event: 'SLOT_UPDATED', type, parkingId, slot: slotCode, status, version: Number(version), ...occ, ...extra, requestId: requestId() }]);
+     { event: 'SLOT_UPDATED', type, parkingId, slot: slotCode, status, version: Number(version), ...occ, ...extra, requestId: requestId() },
+     carrier.traceparent ?? null]);
 }
 
 const findByRequest = (pool, requestId) =>

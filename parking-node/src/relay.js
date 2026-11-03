@@ -28,11 +28,12 @@ function amqpPublisher(url) {
     ch = c;
     return c;
   }
-  const publish = async (routingKey, payload) => {
+  const publish = async (routingKey, payload, traceparent) => {
     try {
       const c = await channel();
       c.publish(EXCHANGE, routingKey, Buffer.from(JSON.stringify(payload)),
-        { persistent: true, contentType: 'application/json', ...(payload.requestId && { correlationId: payload.requestId }) });
+        { persistent: true, contentType: 'application/json', headers: traceparent ? { traceparent } : {},
+          ...(payload.requestId && { correlationId: payload.requestId }) });
       await c.waitForConfirms();
       return true;
     } catch {
@@ -52,6 +53,7 @@ function amqpPublisher(url) {
         c.publish(EXCHANGE, key, Buffer.from(JSON.stringify(e.payload)), {
           persistent: true,
           contentType: 'application/json',
+          headers: e.traceparent ? { traceparent: e.traceparent } : {},
           ...(e.payload.requestId && { correlationId: e.payload.requestId }),
         });
       }
@@ -84,7 +86,7 @@ function makeRelay(pool, publish, logger = log, onConfirmed = () => {}) {
       await client.query('BEGIN');
 
       const { rows } = await client.query(`
-        SELECT id, payload, created_at
+        SELECT id, payload, traceparent, created_at
         FROM parking_events
         WHERE published_at IS NULL
         ORDER BY id
@@ -104,7 +106,7 @@ function makeRelay(pool, publish, logger = log, onConfirmed = () => {}) {
         confirmed = true;
         for (const e of rows) {
           const key = `parking.${e.payload.parkingId}.slot.${e.payload.slot}`;
-          if (!(await publish(key, e.payload))) {
+          if (!(await publish(key, e.payload, e.traceparent))) {
             confirmed = false;
             break;
           }

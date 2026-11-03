@@ -5,6 +5,7 @@ const { mountSessions } = require('./sessions-routes');
 const { log, withRequestId } = require('./log');
 const { makeSagas } = require('./saga');
 const { mountMetrics } = require('./metrics');
+const { context, propagation } = require('@opentelemetry/api');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
@@ -30,7 +31,10 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
     if (!commandFlow) return res.status(503).json({ error: 'COMMAND_SERVICE_UNAVAILABLE' });
     // Bãi đã bị đánh dấu OFFLINE: từ chối ngay như chế độ http, không xếp lệnh chờ hết TTL
     if (reg.get(req.params.id)?.status === 'OFFLINE') return res.status(503).json({ error: 'PARKING_OFFLINE', parkingId: req.params.id });
-    const traceparent = req.get('traceparent');
+    const incomingTraceparent = req.get('traceparent');
+    const carrier = {};
+    propagation.inject(context.active(), carrier);
+    const traceparent = carrier.traceparent ?? incomingTraceparent;
     if (traceparent && !TRACEPARENT.test(traceparent)) return res.status(400).json({ error: 'INVALID_TRACEPARENT' });
     try {
       const out = await commandFlow.execute({ parkingId: req.params.id, type, user: req.user, payload, key, traceparent });
@@ -89,6 +93,7 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
         messageId,
         correlationId: req.body?.correlationId,
         replyTo: `agg.${process.env.INSTANCE_ID ?? '1'}`,
+        traceparent: (() => { const carrier = {}; propagation.inject(context.active(), carrier); return carrier.traceparent; })(),
         actor: { userId: req.user.sub, role: req.user.role },
       });
       res.status(202).json({ ...result, processed: false });

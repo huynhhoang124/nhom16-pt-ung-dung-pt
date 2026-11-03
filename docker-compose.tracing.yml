@@ -1,0 +1,22 @@
+services:
+  parking-a:
+    environment:
+      OTEL_SDK_DISABLED: "false"
+  parking-b:
+    environment:
+      OTEL_SDK_DISABLED: "false"
+  parking-c:
+    environment:
+      OTEL_SDK_DISABLED: "false"
+  parking-d:
+    environment:
+      OTEL_SDK_DISABLED: "false"
+  aggregator:
+    environment:
+      OTEL_SDK_DISABLED: "false"
+  aggregator-2:
+    environment:
+      OTEL_SDK_DISABLED: "false"
+  notification:
+    environment:
+      OTEL_SDK_DISABLED: "false"
