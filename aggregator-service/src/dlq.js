@@ -116,11 +116,12 @@ function makeDlq({
         }),
       )
       .digest("hex");
-    await pool.query(
+    const stored = await pool.query(
       `INSERT INTO dead_letters(dedup_key,message_id,content_base64,properties,routing_key,reason)
-      VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(dedup_key) DO NOTHING`,
+      VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(dedup_key) DO NOTHING RETURNING id`,
       [hash, p.messageId ?? null, m.content.toString("base64"), p, key, reason],
     );
+    if (stored.rowCount) require("./metrics").incCmdDead(); // PD-25: mọi đường vào cmd.dead đều qua đây
     if (verified) await markFailed(p.messageId, reason);
   }
   async function list({ limit = 20, offset = 0 } = {}) {

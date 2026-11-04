@@ -58,7 +58,8 @@ function decodeAdmin(m, parkingId, internalKey) {
     p.correlationId !== p.messageId ||
     p.replyTo !== "agg.broadcast" ||
     p.type !== b.type ||
-    !/^[0-9]+$/.test(p.expiration ?? "")
+    // PD-08: tin retry bỏ expiration, hạn dùng deadlineAt đã ký
+    (p.expiration !== undefined && !/^[0-9]+$/.test(p.expiration))
   )
     invalid("INVALID_PROPERTIES");
   for (const k of [

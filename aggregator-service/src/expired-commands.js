@@ -5,7 +5,9 @@
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
 
-const reasonOf = (m) => m.properties?.headers?.['x-death']?.[0]?.reason;
+// PD-08: node chuyển thẳng tin quá hạn sang dlx (không qua TTL của queue nên có thể không có x-death)
+const reasonOf = (m) => (m.properties?.headers?.['x-failure-reason'] === 'COMMAND_EXPIRED'
+  ? 'expired' : m.properties?.headers?.['x-death']?.[0]?.reason);
 
 function makeExpiredHandler({ pool, notify = () => {}, log = console }) {
   return async function handle(ch, m) {
@@ -19,7 +21,6 @@ function makeExpiredHandler({ pool, notify = () => {}, log = console }) {
       if (r.rows[0]) { require('./metrics').observeCommand(r.rows[0]); notify(r.rows[0]); }   // PD-25: tính cả lệnh EXPIRED
     } else if (reason === 'delivery_limit') {
       ch.sendToQueue('cmd.dead', m.content, { ...m.properties, persistent: true });
-      require('./metrics').incCmdDead();
     } else {
       log.info?.('bỏ qua tin trong cmd.expired', { messageId: id, reason });
     }

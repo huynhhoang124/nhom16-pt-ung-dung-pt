@@ -18,8 +18,13 @@ function withDeadline(
     }
     if (!b || !trusted(internalKey, b, m.properties))
       throw error("UNTRUSTED_COMMAND");
+    // PD-04: lệnh broadcast mang parkingId zone-<vùng>/all, phải có bãi này trong targets
+    const broadcast =
+      /^(all|zone-[a-z0-9_-]{1,32})$/.test(b.parkingId ?? "") &&
+      Array.isArray(b.targets) &&
+      b.targets.includes(parkingId);
     if (
-      b.parkingId !== parkingId ||
+      (b.parkingId !== parkingId && !broadcast) ||
       !/^[A-Za-z0-9_-]{1,64}$/.test(b.type ?? "")
     )
       throw error("INVALID_ENVELOPE");
