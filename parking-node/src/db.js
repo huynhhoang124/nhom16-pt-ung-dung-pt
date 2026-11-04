@@ -33,6 +33,7 @@ const savePricing = (c, rules) => Promise.all(rules.map((r) => c.query(
 // (giá đã sửa qua API được giữ: chỉ seed loại xe chưa có giá). `pricing` = mảng quy tắc (env PRICING).
 async function init(pool, prefix, slots, pricing = DEFAULT_RULES) {
   await pool.query(schema);
+  await pool.query(fs.readFileSync(path.join(__dirname, 'admin-schema.sql'), 'utf8'));
   const plan = slotPlan(prefix, slots);
   await pool.query(
     `INSERT INTO parking_slots(slot_code, floor, type)
