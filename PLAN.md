@@ -239,10 +239,10 @@ Nền: `feature/PD-14b-auto-failover-epoch` (Luận). Lấy `a613d05 c13fc62 512
 
 ### B11 – Nối PD-08, PD-04 vào PD-03; TC61 – sau PR PD-08, PD-04 của Hùng, B1, B2
 
-- [ ] Retry của PD-08 bọc consumer lệnh, có cả phản hồi request–reply: lỗi tạm thời thì thử lại theo độ trễ; quá giới hạn thì vào `cmd.dead` và `commands.status='FAILED'`.
-- [ ] PD-04 phát lệnh nhiều bãi dùng luồng `commands` của B2. Kết quả từng bãi lưu và hiện trên trang Quản trị.
-- [ ] Bỏ `skip` ở TC61, chạy trên 6 bãi.
-- [ ] Kiểm tra:
+- [x] Retry của PD-08 bọc consumer lệnh, có cả phản hồi request–reply: lỗi tạm thời thì thử lại theo độ trễ; quá giới hạn thì vào `cmd.dead` và `commands.status='FAILED'`.
+- [x] PD-04 phát lệnh nhiều bãi dùng luồng `commands` của B2. Kết quả từng bãi lưu và hiện trên trang Quản trị.
+- [x] TC61 chạy ở TC61, chạy trên 6 bãi.
+- [x] Kiểm tra:
   - TC57, TC58 với `COMMAND_MODE=broker`.
   - TC61: tắt F → 2/3; bật F trong 10 phút → F áp dụng.
 - [ ] PR, merge.
