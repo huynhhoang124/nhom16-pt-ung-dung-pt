@@ -2,6 +2,8 @@
 
 PD-03: [API request–reply, cấu hình và runbook](tai-lieu/pd-03-request-reply.md).
 
+PD-08: [retry 2s/10s, DLQ, trang đẩy lại và kiểm thử trực tiếp trên dev](tai-lieu/pd-08-retry-dlq.md).
+
 **Môn:** Hệ thống / Ứng dụng phân tán – PTIT
 
 **Thành viên:** Vũ Văn Hùng, Hoàng Văn Huynh, Nguyễn Văn Luân, Trịnh Kim Loan, Đỗ Huyền Trang, Phạm Sỹ Hiệp

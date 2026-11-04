@@ -5,11 +5,12 @@ const { mountSessions } = require('./sessions-routes');
 const { log, withRequestId } = require('./log');
 const { makeSagas } = require('./saga');
 const { mountMetrics } = require('./metrics');
+const { mountDlq } = require('./dlq');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
 const { makeUserShards } = require('./ring');
-function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 'http', reserveTimeoutMs = 3000, config, leader,
+function makeApp({ pool, reg, cache, auth, commands, commandFlow, dlq, commandMode = 'http', reserveTimeoutMs = 3000, config, leader,
   zone = process.env.ZONE ?? 'bac', peerUrl = process.env.REGIONAL_PEER_URL, users = makeUserShards({ agg: pool }) }) {
   const app = express();
   app.set('trust proxy', 'loopback, uniquelocal');   // IP thật của client do nginx (mạng Docker nội bộ) gửi qua X-Forwarded-For
@@ -20,6 +21,7 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
   const crossZone = mountMetrics(app, { reg, leader, pool, instance });   // GET /metrics; nginx không chuyển /metrics ra ngoài
   app.use(express.json({ limit: '10kb' }));
   const { need } = auth;
+  if (dlq) mountDlq(app, { dlq, need });
   // PD-11: timeout ghi đọc lại mỗi lần gọi (đổi qua etcd là áp dụng ngay cho đặt chỗ, saga, trả tiền)
   const reserveMs = () => (config ? config.get('reserveTimeoutMs', reserveTimeoutMs) : reserveTimeoutMs);
   if (!['http', 'broker'].includes(commandMode)) throw new Error('INVALID_COMMAND_MODE');

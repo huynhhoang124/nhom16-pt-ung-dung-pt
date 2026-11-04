@@ -39,8 +39,9 @@ export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, 
 
   test('PD-02 PostgreSQL: 10 concurrent DB clients deduplicate and preserve transaction invariants', options, () => {
     const container = compose('ps -q parking-a');
-    execFileSync('docker', ['cp', path.join(ROOT, 'parking-node/test/commands-pg.test.js'), `${container}:/app/commands-pg.test.js`]);
-    const output = compose('exec -T -e PD02_SOURCE_ROOT=/app/src -e PD02_REAL_DATABASE_URL=postgres://postgres:dev@db-a/parking parking-a node --test /app/commands-pg.test.js');
+    compose('exec -T parking-a mkdir -p /app/test');
+    execFileSync('docker', ['cp', path.join(ROOT, 'parking-node/test/commands-pg.test.js'), `${container}:/app/test/commands-pg.test.js`]);
+    const output = compose('exec -T -e PD02_REAL_DATABASE_URL=postgres://postgres:dev@db-a/parking parking-a node --test /app/test/commands-pg.test.js');
     assert.match(output, /pass 1/);
   });
 
