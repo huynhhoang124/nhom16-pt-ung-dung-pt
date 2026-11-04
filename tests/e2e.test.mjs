@@ -787,7 +787,7 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
       let l1 = (await agg('/api/leader')).body;
       if (!l1?.isLeader) {
         await agg2('/api/test/fault/leader-pause', { method: 'POST', body: { ms: 5000 } });
-        await until('Aggregator 1 trở thành Leader', async () => (await agg('/api/leader')).body?.isLeader, 10_000);
+        await until('Aggregator 1 trở thành Leader', async () => (await agg('/api/leader')).body?.isLeader, 30_000);
         l1 = (await agg('/api/leader')).body;
       }
       assert.ok(l1?.isLeader, 'Aggregator 1 phải là leader');

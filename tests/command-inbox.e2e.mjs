@@ -10,10 +10,12 @@ const { makeCommands } = require('../aggregator-service/src/commands');
 
 // No full HTTP request/reply assertions until PD-03 implements that contract.
 export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot }) {
-  const options = { timeout: 120000 };
+  const options = { timeout: 300000 };
   const url = process.env.PD02_AMQP_URL ?? 'amqp://parking:parking@localhost/%2F';
   async function setup(t) {
-    const conn = await amqp.connect(url);
+    // TC49 vừa khởi động lại rabbitmq: chờ cổng mở lại thay vì lỗi ECONNREFUSED ngay.
+    let conn;
+    await until('RabbitMQ nhận kết nối', async () => { conn = await amqp.connect(url).catch(() => null); return conn; }, 180000);
     const ch = await conn.createChannel();
     await ch.assertExchange('parking.replies', 'direct', { durable: true });
     const { queue } = await ch.assertQueue('', { exclusive: true });
