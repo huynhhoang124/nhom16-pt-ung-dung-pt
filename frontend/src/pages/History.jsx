@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api, commandRequest, message, newKey, toast, useLive } from '../api.js';
+import { api, centralDown, commandRequest, knownNode, message, newKey, nodeApi, toast, useLive } from '../api.js';
 import { Icon, Plate } from '../ui.jsx';
 
 const time = (t) => (t ? new Date(t).toLocaleString('vi-VN') : '—');
@@ -16,11 +16,18 @@ export default function History({ user, onOpenSlot }) {
   const [error, setError] = useState('');
   const [paying, setPaying] = useState(null);   // { x: phiên, quote, key, unknown } – key giữ nguyên khi "Thử lại"
 
+  const [directLot, setDirectLot] = useState(null);   // trung tâm sập -> đang tra thẳng ở máy chủ bãi này
   const load = useCallback(async (q) => {
-    const r = await api(mine ? '/api/me/sessions' : `/api/sessions/search?plate=${encodeURIComponent(q)}`);
+    let r = await api(mine ? '/api/me/sessions' : `/api/sessions/search?plate=${encodeURIComponent(q)}`);
+    // PT-05: nhân viên tra thẳng ở bãi mình khi trung tâm không trả lời (chỉ thấy phiên của bãi này).
+    if (!mine && centralDown(r) && user.parkingId && knownNode(user.parkingId)) {
+      const n = await nodeApi(user.parkingId, `/api/sessions?plate=${encodeURIComponent(q)}`);
+      if (n.ok) r = { ok: true, data: { sessions: n.data.map((s) => ({ ...s, parkingId: user.parkingId })), unavailable: [] } };
+      setDirectLot(n.ok ? user.parkingId : null);
+    } else setDirectLot(null);
     setError(r.ok ? '' : message(r.data));
     setData(r.ok ? r.data : null);
-  }, [mine]);
+  }, [mine, user.parkingId]);
   useEffect(() => { if (mine) load(); }, [mine, load]);
   useLive(['SLOT_UPDATED'], () => (mine ? load() : plate && data && load(plate)));
 
@@ -50,6 +57,11 @@ export default function History({ user, onOpenSlot }) {
         </form>
       )}
       {error && <div className="banner bad"><Icon name="x" /><div>{error}</div></div>}
+      {directLot && (
+        <div className="banner"><Icon name="wifi-off" />
+          <div><strong>Máy chủ trung tâm đang mất kết nối</strong>Kết quả dưới đây tra thẳng ở bãi {directLot}, chưa gồm các bãi khác.</div>
+        </div>
+      )}
       {data?.unavailable.length > 0 && (
         <div className="banner"><Icon name="alert" />
           <div><strong>Thiếu dữ liệu bãi {data.unavailable.join(', ')}</strong>Bãi đang mất kết nối nên kết quả có thể thiếu.</div>

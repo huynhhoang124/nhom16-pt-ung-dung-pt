@@ -22,7 +22,8 @@ export async function api(path, { method = 'GET', body, headers = {}, keepSessio
   } catch {
     return { ok: false, status: 0, data: { error: 'NETWORK' } };
   }
-  const data = await r.json().catch(() => ({}));
+  // Proxy/nginx trả trang lỗi (không phải JSON) khi trung tâm sập -> gắn mã để báo lỗi rõ ràng thay vì "Có lỗi xảy ra".
+  const data = await r.json().catch(() => (r.status >= 500 ? { error: 'SERVER_UNAVAILABLE' } : {}));
   // Chỉ coi là hết phiên khi Aggregator từ chối chính token (UNAUTHORIZED). 401 nghiệp vụ — vd cổng báo
   // INVALID_QR / QR_EXPIRED — không được làm nhân viên bị đăng xuất giữa lúc xe đang chờ.
   if (r.status === 401 && s && !keepSession && data?.error === 'UNAUTHORIZED') { session.set(null); location.reload(); }
@@ -64,6 +65,7 @@ const MESSAGES = {
   INVALID_CREDENTIALS: 'Sai tên đăng nhập hoặc mật khẩu.',
   PARKING_EXISTS: 'Mã bãi đã tồn tại.',
   NETWORK: 'Không kết nối được máy chủ.',
+  SERVER_UNAVAILABLE: 'Máy chủ trung tâm đang mất kết nối. Hệ thống sẽ hoạt động lại khi kết nối được, vui lòng thử lại sau ít phút.',
   PLATE_ALREADY_INSIDE: 'Biển số này đang có xe gửi trong bãi.',
   PLATE_TOO_SHORT: 'Nhập ít nhất 3 ký tự biển số.',
   TOO_MANY_ATTEMPTS: 'Thử sai quá nhiều lần. Vui lòng đợi 15 phút.',

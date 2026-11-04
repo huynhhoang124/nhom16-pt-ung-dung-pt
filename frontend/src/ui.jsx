@@ -1,6 +1,6 @@
 // Thành phần giao diện dùng chung theo thiết kế "Biển báo bãi đỗ": biểu tượng, biển số, chip trạng thái.
 // Trạng thái luôn có màu + chữ + biểu tượng (không chỉ dựa vào màu).
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { formatPlate, RESERVATION_LABEL, STATUS_LABEL } from './api.js';
 
 export const Icon = ({ name, spin = false, label }) => (
@@ -51,19 +51,40 @@ export function Meter({ available, total, off = false }) {
 }
 
 // Hộp xác nhận cho thao tác khó hoàn tác (gỡ ô, huỷ đặt chỗ...). Esc / bấm nền = huỷ; nút huỷ được focus sẵn.
+// Giữ focus trong hộp (Tab / Shift+Tab xoay vòng) và trả focus về nút đã mở hộp khi đóng.
 export function ConfirmDialog({ ask, onClose }) {
   const [busy, setBusy] = useState(false);
+  const box = useRef(null);
+  const opener = useRef(null);
+  const live = useRef({ busy, onClose });
+  live.current = { busy, onClose };
+  // Ghi nhớ nút đã mở hộp ngay lúc render — trước khi autoFocus chuyển focus vào nút "Không".
+  if (ask && !opener.current) opener.current = document.activeElement;
   useEffect(() => {
     if (!ask) return undefined;
-    const esc = (e) => e.key === 'Escape' && !busy && onClose();
-    window.addEventListener('keydown', esc);
-    return () => window.removeEventListener('keydown', esc);
-  }, [ask, busy, onClose]);
+    const keys = (e) => {
+      if (e.key === 'Escape' && !live.current.busy) { e.preventDefault(); live.current.onClose(); return; }
+      if (e.key !== 'Tab' || !box.current) return;
+      const f = [...box.current.querySelectorAll('button:not([disabled]), input, select, textarea, [href]')];
+      if (!f.length) return;
+      const [first, last] = [f[0], f[f.length - 1]];
+      if (!box.current.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+      else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
+    window.addEventListener('keydown', keys);
+    return () => {
+      window.removeEventListener('keydown', keys);
+      const back = opener.current;
+      opener.current = null;
+      if (back?.isConnected) setTimeout(() => back.focus(), 0);
+    };
+  }, [ask]);
   if (!ask) return null;
   const run = async () => { setBusy(true); try { await ask.run(); } finally { setBusy(false); onClose(); } };
   return (
     <div className="dialog-backdrop" onClick={() => !busy && onClose()}>
-      <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" onClick={(e) => e.stopPropagation()}>
+      <div ref={box} className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" onClick={(e) => e.stopPropagation()}>
         <h3 id="confirm-title">{ask.title}</h3>
         {ask.body && <div className="muted">{ask.body}</div>}
         <div className="dialog-actions">

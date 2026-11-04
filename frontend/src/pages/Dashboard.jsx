@@ -89,12 +89,12 @@ export default function Dashboard({ onOpen, hero = false }) {
       <div className="legend" style={{ alignItems: 'center', marginBottom: 'var(--space-5)' }}>
         <div className="seg" role="group" aria-label="Loại xe">
           {[['', 'Tất cả'], ...Object.entries(TYPE_LABEL)].map(([k, v]) => (
-            <button key={k} className={type === k ? 'tab active' : 'tab'} onClick={() => setType(k)}>{v}</button>
+            <button key={k} className={type === k ? 'tab active' : 'tab'} aria-pressed={type === k} onClick={() => setType(k)}>{v}</button>
           ))}
         </div>
         <div className="seg" role="group" aria-label="Cách xem">
-          <button className={view === 'list' ? 'tab active' : 'tab'} onClick={() => setView('list')}>Danh sách</button>
-          <button className={view === 'map' ? 'tab active' : 'tab'} onClick={() => setView('map')}>Bản đồ</button>
+          <button className={view === 'list' ? 'tab active' : 'tab'} aria-pressed={view === 'list'} onClick={() => setView('list')}>Danh sách</button>
+          <button className={view === 'map' ? 'tab active' : 'tab'} aria-pressed={view === 'map'} onClick={() => setView('map')}>Bản đồ</button>
         </div>
         {!hero && <button className="link" onClick={locate}><Icon name="pin" /> Tìm bãi gần tôi</button>}
         {!hero && geoNote && <span className="muted small">{geoNote}</span>}

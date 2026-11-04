@@ -59,6 +59,7 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
       const slots = await nodeApi(parkingId, '/api/slots');
       if (slots.ok) {
         setP({ parkingId, name: knownNode(parkingId).name, status: 'ONLINE', stale: false, direct: true, slots: slots.data });
+        setLoadedAt(new Date().toISOString());
         setLoadError('');
         const rs = await nodeApi(parkingId, '/api/reservations');
         setReservations(rs.ok ? rs.data : []);
@@ -76,7 +77,8 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
   useLive(['SLOT_UPDATED', 'NODE_STATUS'], load);
 
   // NV-01: đặt trước được cả slot đang bận (khác khung giờ); đặt ngay thì slot phải trống.
-  function pick(slot) {
+  // byKeyboard: chọn bằng Enter/Space (click có detail = 0) -> đưa focus sang panel thao tác.
+  function pick(slot, byKeyboard = false) {
     setNote(null);
     setBooked(null);
     setCharge(null);
@@ -86,6 +88,7 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
     // Màn hẹp: panel nằm dưới sơ đồ -> cuộn tới để người dùng thấy ngay form.
     setTimeout(() => {   // chờ React vẽ panel của ô mới chọn
       const el = asideRef.current;
+      if (byKeyboard) el?.querySelector('.card input:not([disabled]), .card select:not([disabled]), .card button:not([disabled])')?.focus({ preventScroll: true });
       if (!el || el.getBoundingClientRect().top <= window.innerHeight * 0.6) return;
       const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       el.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
@@ -213,12 +216,34 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
     ? <div className="empty" style={{ borderColor: 'var(--bad)' }}><Icon name="alert" /><strong>Không tải được bãi</strong>{loadError}</div>
     : <div className="stack"><span className="skeleton" style={{ height: 40, width: 280 }} /><span className="skeleton" style={{ height: 320 }} /></div>;
   const slot = p.slots.find((s) => s.slotCode === selected);
+  // Đã tải được trước đó nhưng lần tải gần nhất thất bại (trung tâm và bãi đều không trả lời): sơ đồ có thể đã cũ.
+  const lost = !!loadError;
   // Ô đã đặt: vé đang giữ ô (ACTIVE, đến sớm nhất). Cho xe vào phải đúng biển số trên vé.
   const holder = isStaff && slot?.status === 'RESERVED'
     ? reservations.filter((r) => r.slotCode === slot.slotCode && r.status === 'ACTIVE')
       .sort((a, b) => new Date(a.startTime) - new Date(b.startTime))[0] ?? null
     : null;
-  const shownRes = (resFilter === 'ACTIVE' ? reservations.filter((r) => r.status === 'ACTIVE') : reservations)
+  // Các lượt đặt còn hiệu lực của ô đang chọn (trừ vé đang giữ ô) — nhân viên phải thấy trước khi khoá bảo trì / sửa ô.
+  const upcoming = isStaff && slot
+    ? reservations.filter((r) => r.slotCode === slot.slotCode && r.status === 'ACTIVE' && new Date(r.endTime) > Date.now() && r.id !== holder?.id)
+      .sort((a, b) => new Date(a.startTime) - new Date(b.startTime))
+    : [];
+  const resLine = (r) => <><Plate value={r.licensePlate} /> <span className="mono small">{fmt(r.startTime)} – {new Date(r.endTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</span></>;
+  // Khoá bảo trì ô còn vé đặt: hỏi lại, nói rõ vé nào bị ảnh hưởng (vé KHÔNG tự huỷ).
+  function staffAction(a) {
+    if (a !== 'maintenance' || !upcoming.length) return act(a);
+    setAsk({
+      title: `Ô ${slot.slotCode} còn ${upcoming.length} lượt đặt`,
+      body: (
+        <div className="stack" style={{ gap: 'var(--space-2)' }}>
+          <ul className="res-list">{upcoming.map((r) => <li key={r.id}>{resLine(r)}</li>)}</ul>
+          <span>Khoá bảo trì <b>không tự huỷ</b> các vé này: khách vẫn sẽ đến ô {slot.slotCode}. Hãy huỷ vé ở bảng “Đặt chỗ tại bãi” hoặc báo khách đổi ô.</span>
+        </div>
+      ),
+      label: 'Vẫn khoá bảo trì', danger: true, run: () => act('maintenance'),
+    });
+  }
+  const shownRes =(resFilter === 'ACTIVE' ? reservations.filter((r) => r.status === 'ACTIVE') : reservations)
     .slice().sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
   const plateMatch = !!holder && normPlate(plate) === normPlate(holder.licensePlate);
   const plateMismatch = !!holder && !plateMatch && normPlate(plate).length >= normPlate(holder.licensePlate).length;
@@ -232,8 +257,36 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
   const busyHour = (h) => schedule.some((x) => new Date(x.startTime).getTime() < dayStart + (h + 1) * 3600e3 && new Date(x.endTime).getTime() > dayStart + h * 3600e3);
   const nowHour = Date.now() >= dayStart && Date.now() < dayStart + 86400e3 ? new Date().getHours() : -1;
 
+  // Bàn phím: cả sơ đồ chỉ là MỘT điểm dừng Tab (ô đang chọn, hoặc ô đầu tiên); mũi tên đi giữa các ô.
+  const tabCode = slots.some((s) => s.slotCode === selected) ? selected : slots[0]?.slotCode;
+  function slotKeys(e) {
+    const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+    if (!keys.includes(e.key)) return;
+    e.preventDefault();
+    const all = [...e.currentTarget.closest('main').querySelectorAll('button.slot')];
+    const i = all.indexOf(e.currentTarget);
+    const cur = e.currentTarget.getBoundingClientRect();
+    let next;
+    if (e.key === 'ArrowRight') next = all[i + 1];
+    else if (e.key === 'ArrowLeft') next = all[i - 1];
+    else if (e.key === 'Home') next = all[0];
+    else if (e.key === 'End') next = all[all.length - 1];
+    else {
+      // Lên/xuống: hàng gần nhất phía trên/dưới, chọn ô có tâm ngang gần nhất.
+      const down = e.key === 'ArrowDown';
+      const rows = all.map((b) => [b, b.getBoundingClientRect()]).filter(([, r]) => (down ? r.top > cur.top + 4 : r.top < cur.top - 4));
+      const rowTop = rows.length ? (down ? Math.min(...rows.map(([, r]) => r.top)) : Math.max(...rows.map(([, r]) => r.top))) : null;
+      const cx = cur.left + cur.width / 2;
+      next = rows.filter(([, r]) => Math.abs(r.top - rowTop) < 4)
+        .sort(([, a], [, b]) => Math.abs(a.left + a.width / 2 - cx) - Math.abs(b.left + b.width / 2 - cx))[0]?.[0];
+    }
+    if (next) { all.forEach((b) => { b.tabIndex = -1; }); next.tabIndex = 0; next.focus(); }
+  }
+
   const slotButton = (s) => (
-    <button key={s.slotCode} className={`slot ${s.status} ${s.slotCode === selected ? 'sel' : ''}`} onClick={() => pick(s)}
+    <button key={s.slotCode} className={`slot ${s.status} ${s.slotCode === selected ? 'sel' : ''}`}
+      onClick={(e) => pick(s, e.detail === 0)} onKeyDown={slotKeys} tabIndex={s.slotCode === tabCode ? 0 : -1}
+      aria-pressed={s.slotCode === selected}
       aria-label={`${s.slotCode}, ${TYPE_LABEL[s.type] ?? ''}, ${STATUS_LABEL[s.status]}`}
       title={`${s.slotCode} – ${TYPE_LABEL[s.type] ?? ''} – ${STATUS_LABEL[s.status]} (v${s.version})`}>
       {s.slotCode}<Icon name={slotIcon(s.status, s.type)} />
@@ -262,18 +315,27 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
       </div>
       {p.direct && (
         <div className="banner bad"><Icon name="wifi-off" />
-          <div><strong>Trung tâm (Aggregator) đang mất kết nối</strong>Bạn đang làm việc trực tiếp với bãi {parkingId}. Xe vào/ra vẫn ghi vào bãi; trung tâm sẽ tự đồng bộ khi hoạt động lại.</div>
+          <div><strong>Máy chủ trung tâm đang mất kết nối</strong>Bạn đang làm việc trực tiếp với bãi {parkingId}. Xe vào/ra vẫn ghi vào bãi; trung tâm sẽ tự đồng bộ khi hoạt động lại.</div>
+        </div>
+      )}
+      {lost && (
+        <div className="banner bad" role="alert"><Icon name="wifi-off" />
+          <div>
+            <strong>Mất kết nối – sơ đồ có thể đã cũ</strong>
+            Không liên lạc được máy chủ{isStaff ? ' trung tâm lẫn máy chủ của bãi' : ''}. Đang hiển thị dữ liệu lúc {clock(loadedAt)}; hệ thống tự thử lại mỗi 10 giây.
+            {isStaff && ' Tạm khoá thao tác xe vào/ra để tránh ghi sai.'}
+          </div>
         </div>
       )}
       {p.stale && (
         <div className="banner"><Icon name="alert" />
-          <div><strong>Bãi đang mất kết nối</strong>Đây là trạng thái cuối cùng Aggregator biết (có thể đã cũ); tạm thời không nhận đặt chỗ.</div>
+          <div><strong>Bãi đang mất kết nối</strong>Đây là trạng thái cuối cùng hệ thống biết về bãi (có thể đã cũ); tạm thời không nhận đặt chỗ.</div>
         </div>
       )}
       <div className="legend" style={{ alignItems: 'center', margin: 'var(--space-4) 0' }}>
         <div className="seg" role="group" aria-label="Loại xe">
           {[['', 'Tất cả'], ...Object.entries(TYPE_LABEL)].map(([k, v]) => (
-            <button key={k} className={type === k ? 'tab active' : 'tab'} onClick={() => setType(k)}>{v}</button>
+            <button key={k} className={type === k ? 'tab active' : 'tab'} aria-pressed={type === k} onClick={() => setType(k)}>{v}</button>
           ))}
         </div>
         {SLOT_STATUSES.map((k) => <span key={k} className={`chip ${k}`}><Icon name={slotIcon(k)} />{STATUS_LABEL[k]}: <b>{counts[k] ?? 0}</b></span>)}
@@ -304,7 +366,7 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
               <div className="card">
                 <div className="empty" style={{ border: 0, padding: 'var(--space-5) var(--space-2)' }}>
                   <Icon name="pin" /><strong>Chọn một ô trên sơ đồ</strong>
-                  {user.role === 'USER' ? 'Bấm vào ô để xem lịch và đặt chỗ.' : 'Bấm vào ô để cho xe vào/ra hoặc sửa ô.'}
+                  {user.role === 'USER' ? 'Bấm vào ô để xem lịch và đặt chỗ.' : isStaff ? 'Bấm vào ô để cho xe vào/ra hoặc sửa ô.' : `Chế độ chỉ xem: bạn thao tác được ở bãi ${user.parkingId}.`}
                 </div>
               </div>
             )}
@@ -316,6 +378,9 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
                   <SlotStatus status={slot.status} type={slot.type} />
                   {slot.floor != null && <span className="muted small">Tầng {slot.floor}</span>}
                 </div>
+                {user.role === 'STAFF' && !isStaff && (
+                  <p className="muted small" style={{ margin: 0 }}><Icon name="info" /> Chế độ chỉ xem: bãi {parkingId} do nhân viên bãi {parkingId} thao tác. Bạn làm việc ở <b>bãi {user.parkingId}</b>.</p>
+                )}
                 {pending && (
                   <form onSubmit={reserve} className="stack" style={{ gap: 'var(--space-3)' }}>
                     <label className="field">Biển số
@@ -398,6 +463,12 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
                     </dl>
                   </div>
                 )}
+                {upcoming.length > 0 && (
+                  <div className="occupant">
+                    <span className="kicker">{slot.status === 'RESERVED' ? 'Lượt đặt khác của ô' : 'Lượt đặt sắp tới'} ({upcoming.length})</span>
+                    <ul className="res-list">{upcoming.map((r) => <li key={r.id}>{resLine(r)}</li>)}</ul>
+                  </div>
+                )}
                 {isStaff && ['AVAILABLE', 'RESERVED'].includes(slot.status) && (
                   <label className="field">{holder ? 'Biển số xe đang vào (đối chiếu với vé)' : 'Biển số (tuỳ chọn)'}
                     <input placeholder="vd 30A-123.45" value={plate} onChange={(e) => setPlate(e.target.value)} autoComplete="off"
@@ -410,7 +481,7 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
                     {(STAFF_ACTIONS[slot.status] ?? []).map(([a, label], i) => {
                       const needMatch = a === 'enter' && holder && !plateMatch;
                       return (
-                        <button key={a} className={i === 0 ? 'primary' : undefined} onClick={() => act(a)} disabled={acting || needMatch}
+                        <button key={a} className={i === 0 ? 'primary' : undefined} onClick={() => staffAction(a)} disabled={acting || needMatch || lost}
                           title={needMatch ? 'Nhập đúng biển số trên vé để cho xe vào' : undefined}>
                           {acting && i === 0 ? <Icon name="loader" spin /> : <Icon name={{ enter: 'login', exit: 'logout', maintenance: 'wrench', unmaintenance: 'wrench' }[a]} />}
                           {a === 'enter' && holder ? (plateMatch ? 'Đúng xe – cho vào' : 'Nhập biển số để đối chiếu') : label}

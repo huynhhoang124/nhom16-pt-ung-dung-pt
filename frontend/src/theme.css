@@ -253,3 +253,7 @@ button.block { width: 100%; }
   .theme-brand .card { padding: var(--space-4); border-radius: var(--r-md); }
   .site-foot-in { flex-direction: column; align-items: flex-start; }
 }
+
+/* Danh sách lượt đặt trong panel ô / hộp xác nhận */
+.res-list { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.res-list li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }

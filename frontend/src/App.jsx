@@ -60,6 +60,10 @@ export default function App() {
     ...(user.role !== 'USER' ? [['stats', 'Thống kê']] : []),
     ...(user.role === 'ADMIN' ? [['admin', 'Quản trị']] : []),
   ];
+  // Tab "Bãi X" chỉ sáng khi đang ở đúng bãi mình; xem bãi khác (mở từ Tổng quan) thì "Tổng quan" sáng.
+  const isActive = (page) => (page === 'parking' ? view.page === 'parking' && view.parkingId === user.parkingId
+    : page === 'dashboard' ? view.page === 'dashboard' || (view.page === 'parking' && view.parkingId !== user.parkingId)
+    : view.page === page);
   const go = (page) => setView(page === 'parking' ? { page, parkingId: user.parkingId } : { page });
   const logout = () => { session.set(null); setUser(null); relogin(); setView({ page: 'dashboard' }); };
 
@@ -69,7 +73,7 @@ export default function App() {
         <strong className="brand"><span className="brand-mark" aria-hidden="true">P</span> Smart Parking</strong>
         <nav>
           {tabs.map(([page, label]) => (
-            <button key={page} className={view.page === page ? 'tab active' : 'tab'} onClick={() => go(page)}>{label}</button>
+            <button key={page} className={isActive(page) ? 'tab active' : 'tab'} aria-current={isActive(page) ? 'page' : undefined} onClick={() => go(page)}>{label}</button>
           ))}
         </nav>
         <span className="who">
