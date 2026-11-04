@@ -247,6 +247,36 @@ Nền: `feature/PD-14b-auto-failover-epoch` (Luận). Lấy `a613d05 c13fc62 512
   - TC61: tắt F → 2/3; bật F trong 10 phút → F áp dụng.
 - [ ] PR, merge.
 
+#### B11 chi tiết (04/11, nhánh `huynh/PD-B11`)
+
+Nhánh này đã gộp #80, #81 và sửa lỗi tích hợp với PD-06. Chỉ sửa file, không chạy lệnh shell. Giữ thay đổi gọn, không đổi logic đã có của #80, #81 ngoài các mục dưới.
+
+- [ ] **Nối `markFailed`.** Trong `aggregator-service/src/index.js`, truyền `markFailed` vào `makeDlq`.
+  - Đọc `aggregator-service/src/command-flow.js` trước, xác nhận `commands.id` khớp `messageId` của tin. Nếu không khớp, tra đúng cột.
+  - Làm: `UPDATE commands SET status='FAILED', failure_phase, last_error, status_code, result, updated_at WHERE id=$1 AND status='PENDING'`. Dùng giá trị `failure_phase` có sẵn trong CHECK của `schema.sql`; không có thì thêm giá trị mới theo cách migrate đang dùng.
+  - Kết quả lỗi phải tới người dùng giống các đường FAILED khác trong `command-flow.js` (dùng lại hàm có sẵn nếu có, ví dụ phát `COMMAND_RESULT`).
+  - Lệnh đã DONE thì không đổi.
+  - Unit test trong `aggregator-service/test/dlq.test.js` hoặc test của `command-flow`: PENDING thành FAILED; DONE giữ nguyên; lý do `UNVERIFIED` không gọi `markFailed`.
+- [ ] **PD-04 ra 6 bãi.**
+  - `aggregator-service/src/broadcast.js`: mặc định `parkingIds` thành A–F.
+  - `aggregator-service/src/index.js` và `docker-compose.yml`: `PARKING_ZONES` mặc định A, B, C là `bac`; D, E, F là `nam`. Bỏ dòng ghi chú "Assignment 01/11".
+  - `aggregator-service/src/broadcast-runtime.js`: kiểm lại logic bind/unbind cho D, E, F (dòng 24–39, seed `bac` chỉ của A, B, C).
+  - `rabbitmq/definitions.json`: policy `admin-command-delivery` đổi thành `^cmd\.[A-F]\.admin$`; thêm binding `cmd.zone-nam.#` và `cmd.all.#` cho `cmd.D.admin`, `cmd.E.admin`, `cmd.F.admin`, cùng dạng binding của A.
+  - Tìm các chỗ còn cố định A–C: `git grep`-tương-đương cho `"A", "B", "C"` và `ABC` trong `aggregator-service/src`, `parking-node/src`, `frontend/src`. Sửa chỗ thuộc broadcast/admin; không đụng phần khác.
+  - `README.md` dòng 105: đổi "A–C" thành "A–F".
+  - Sửa unit test bị ảnh hưởng trong `aggregator-service/test/broadcast.test.js`.
+- [ ] **Trang Quản trị.** Đọc `frontend/src/pages/Broadcast.jsx`: phải hiện kết quả từng bãi (đã áp dụng, từ chối kèm lỗi, đang chờ). Thiếu phần nào thì thêm, theo style có sẵn.
+- [ ] **TC61, e2e mới `tests/tc61.pd04.e2e.mjs`.** Lấy mẫu `tests/pd04-abc.e2e.mjs`, chạy độc lập, có `skip: !process.env.SCALE` (cần stack `docker-compose.scale.yml` 6 bãi).
+  - `docker compose stop parking-f`.
+  - Admin phát lệnh vùng `nam`: chờ tới khi D, E áp dụng, F còn chờ (2/3).
+  - `docker compose start parking-f`: chờ tới khi F áp dụng (3/3), không quá 10 phút TTL.
+  - `finally` luôn bật lại `parking-f` và trả cấu hình về như cũ.
+  - Xác nhận tên service thật trong `docker-compose.scale.yml`.
+- [ ] **TC57, TC58, e2e mới `tests/tc57-58.pd08.e2e.mjs`.** Lấy mẫu `tests/pd08-retry.integration.cjs`, `tests/pd08-compose.test.yml` và `testFailures` trong `parking-node/src/command-retry.js`. Có `skip: process.env.COMMAND_MODE !== 'broker'`.
+  - TC57: lỗi tạm thời vài lần, lệnh tự thử lại rồi DONE, đúng 1 reservation.
+  - TC58: lỗi vượt giới hạn, tin vào `cmd.dead`, có bản ghi `dead_letters`, `commands.status='FAILED'`, `GET /api/commands/:id` trả FAILED.
+  - Thêm vào `tests/pd08-compose.test.yml` nếu cần biến bật lỗi giả. Không bật lỗi giả trong `docker-compose.yml` thường.
+
 ### B12 – PD-15 ra 6 bãi – sau PR PD-15 của Loan, B3
 
 - [ ] Bật đọc replica (`READ_DATABASE_URL`) cho mọi bãi trong mẫu `gen-lots.mjs`.
