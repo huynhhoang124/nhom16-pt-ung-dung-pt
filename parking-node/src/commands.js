@@ -168,13 +168,15 @@ function crashAfterCommitOnce(result) {
 }
 
 function startCommandConsumer({ url, pool, parkingId, internalKey, log = console,
-  connect = (u) => amqp.connect(u, { timeout: 2000 }), retryMs = 5000,
+  connect = (u) => amqp.connect(u, { timeout: 2000 }), retryMs = 5000, timers = { setTimeout, clearTimeout },
   processCommand = makeCommandProcessor({ pool, parkingId, internalKey }), afterCommit = crashAfterCommitOnce, retryOrDead }) {
   const connectAny = makeConnector(url, connect);
   let stopped = false;
   let state;
   let wake;
   let retryTimer;
+  const initialRetryMs = Math.min(60000, Math.max(1, retryMs));
+  let reconnectMs = initialRetryMs;
   const end = (s) => {
     if (s.dead) return;
     s.dead = true;
@@ -205,9 +207,12 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
               continue;
             }
           } else {
+            // A missing required queue emits channel.error as well as rejecting checkQueue.
+            // Install listeners first so that setup failure enters the reconnect loop.
+            ch.on('error', () => end(s)); ch.on('close', () => end(s));
             await ch.checkQueue(queue); // Topology owned by definitions/policy, not redeclared here.
           }
-          ch.on('error', () => end(s)); ch.on('close', () => end(s));
+          if (optional) { ch.on('error', () => end(s)); ch.on('close', () => end(s)); }
           const entry = { ch }; s.channels.push(entry);
           await ch.prefetch(prefetch);
           if (stopped) { end(s); break; }
@@ -236,19 +241,26 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
           entry.tag = consumerTag;
           log.info?.('command consumer ready', { parkingId, queue, consumerTag, prefetch });
         }
+        // A TCP connection alone is insufficient: queue/channel/consumer setup must succeed.
+        if (!s.dead && !stopped) reconnectMs = initialRetryMs;
         await closed;
       } catch (e) {
         log.error('command consumer reconnect', { parkingId, error: e.message });
         if (s) end(s);
       }
       if (s) await s.tail;
-      if (!stopped) await new Promise((r) => { wake = r; retryTimer = setTimeout(r, retryMs); });
-      wake = undefined;
+      if (!stopped) {
+        await new Promise((resolve) => {
+          wake = () => { retryTimer = undefined; wake = undefined; resolve(); };
+          retryTimer = timers.setTimeout(wake, reconnectMs);
+        });
+        reconnectMs = Math.min(60000, reconnectMs * 2);
+      }
     }
   })();
   return {
     async stop() {
-      stopped = true; clearTimeout(retryTimer); wake?.();
+      stopped = true; timers.clearTimeout(retryTimer); wake?.();
       const s = state;
       if (s && !s.dead) {
         for (const { ch, tag } of s.channels ?? []) if (tag) await ch.cancel(tag).catch(() => {});

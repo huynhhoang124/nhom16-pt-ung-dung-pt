@@ -12,9 +12,9 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: "**/package-lock.json" }
       # aggregator-service/test dùng lại code parking-node nên cài parking-node trước
-      - run: npm ci && npm test
+      - run: npm ci && node --test --test-concurrency=2 test/*.test.js
         working-directory: parking-node
-      - run: npm ci && npm test
+      - run: npm ci && node --test --test-concurrency=2 test/*.test.js
         working-directory: aggregator-service
       - run: npm ci && npm test
         working-directory: notification-service
