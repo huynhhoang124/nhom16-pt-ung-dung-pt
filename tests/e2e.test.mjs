@@ -313,7 +313,8 @@ test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lạ
     if (!cluster) assert.ok(Number(sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL')) >= 1);
     else await until('outbox gửi hết qua nút khác khi rabbitmq còn tắt', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 30_000);
   } finally {
-    compose('start rabbitmq');
+    // Chờ RabbitMQ khởi động và vượt qua healthcheck trước test kế tiếp.
+    compose('up -d --wait rabbitmq');
   }
   await until('outbox gửi hết', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 90_000);
 });
