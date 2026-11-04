@@ -96,7 +96,7 @@ function makeSagas({ pool, reg, timeoutMs = () => 3000 }) {
     let done = 0;
     for (const row of rows) {
       if (!isActive()) break;
-      await compensate({ id: row.id, userId: row.user_id, status: row.status, steps: row.steps }, fencingToken ? { fencingToken } : undefined);
+      await compensate({ id: row.id, userId: row.user_id, status: row.status, steps: row.steps }, fencingToken ? { fencingToken, job: 'reconcile' } : undefined);
       done++;
     }
     return done;

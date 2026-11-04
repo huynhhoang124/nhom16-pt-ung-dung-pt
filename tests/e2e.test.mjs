@@ -19,7 +19,7 @@ const AGG = process.env.AGGREGATOR_URL ?? 'http://localhost:8000';
 const AGG2 = process.env.AGGREGATOR_2_URL ?? 'http://localhost:8010';
 const SCALE = process.env.SCALE === '1';
 const PARKING_IDS = SCALE ? ['A', 'B', 'C', 'D', 'E', 'F'] : ['A', 'B', 'C'];
-const NODE = Object.fromEntries(['A', 'B', 'C', 'D', 'E', 'F'].map((id, index) => [id, `http://localhost:${8001 + index}`]));
+const NODE = Object.fromEntries(['A', 'B', 'C', 'D', 'E', 'F'].map((id, index) => [id, `http://localhost:${Number(process.env.PARKING_BASE_PORT ?? 8001) + index}`]));
 const COMPOSE = SCALE
   ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord'
   : 'docker compose';
@@ -313,8 +313,17 @@ test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lạ
     if (!cluster) assert.ok(Number(sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL')) >= 1);
     else await until('outbox gửi hết qua nút khác khi rabbitmq còn tắt', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 30_000);
   } finally {
-    // Chờ RabbitMQ khởi động và vượt qua healthcheck trước test kế tiếp.
-    compose('up -d --wait rabbitmq');
+    compose('start rabbitmq');
+
+    // Chờ RabbitMQ primary thực sự sẵn sàng trước khi test tiếp theo kết nối.
+    await until('RabbitMQ primary sẵn sàng nhận kết nối', () => {
+      try {
+        compose('exec -T rabbitmq rabbitmq-diagnostics -q check_port_connectivity');
+        return true;
+      } catch {
+        return false;
+      }
+    }, 60_000);
   }
   await until('outbox gửi hết', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 90_000);
 });
@@ -712,16 +721,28 @@ test('TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> 
 );
 
 // --- PD-10: Bầu Leader Aggregator & Fencing Token (COORD=1 node --test tests/e2e.test.mjs) ---
+// aggregator-2 đã chạy sẵn (HA=1) thì giữ nguyên sau test; chỉ tắt nếu chính test bật nó,
+// nếu không TC43, TC44 chạy sau sẽ thiếu bản thứ 2.
+// PD-19: 2 bản vùng Nam cũng tranh leader; tạm dừng để test chỉ có 2 bản vùng Bắc.
+const running = (svc) => compose(`--profile ha ps --status running -q ${svc}`) !== '';
+async function withAgg2(fn) {
+  const wasRunning = running('aggregator-2');
+  if (SCALE) compose('stop aggregator-nam-1 aggregator-nam-2');
+  if (!wasRunning) compose('--profile ha up -d aggregator-2');
+  try {
+    await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
+    await fn();
+  } finally {
+    if (SCALE) compose('start aggregator-nam-1 aggregator-nam-2');
+    if (!wasRunning) compose('--profile ha stop aggregator-2');
+  }
+}
+const leaders = async () => [(await agg('/api/leader')).body?.isLeader, (await agg2('/api/leader')).body?.isLeader].filter(Boolean).length;
 test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm leader mới trong <= 7s, metric = 1',
   { ...T, skip: !process.env.COORD },
-  async () => {
+  () => withAgg2(async () => {
+    let stopped = null;
     try {
-      // PD-19: 2 bản vùng Nam cũng tranh leader; tạm dừng để test chỉ có 2 bản vùng Bắc
-      if (SCALE) compose('stop aggregator-nam-1 aggregator-nam-2');
-      // 1. Khởi động bản Aggregator thứ 2
-      compose('--profile ha up -d aggregator-2');
-      await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
-
       // 2. Xác định bản nào đang là Leader
       await until('Có ít nhất một bản là Leader', async () => {
         const l1 = (await agg('/api/leader')).body?.isLeader;
@@ -738,6 +759,7 @@ test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm l
 
       // 3. Tắt bản đang là Leader
       compose(`stop ${leaderName}`);
+      stopped = leaderName;
 
       // 4. Chờ bản follower lên làm leader mới trong <= 7s (lease TTL 5s hết hạn trên etcd)
       const start = Date.now();
@@ -755,23 +777,14 @@ test('TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm l
 
       console.log('TC65 - PASS: Chuyển giao Leader thành công khi Leader cũ dừng');
     } finally {
-      if (SCALE) compose('start aggregator-nam-1 aggregator-nam-2');
-      compose('start aggregator');
-      compose('--profile ha stop aggregator-2');
+      if (stopped) compose(`start ${stopped}`);
     }
-  }
+  }),
 );
 
 test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token cũ -> bị node từ chối STALE_LEADER, metric tăng',
   { ...T, skip: !process.env.COORD },
-  async () => {
-    try {
-      // PD-19: 2 bản vùng Nam cũng tranh leader; tạm dừng để test chỉ có 2 bản vùng Bắc
-      if (SCALE) compose('stop aggregator-nam-1 aggregator-nam-2');
-      // 1. Khởi động bản Aggregator thứ 2
-      compose('--profile ha up -d aggregator-2');
-      await until('Aggregator-2 sẵn sàng', async () => (await agg2('/health')).status === 200, 15_000);
-
+  () => withAgg2(async () => {
       // Đảm bảo aggregator (bản 1) là leader
       let l1 = (await agg('/api/leader')).body;
       if (!l1?.isLeader) {
@@ -814,12 +827,12 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
       const nodeMetrics = await (await fetch(NODE.A + '/metrics')).text();
       assert.match(nodeMetrics, /fencing_rejected_total/);
 
+      // 7. Hết pause, leader cũ "tỉnh lại" phải tự thôi làm leader: chỉ còn đúng 1 leader
+      await until('Hết pause chỉ còn 1 leader', async () => (await agg('/api/leader')).body?.isLeader === false, 20_000);
+      assert.equal(await leaders(), 1, 'sau khi leader cũ tỉnh lại chỉ được còn 1 leader');
+
       console.log('TC66 - PASS: Node từ chối lệnh từ Leader cũ do Fencing Token cũ, bảo vệ chống split-brain');
-    } finally {
-      if (SCALE) compose('start aggregator-nam-1 aggregator-nam-2');
-      compose('--profile ha stop aggregator-2');
-    }
-  }
+  }),
 );
 
 // TC68 -> TC69 dùng chung trạng thái sau failover; TC69 (hoặc TC68 lỗi) trả bãi A về db-a, epoch 1

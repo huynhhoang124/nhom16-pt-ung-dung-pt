@@ -1,3 +1,4 @@
+const hlc = require('./hlc');
 const { createHash, randomUUID } = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -56,6 +57,12 @@ function decodeCommand(m, parkingId, internalKey) {
   if (META.some((k) => body[k] !== undefined && (k === 'fencingToken'
     ? !((Number.isSafeInteger(body[k]) && body[k] >= 0) || (typeof body[k] === 'string' && /^\d{1,20}$/.test(body[k])))
     : !str(body[k], 512)))) throw new InvalidCommand('INVALID_METADATA');
+  if (
+    body.hlc !== undefined
+    && !/^\d{13}-\d{4}$/.test(body.hlc)
+  ) {
+    throw new InvalidCommand('INVALID_HLC');
+  }
   return { ...body, messageId: p.messageId, correlationId: p.correlationId, replyTo: p.replyTo, expiration: p.expiration };
 }
 
@@ -105,7 +112,20 @@ async function epochError(pool, c) {
 function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now }) {
   return async (m) => {
     const env = decodeCommand(m, parkingId, internalKey);
-    const hash = createHash('sha256').update(canonical({ type: env.type, parkingId, actor: env.actor, payload: env.payload })).digest('hex');
+
+    // Cập nhật HLC ngay khi nhận lệnh, trước khi phát sinh sự kiện mới.
+    if (env.hlc !== undefined) {
+      hlc.update(env.hlc);
+    }
+
+    const hash = createHash('sha256')
+    .update(canonical({
+      type: env.type,
+      parkingId: env.parkingId,
+      actor: env.actor,
+      payload: env.payload,
+    }))
+    .digest('hex');
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
@@ -139,7 +159,14 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         out.body = JSON.parse(JSON.stringify(out.body));
         await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
       }
-      const metadata = Object.fromEntries(META.filter((k) => env[k] !== undefined).map((k) => [k, env[k]]));
+      const metadata = Object.fromEntries(
+        META
+          .filter((k) => k !== 'hlc' && env[k] !== undefined)
+          .map((k) => [k, env[k]])
+      );
+
+      // Phản hồi là thông điệp mới của Node, nên dùng timestamp mới.
+      metadata.hlc = hlc.now();
       const payload = { schemaVersion: 1, type: 'COMMAND_RESULT', commandType: env.type, parkingId, commandId: env.messageId,
         actor: env.actor, statusCode: out.code, result: out.body, ...metadata };
       const properties = { messageId: randomUUID(), correlationId: env.correlationId, type: 'COMMAND_RESULT',
@@ -168,13 +195,15 @@ function crashAfterCommitOnce(result) {
 }
 
 function startCommandConsumer({ url, pool, parkingId, internalKey, log = console,
-  connect = (u) => amqp.connect(u, { timeout: 2000 }), retryMs = 5000,
+  connect = (u) => amqp.connect(u, { timeout: 2000 }), retryMs = 5000, timers = { setTimeout, clearTimeout },
   processCommand = makeCommandProcessor({ pool, parkingId, internalKey }), afterCommit = crashAfterCommitOnce, retryOrDead }) {
   const connectAny = makeConnector(url, connect);
   let stopped = false;
   let state;
   let wake;
   let retryTimer;
+  const initialRetryMs = Math.min(60000, Math.max(1, retryMs));
+  let reconnectMs = initialRetryMs;
   const end = (s) => {
     if (s.dead) return;
     s.dead = true;
@@ -205,9 +234,12 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
               continue;
             }
           } else {
+            // A missing required queue emits channel.error as well as rejecting checkQueue.
+            // Install listeners first so that setup failure enters the reconnect loop.
+            ch.on('error', () => end(s)); ch.on('close', () => end(s));
             await ch.checkQueue(queue); // Topology owned by definitions/policy, not redeclared here.
           }
-          ch.on('error', () => end(s)); ch.on('close', () => end(s));
+          if (optional) { ch.on('error', () => end(s)); ch.on('close', () => end(s)); }
           const entry = { ch }; s.channels.push(entry);
           await ch.prefetch(prefetch);
           if (stopped) { end(s); break; }
@@ -236,19 +268,26 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
           entry.tag = consumerTag;
           log.info?.('command consumer ready', { parkingId, queue, consumerTag, prefetch });
         }
+        // A TCP connection alone is insufficient: queue/channel/consumer setup must succeed.
+        if (!s.dead && !stopped) reconnectMs = initialRetryMs;
         await closed;
       } catch (e) {
         log.error('command consumer reconnect', { parkingId, error: e.message });
         if (s) end(s);
       }
       if (s) await s.tail;
-      if (!stopped) await new Promise((r) => { wake = r; retryTimer = setTimeout(r, retryMs); });
-      wake = undefined;
+      if (!stopped) {
+        await new Promise((resolve) => {
+          wake = () => { retryTimer = undefined; wake = undefined; resolve(); };
+          retryTimer = timers.setTimeout(wake, reconnectMs);
+        });
+        reconnectMs = Math.min(60000, reconnectMs * 2);
+      }
     }
   })();
   return {
     async stop() {
-      stopped = true; clearTimeout(retryTimer); wake?.();
+      stopped = true; timers.clearTimeout(retryTimer); wake?.();
       const s = state;
       if (s && !s.dead) {
         for (const { ch, tag } of s.channels ?? []) if (tag) await ch.cancel(tag).catch(() => {});

@@ -7,7 +7,7 @@
 // Circuit breaker (PT-04): lỗi của request thật cũng cộng vào `fails`. Đủ ngưỡng thì "mở mạch" (OFFLINE) ngay,
 // request sau bị từ chối tức thì thay vì chờ timeout. Health check định kỳ là phép thử "nửa mở":
 // thành công thì "đóng mạch" (ONLINE) và đối soát.
-
+const hlc = require('./hlc');
 const dns = require('node:dns');
 const { requestId } = require('./log');
 
@@ -89,14 +89,16 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   };
 
   // Timeout dùng AbortSignal.timeout: bộ đếm của runtime, không phụ thuộc giờ hệ thống bị chỉnh.
+  // job: chỉ việc của leader (đối soát, khôi phục saga) mới mang fencing token. Request của người dùng không gắn:
+  // gắn vào thì mọi lệnh ghi phải xếp hàng trên dòng `fencing` ở node và người dùng có thể nhận 409.
   // fencingToken: việc của leader (khôi phục saga) truyền token lúc lên leader, để vẫn gửi token đó sau khi mất quyền
   // và node từ chối khi đã thấy token mới hơn; không truyền thì lấy token hiện tại.
   const raw = (n, path, { method = 'GET', body, ms, job, fencingToken } = {}) => {
     const effectiveMs = ms ?? getTimeout();
-    const token = fencingToken ?? leader?.getToken?.();
+    const token = job ? (fencingToken ?? leader?.getToken?.()) : null;
     const fencingHeaders = token ? {
       'x-fencing-token': String(token),
-      'x-fencing-job': job || 'reconcile',
+      'x-fencing-job': job,
     } : {};
 
     return fetch((n.target ?? n.url) + path, {
@@ -107,6 +109,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
         'x-internal-key': internalKey,
         ...(requestId() && { 'x-request-id': requestId() }),
         ...fencingHeaders,
+        ...(method !== 'GET' && { 'x-hlc': hlc.now() }),
       },
       body: body && JSON.stringify(body),
       signal: AbortSignal.timeout(effectiveMs),

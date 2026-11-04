@@ -1,0 +1,4 @@
+services:
+  parking-d:
+    environment:
+      CLOCK_SKEW_MS: "30000"

@@ -16,6 +16,7 @@ function makeLeaderElector({
   hostname = os.hostname(),
   leaseTtlS = 5,
   log = console,
+  client: injectedClient = null,   // unit test truyền client etcd giả
 } = {}) {
   let leader = false;
   let fencingToken = null;
@@ -27,6 +28,7 @@ function makeLeaderElector({
   let watcher = null;
   let campaignTimer = null;
   let safetyInterval = null;
+  let pauseTimer = null;
 
   function isLeader() {
     return leader;
@@ -70,7 +72,7 @@ function makeLeaderElector({
   }
 
   const hosts = etcdEndpoints.split(',').map((s) => s.trim()).filter(Boolean);
-  const client = new Etcd3({ hosts });
+  const client = injectedClient ?? new Etcd3({ hosts });
 
   const payload = JSON.stringify({
     instanceId,
@@ -166,7 +168,10 @@ function makeLeaderElector({
     }
   }
 
-  // Phục vụ kiểm thử TC66: Giả lập leader bị pause/treo (ngắt keepalive, giữ token cũ trong RAM)
+  // Phục vụ kiểm thử TC66: Giả lập leader bị pause/treo (ngắt keepalive, giữ token cũ trong RAM).
+  // Trong lúc pause bản này vẫn tưởng mình là leader (như process bị treo); hết pause thì "tỉnh lại",
+  // biết lease đã mất và thôi làm leader. Không làm bước này thì sự kiện 'lost' bị bỏ qua
+  // (activeLease đã null) và sau test còn 2 bản cùng isLeader = true.
   async function simulatePause(durationMs = 15000) {
     if (!leader || !activeLease) return { ok: false, message: 'Not current leader' };
     log.info?.(`[leader-election] Instance ${instanceId} giả lập pause leader ${durationMs}ms`);
@@ -174,6 +179,11 @@ function makeLeaderElector({
     activeLease.release();
     activeLease = null;
     demotedUntil = Date.now() + durationMs;
+    if (pauseTimer) clearTimeout(pauseTimer);
+    pauseTimer = setTimeout(() => {
+      pauseTimer = null;
+      if (!stopped && !activeLease) handleLoseLeadership();
+    }, durationMs);
     return { ok: true, durationMs, oldToken };
   }
 
@@ -212,6 +222,10 @@ function makeLeaderElector({
     if (safetyInterval) {
       clearInterval(safetyInterval);
       safetyInterval = null;
+    }
+    if (pauseTimer) {
+      clearTimeout(pauseTimer);
+      pauseTimer = null;
     }
     if (watcher) {
       try { await watcher.cancel(); } catch { /* ignore */ }

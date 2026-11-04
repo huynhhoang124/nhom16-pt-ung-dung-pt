@@ -42,3 +42,19 @@ test('TC13 đối soát: cache cũ được cập nhật theo DB bãi; chạy l�
   assert.deepEqual(pushed, ['A01', 'A02', 'A03']);
   assert.equal(await reconcile(agg.reg, agg.cache, n), 0);
 });
+
+test('applyEvent lưu HLC của sự kiện nhận được', () => {
+  const cache = new Map();
+
+  const event = {
+    ...ev('A04', 1),
+    hlc: '1800000000000-0007',
+  };
+
+  assert.equal(applyEvent(cache, event), true);
+  assert.deepEqual(cache.get('A:A04'), {
+    status: 'RESERVED',
+    version: 1,
+    hlc: '1800000000000-0007',
+  });
+});
