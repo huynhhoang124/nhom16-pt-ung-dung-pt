@@ -19,12 +19,10 @@ const PARKINGS = [
     nodes: [
       {
         service: 'parking-a',
-        container: 'nhom16-parking-parking-a-1',
         url: 'http://localhost:8001/health',
       },
       {
         service: 'parking-a-2',
-        container: 'nhom16-parking-parking-a-2-1',
         url: 'http://localhost:8101/health',
       },
     ],
@@ -36,12 +34,10 @@ const PARKINGS = [
     nodes: [
       {
         service: 'parking-b',
-        container: 'nhom16-parking-parking-b-1',
         url: 'http://localhost:8002/health',
       },
       {
         service: 'parking-b-2',
-        container: 'nhom16-parking-parking-b-2-1',
         url: 'http://localhost:8102/health',
       },
     ],
@@ -53,12 +49,10 @@ const PARKINGS = [
     nodes: [
       {
         service: 'parking-c',
-        container: 'nhom16-parking-parking-c-1',
         url: 'http://localhost:8003/health',
       },
       {
         service: 'parking-c-2',
-        container: 'nhom16-parking-parking-c-2-1',
         url: 'http://localhost:8103/health',
       },
     ],
@@ -84,12 +78,39 @@ function compose(...args) {
   );
 }
 
-function inspect(container) {
-  return JSON.parse(docker('inspect', container))[0];
+function getContainerId(node) {
+  // Nếu đã lấy ID trước đó thì tái sử dụng.
+  if (node.containerId) {
+    return node.containerId;
+  }
+
+  // Tìm container đang chạy theo tên service.
+  const result = compose('ps', '-q', node.service);
+
+  const ids = result
+    .split(/\r?\n/)
+    .filter(Boolean);
+
+  assert.equal(
+    ids.length,
+    1,
+    `${node.service}: cần đúng 1 container đang chạy, tìm thấy ${ids.length}`
+  );
+
+  // Lưu ID để có thể docker start lại sau khi stop.
+  node.containerId = ids[0];
+
+  return node.containerId;
+}
+
+function inspect(node) {
+  return JSON.parse(
+    docker('inspect', getContainerId(node))
+  )[0];
 }
 
 function getNetwork(node) {
-  const networks = inspect(node.container).NetworkSettings.Networks;
+  const networks = inspect(node).NetworkSettings.Networks;
 
   // Use the Compose default network; do not hardcode container IPs.
   const entry = Object.entries(networks).find(([name]) =>
@@ -159,13 +180,14 @@ async function until(label, callback, timeout = 30_000) {
 
 function databaseTarget(node) {
   const connectionString = docker(
-    'exec', node.container,
-    'printenv', 'DATABASE_URL'
+    'exec',
+    getContainerId(node),
+    'printenv',
+    'DATABASE_URL'
   );
 
   const db = new URL(connectionString);
 
-  // Compare DB identity without exposing credentials.
   return `${db.hostname}:${db.port || 5432}${db.pathname}`;
 }
 
@@ -238,7 +260,7 @@ async function verifyInitialState(parking) {
   );
 
   const standby = parking.nodes.find(
-    node => node.container !== owner.container
+    node => node.service !== owner.service
   );
 
   return { owner, standby };
@@ -258,7 +280,7 @@ async function verifyFailover(parking) {
 
   // Restoration is attempted even if stop/failover assertions fail.
   try {
-    docker('stop', '--time', '5', owner.container);
+    docker('stop', '--time', '5', getContainerId(owner));
 
     await until(
       `bãi ${parking.id}: standby nhận advisory lock`,
@@ -288,7 +310,7 @@ async function verifyFailover(parking) {
   } finally {
     // Starting a running container is harmless; this also covers
     // a stop command that succeeded before reporting an error.
-    docker('start', owner.container);
+    docker('start', getContainerId(owner));
 
     await until(
       `bãi ${parking.id}: owner phục hồi HTTP`,
