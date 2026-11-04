@@ -5,11 +5,12 @@ const { mountSessions } = require('./sessions-routes');
 const { log, withRequestId } = require('./log');
 const { makeSagas } = require('./saga');
 const { mountMetrics } = require('./metrics');
-const { context, propagation } = require('@opentelemetry/api');
+const { context, propagation, SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
 
 const ACTIONS = new Set(['enter', 'exit', 'maintenance', 'unmaintenance']);
 
 const { makeUserShards } = require('./ring');
+const commandTracer = trace.getTracer('aggregator/commands');
 function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 'http', reserveTimeoutMs = 3000, config, leader,
   zone = process.env.ZONE ?? 'bac', peerUrl = process.env.REGIONAL_PEER_URL, users = makeUserShards({ agg: pool }) }) {
   const app = express();
@@ -37,7 +38,14 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
     const traceparent = carrier.traceparent ?? incomingTraceparent;
     if (traceparent && !TRACEPARENT.test(traceparent)) return res.status(400).json({ error: 'INVALID_TRACEPARENT' });
     try {
-      const out = await commandFlow.execute({ parkingId: req.params.id, type, user: req.user, payload, key, traceparent });
+      const out = await commandTracer.startActiveSpan('command.publish', {
+        kind: SpanKind.PRODUCER,
+        attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': 'parking.commands', 'parking.id': req.params.id },
+      }, async (span) => {
+        try { return await commandFlow.execute({ parkingId: req.params.id, type, user: req.user, payload, key, traceparent }); }
+        catch (error) { span.recordException(error); span.setStatus({ code: SpanStatusCode.ERROR, message: error.message }); throw error; }
+        finally { span.end(); }
+      });
       if (out.code === 202) res.set('location', `/api/commands/${encodeURIComponent(out.body.commandId)}`);
       if (out.body.error === 'QUEUE_FULL') res.set('Retry-After', '1');
       res.status(out.code).json(out.body);

@@ -9,6 +9,7 @@ const { log } = require('./log');
 const { startCommandConsumer, makeCommandProcessor, cleanupInbox } = require('./commands');
 const { makeReplyPublisher, makeReplyRelay } = require('./command-replies');
 const { makeRelayLagMetric } = require('./metrics');
+const { context, propagation, SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
 
 const env = (k, d) => process.env[k] ?? d;
 const parkingId = env('PARKING_ID', 'A');
@@ -112,9 +113,22 @@ async function main() {
 
   const replyPublisher = makeReplyPublisher(url);
   const replyOnce = makeReplyRelay(pool, replyPublisher.publish);
+  const commandProcessor = makeCommandProcessor({ pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
+    reservationMinutes: Number(env('RESERVATION_MINUTES', 15)), qrSecret: env('QR_SECRET', `${env('INTERNAL_KEY', 'dev')}:qr:${parkingId}`) });
+  const commandTracer = trace.getTracer('parking-node/commands');
   const consumer = startCommandConsumer({ url, pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'), log,
-    processCommand: makeCommandProcessor({ pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
-      reservationMinutes: Number(env('RESERVATION_MINUTES', 15)), qrSecret: env('QR_SECRET', `${env('INTERNAL_KEY', 'dev')}:qr:${parkingId}`) }),
+    processCommand: async (message) => {
+      let traceparent = message.properties?.headers?.traceparent;
+      try { traceparent ??= JSON.parse(message.content.toString()).traceparent; } catch { /* processor validates envelope */ }
+      const parent = traceparent ? propagation.extract(context.active(), { traceparent }) : context.active();
+      return commandTracer.startActiveSpan('command.receive', { kind: SpanKind.CONSUMER,
+        attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': message.fields?.routingKey ?? `cmd.${parkingId}` },
+      }, parent, async (span) => {
+        try { return await commandProcessor(message); }
+        catch (error) { span.recordException(error); span.setStatus({ code: SpanStatusCode.ERROR, message: error.message }); throw error; }
+        finally { span.end(); }
+      });
+    },
   });
   const jobs = [];
   function every(fn, ms) {

@@ -1,4 +1,22 @@
 services:
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    profiles: [obs]
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.123.0
+    profiles: [obs]
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./observability/otel-collector.yml:/etc/otelcol-contrib/config.yaml:ro
+    depends_on:
+      - jaeger
+
   parking-a:
     environment:
       OTEL_SDK_DISABLED: "false"
@@ -14,9 +32,11 @@ services:
   aggregator:
     environment:
       OTEL_SDK_DISABLED: "false"
+      COMMAND_MODE: broker
   aggregator-2:
     environment:
       OTEL_SDK_DISABLED: "false"
+      COMMAND_MODE: broker
   notification:
     environment:
       OTEL_SDK_DISABLED: "false"
