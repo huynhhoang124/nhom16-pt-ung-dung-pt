@@ -73,8 +73,8 @@ function spanTags(span) {
 }
 
 async function loadTrace(traceId) {
-  const query = new URLSearchParams({ service: 'aggregator', lookback: '1h', limit: '100' });
-  const response = await fetch(`${jaeger}/api/traces?${query}`);
+  // Tra thẳng theo trace ID: tìm theo service chỉ lấy N trace mới nhất, trace /health có thể đẩy trace cần tìm ra ngoài.
+  const response = await fetch(`${jaeger}/api/traces/${traceId}`);
   if (!response.ok) return null;
   const body = await response.json();
   return body.data?.filter((trace) => trace.traceID === traceId).flatMap((trace) => trace.spans.map((span) => ({
