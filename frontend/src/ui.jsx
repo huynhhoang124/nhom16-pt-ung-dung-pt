@@ -1,5 +1,6 @@
 // Thành phần giao diện dùng chung theo thiết kế "Biển báo bãi đỗ": biểu tượng, biển số, chip trạng thái.
 // Trạng thái luôn có màu + chữ + biểu tượng (không chỉ dựa vào màu).
+import { useEffect, useState } from 'react';
 import { formatPlate, RESERVATION_LABEL, STATUS_LABEL } from './api.js';
 
 export const Icon = ({ name, spin = false, label }) => (
@@ -49,4 +50,31 @@ export function Meter({ available, total, off = false }) {
   return <div className={cls}><span style={{ width: `${pct}%` }} /></div>;
 }
 
-export const clock = (iso) => (iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour12: false }) : '');
+// Hộp xác nhận cho thao tác khó hoàn tác (gỡ ô, huỷ đặt chỗ...). Esc / bấm nền = huỷ; nút huỷ được focus sẵn.
+export function ConfirmDialog({ ask, onClose }) {
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    if (!ask) return undefined;
+    const esc = (e) => e.key === 'Escape' && !busy && onClose();
+    window.addEventListener('keydown', esc);
+    return () => window.removeEventListener('keydown', esc);
+  }, [ask, busy, onClose]);
+  if (!ask) return null;
+  const run = async () => { setBusy(true); try { await ask.run(); } finally { setBusy(false); onClose(); } };
+  return (
+    <div className="dialog-backdrop" onClick={() => !busy && onClose()}>
+      <div className="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" onClick={(e) => e.stopPropagation()}>
+        <h3 id="confirm-title">{ask.title}</h3>
+        {ask.body && <div className="muted">{ask.body}</div>}
+        <div className="dialog-actions">
+          <button autoFocus onClick={onClose} disabled={busy}>Không</button>
+          <button className={ask.danger ? 'danger solid' : 'primary'} onClick={run} disabled={busy}>
+            {busy && <Icon name="loader" spin />}{ask.label}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export const clock =(iso) => (iso ? new Date(iso).toLocaleTimeString('vi-VN', { hour12: false }) : '');

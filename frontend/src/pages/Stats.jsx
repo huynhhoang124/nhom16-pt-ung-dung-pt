@@ -3,6 +3,8 @@ import { api, message, useLive } from '../api.js';
 import { Icon, Meter } from '../ui.jsx';
 
 const money = (v) => `${v.toLocaleString('vi-VN')} đ`;
+// Một cách ghi thời lượng cho cả trang: "45 phút" / "2 giờ 05 phút".
+const dur = (m) => (m < 60 ? `${m} phút` : `${Math.floor(m / 60)} giờ ${String(m % 60).padStart(2, '0')} phút`);
 const dateInput = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 
 // UX-02: thống kê gom từ các bãi (ADMIN: mọi bãi; STAFF: bãi mình). Bãi mất kết nối -> số liệu một phần, ghi rõ.
@@ -45,7 +47,7 @@ export default function Stats() {
           <div className="stats" style={{ marginTop: 'var(--space-4)' }}>
             <div className="card"><div className="kicker">Lượt xe</div><div className="big">{t.sessions}</div></div>
             <div className="card"><div className="kicker">Doanh thu (đã thu)</div><div className="big">{t.revenue.toLocaleString('vi-VN')}<span className="muted"> đ</span></div></div>
-            <div className="card"><div className="kicker">Thời gian gửi TB</div><div className="big">{Math.floor(t.avgMinutes / 60)}h{String(t.avgMinutes % 60).padStart(2, '0')}</div></div>
+            <div className="card"><div className="kicker">Thời gian gửi TB</div><div className="big" style={{ fontSize: 28 }}>{dur(t.avgMinutes)}</div></div>
             <div className="card">
               <div className="kicker">Đang lấp đầy</div>
               <div className="big">{t.total ? Math.round((100 * t.occupied) / t.total) : 0}%</div>
@@ -54,8 +56,15 @@ export default function Stats() {
             </div>
           </div>
 
-          <h3 style={{ marginTop: 'var(--space-6)' }}>Lượt xe vào theo giờ</h3>
-          <div className="bars" role="img" aria-label="Biểu đồ lượt xe vào theo giờ trong ngày">
+          <div className="row" style={{ marginTop: 'var(--space-6)', marginBottom: 'var(--space-3)' }}>
+            <h3 style={{ margin: 0 }}>Lượt xe vào theo giờ</h3>
+            <span className="muted small">
+              {Math.max(...t.byHour) > 0
+                ? <>Cao điểm <b className="mono">{t.byHour.indexOf(Math.max(...t.byHour))}:00–{t.byHour.indexOf(Math.max(...t.byHour)) + 1}:00</b> · {Math.max(...t.byHour)} lượt (cột cao nhất). Rê chuột lên cột để xem số lượt.</>
+                : 'Chưa có lượt xe nào trong khoảng ngày này.'}
+            </span>
+          </div>
+          <div className="bars" role="img" aria-label={`Biểu đồ lượt xe vào theo giờ, cao nhất ${Math.max(...t.byHour)} lượt lúc ${t.byHour.indexOf(Math.max(...t.byHour))} giờ`}>
             {t.byHour.map((n, h) => (
               <div key={h} className="barcol" title={`${h}:00–${h + 1}:00: ${n} lượt`}>
                 <div className="hbar" style={{ height: `${(100 * n) / peak}%` }} />
@@ -64,19 +73,21 @@ export default function Stats() {
             ))}
           </div>
 
+          {data.parkings.length + data.unavailable.length > 1 && <>
           <h3 style={{ marginTop: 'var(--space-6)' }}>Theo bãi</h3>
           <div className="scroll"><table>
             <thead><tr><th>Bãi</th><th className="tnum">Lượt xe</th><th className="tnum">Doanh thu</th><th className="tnum">TG gửi TB</th><th className="tnum">Lấp đầy</th></tr></thead>
             <tbody>
               {data.parkings.map((p) => (
                 <tr key={p.parkingId}>
-                  <td>{p.parkingId}</td><td className="tnum">{p.sessions}</td><td className="tnum">{money(p.revenue)}</td><td className="tnum">{p.avgMinutes} phút</td>
+                  <td>{p.parkingId}</td><td className="tnum">{p.sessions}</td><td className="tnum">{money(p.revenue)}</td><td className="tnum">{dur(p.avgMinutes)}</td>
                   <td className="tnum">{p.occupied}/{p.total}</td>
                 </tr>
               ))}
               {data.unavailable.map((id) => <tr key={id}><td>{id}</td><td colSpan="4" className="muted">Mất kết nối, không có số liệu</td></tr>)}
             </tbody>
           </table></div>
+          </>}
           <div className="banner info" style={{ marginTop: 'var(--space-4)' }}><Icon name="info" /><div>Số liệu tự cập nhật khi có xe vào/ra, chậm tối đa khoảng 2 giây.</div></div>
         </>
       )}

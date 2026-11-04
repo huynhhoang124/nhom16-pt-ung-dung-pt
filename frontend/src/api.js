@@ -23,7 +23,9 @@ export async function api(path, { method = 'GET', body, headers = {}, keepSessio
     return { ok: false, status: 0, data: { error: 'NETWORK' } };
   }
   const data = await r.json().catch(() => ({}));
-  if (r.status === 401 && s && !keepSession) { session.set(null); location.reload(); }
+  // Chỉ coi là hết phiên khi Aggregator từ chối chính token (UNAUTHORIZED). 401 nghiệp vụ — vd cổng báo
+  // INVALID_QR / QR_EXPIRED — không được làm nhân viên bị đăng xuất giữa lúc xe đang chờ.
+  if (r.status === 401 && s && !keepSession && data?.error === 'UNAUTHORIZED') { session.set(null); location.reload(); }
   return { ok: r.ok, status: r.status, data };
 }
 

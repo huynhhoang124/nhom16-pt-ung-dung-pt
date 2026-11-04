@@ -1,0 +1,255 @@
+/* Giao diện thương hiệu (.theme-brand): đỏ đậm + xanh navy, nền sáng, góc bo tròn, nút viên thuốc.
+   Áp cho MỌI vai trò (người dùng, nhân viên, quản trị) và trang đăng nhập, lớp trên style.css.
+   Hầu hết thành phần đọc biến CSS nên chỉ cần đổi biến trên .theme-brand; phần dưới chỉ chỉnh hình khối. */
+@import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@600;700;800&display=swap');
+
+/* ───── Dùng chung mọi vai trò (bố cục mới thêm) ───── */
+.narrow-only { display: none; }
+@container app (max-width: 640px) {
+  .narrow-only { display: flex; }
+  .wide-only { display: none; }
+}
+.session-cards { list-style: none; margin: 0; padding: 0; flex-direction: column; gap: var(--space-3); }
+.session-card { display: flex; flex-direction: column; gap: var(--space-3); }
+.session-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); }
+.session-card dl, .booked dl { display: grid; grid-template-columns: auto 1fr; gap: 4px var(--space-3); margin: 0; font-size: var(--fs-sm); align-items: center; }
+.session-card dt, .booked dt { color: var(--muted); }
+.session-card dd, .booked dd { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.tnum-inline { font-family: var(--font-mono); }
+button.block { width: 100%; }
+.split > aside { scroll-margin-top: var(--space-4); }
+.theme-brand .split > aside { scroll-margin-top: 84px; }   /* chừa chỗ cho thanh trên dính (sticky) */
+@container app (max-width: 640px) { .theme-brand .split > aside { scroll-margin-top: 120px; } }
+.occupant { padding: var(--space-3); border: 1px solid var(--line-strong); background: var(--surface); }
+.occupant dl { display: grid; grid-template-columns: auto 1fr; gap: 6px var(--space-3); margin: 0; font-size: var(--fs-sm); align-items: center; }
+.occupant dt { color: var(--muted); }
+.occupant dd { margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.booked { display: flex; flex-direction: column; gap: var(--space-3); padding: var(--space-4); border: 1px solid var(--ok); background: var(--ok-soft); }
+.booked-head { display: flex; align-items: center; gap: var(--space-2); color: var(--ok); font-size: var(--fs-lg); }
+.booked-head .i { width: 26px; height: 26px; }
+.booked-head strong { color: var(--text); }
+.booked-actions { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.booked-actions button { flex: 1 1 160px; }
+
+/* ───── 1. Biến — sáng ───── */
+.theme-brand {
+  --bg: #f5f6fa; --card: #ffffff; --surface: #eef0f5; --text: #161a2b; --muted: #5b6275;
+  --line: #e4e7ef; --line-strong: #cfd4e0; --mark: transparent;
+  --primary: #d71f2f; --primary-hover: #b0101f; --primary-ink: #ffffff; --primary-soft: #fde9eb;
+  --accent: #14224a; --accent-soft: #e8ecf7;
+  --sign: #d71f2f;
+  --brand-grad: linear-gradient(135deg, #e3293a 0%, #c0131f 55%, #9c0d18 100%);
+  --ok: #187a3e; --ok-soft: #e3f4e9;
+  --warn: #8a5a00; --warn-soft: #fff4d6;
+  --bad: #c0131f; --bad-soft: #fde9eb;
+  --off: #626a7d; --off-soft: #eceef3;
+  --available: #e3f4e9; --available-line: #22a356;
+  --reserved: #fff1c9; --reserved-line: #e0a800;
+  --occupied: #fde3e5; --occupied-line: #d71f2f;
+  --maintenance: #eceef3; --maintenance-line: #8a91a3;
+  --asphalt: #eef0f5; --paint: #ffffff;
+  --font-head: "Montserrat", "Be Vietnam Pro", system-ui, sans-serif;
+  --r-sm: 10px; --r-md: 14px; --r-lg: 20px;
+  --shadow-1: 0 1px 2px rgb(20 34 74 / .06), 0 1px 3px rgb(20 34 74 / .05);
+  --shadow-2: 0 8px 24px rgb(20 34 74 / .08);
+  --shadow-3: 0 18px 48px rgb(20 34 74 / .16);
+  --shadow-red: 0 8px 20px rgb(215 31 47 / .28);
+  min-height: 100vh; display: flex; flex-direction: column;
+  background: var(--bg); color: var(--text);
+}
+/* ───── 1b. Biến — tối ───── */
+:root[data-theme="dark"] .theme-brand {
+  --bg: #11131b; --card: #1a1d28; --surface: #222634; --text: #eef0f6; --muted: #a2a9bc;
+  --line: #2b3042; --line-strong: #3a4056;
+  --primary: #ff4d5b; --primary-hover: #ff7480; --primary-ink: #ffffff; --primary-soft: #3a171c;
+  --accent: #a9b8ff; --accent-soft: #232a45;
+  --ok: #5fd38c; --ok-soft: #12301f; --warn: #f2c94c; --warn-soft: #33290c;
+  --bad: #ff6b75; --bad-soft: #3a171c; --off: #9aa1b3; --off-soft: #262a38;
+  --available: #14301f; --available-line: #3fbf6d; --reserved: #362c0e; --reserved-line: #f2c230;
+  --occupied: #3d1a1e; --occupied-line: #ff4d5b; --maintenance: #262a38; --maintenance-line: #8a91a3;
+  --asphalt: #171a24; --paint: #2e3446;
+  --shadow-1: 0 1px 2px rgb(0 0 0 / .4); --shadow-2: 0 0 0 1px #2b3042, 0 10px 26px rgb(0 0 0 / .45);
+  --shadow-3: 0 0 0 1px #2b3042, 0 20px 50px rgb(0 0 0 / .6); --shadow-red: 0 8px 20px rgb(255 77 91 / .25);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-brand {
+    --bg: #11131b; --card: #1a1d28; --surface: #222634; --text: #eef0f6; --muted: #a2a9bc;
+    --line: #2b3042; --line-strong: #3a4056;
+    --primary: #ff4d5b; --primary-hover: #ff7480; --primary-ink: #ffffff; --primary-soft: #3a171c;
+    --accent: #a9b8ff; --accent-soft: #232a45;
+    --ok: #5fd38c; --ok-soft: #12301f; --warn: #f2c94c; --warn-soft: #33290c;
+    --bad: #ff6b75; --bad-soft: #3a171c; --off: #9aa1b3; --off-soft: #262a38;
+    --available: #14301f; --available-line: #3fbf6d; --reserved: #362c0e; --reserved-line: #f2c230;
+    --occupied: #3d1a1e; --occupied-line: #ff4d5b; --maintenance: #262a38; --maintenance-line: #8a91a3;
+    --asphalt: #171a24; --paint: #2e3446;
+    --shadow-1: 0 1px 2px rgb(0 0 0 / .4); --shadow-2: 0 0 0 1px #2b3042, 0 10px 26px rgb(0 0 0 / .45);
+    --shadow-3: 0 0 0 1px #2b3042, 0 20px 50px rgb(0 0 0 / .6); --shadow-red: 0 8px 20px rgb(255 77 91 / .25);
+  }
+}
+
+/* ───── 2. Chữ ───── */
+.theme-brand h1, .theme-brand h2, .theme-brand h3, .theme-brand h4 { font-family: var(--font-head); font-weight: 800; letter-spacing: -.01em; }
+.theme-brand h2 { font-size: 30px; }
+.theme-brand h3 { font-size: 20px; font-weight: 700; }
+.theme-brand .kicker { color: var(--primary); letter-spacing: .1em; }
+.theme-brand main { flex: 1; width: 100%; }
+
+/* ───── 3. Nút & ô nhập ───── */
+/* Độ ưu tiên thấp (chỉ bằng thẻ button) để mọi class sẵn có — .primary, .slot, .tab, .link, .card — vẫn thắng. */
+:where(.theme-brand) button:where(:not(.slot, .tab, .card, .link)) { border-radius: var(--radius-pill); border-color: var(--line-strong); background: var(--card); transition: background .15s, box-shadow .15s, transform .15s, border-color .15s; }
+:where(.theme-brand) button:where(:not(.slot, .tab, .card, .link, .primary)):hover { background: var(--surface); }
+.theme-brand .primary { background: var(--brand-grad); border-color: transparent; color: #fff; box-shadow: var(--shadow-red); }
+.theme-brand .primary:hover { background: var(--brand-grad); filter: brightness(1.06); transform: translateY(-1px); }
+.theme-brand .primary:active { transform: none; box-shadow: none; }
+.theme-brand .primary:disabled { background: var(--surface); color: var(--muted); box-shadow: none; filter: none; transform: none; opacity: 1; border-color: var(--line-strong); }
+.theme-brand .danger { background: var(--card); border-radius: var(--radius-pill); }
+.theme-brand .danger:hover { background: var(--bad-soft); }
+.theme-brand .link { background: none; border-radius: 0; text-decoration: none; }
+.theme-brand .link:hover { background: none; text-decoration: underline; }
+.theme-brand input, .theme-brand select, .theme-brand textarea { border-radius: var(--r-sm); border-color: var(--line-strong); background: var(--card); }
+.theme-brand input:focus-visible, .theme-brand select:focus-visible, .theme-brand textarea:focus-visible { border-color: var(--primary); box-shadow: 0 0 0 4px var(--primary-soft); outline: none; }
+.theme-brand :focus-visible { outline-color: var(--primary); }
+.theme-brand .seg { border: 1px solid var(--line-strong); border-radius: var(--radius-pill); background: var(--card); padding: 3px; gap: 2px; }
+.theme-brand .seg .tab { border: 0; border-radius: var(--radius-pill); min-height: 36px; padding: 0 var(--space-4); background: none; }
+.theme-brand .seg .tab + .tab { border-left: 0; }
+.theme-brand .seg .tab:hover { background: var(--surface); }
+.theme-brand .seg .tab.active { background: var(--brand-grad); color: #fff; box-shadow: var(--shadow-red); }
+
+/* ───── 4. Thanh trên & chân trang ───── */
+.theme-brand .bar { position: sticky; top: 0; z-index: 30; background: color-mix(in srgb, var(--card) 92%, transparent); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); box-shadow: var(--shadow-1); }
+.theme-brand .brand { font-family: var(--font-head); font-weight: 800; font-size: 20px; letter-spacing: -.01em; }
+.theme-brand .brand-mark { background: var(--brand-grad); border-radius: 9px; box-shadow: var(--shadow-red); font-family: var(--font-head); font-size: 20px; }
+.theme-brand .bar nav .tab { border-radius: 0; background: none; font-weight: 600; }
+.theme-brand .bar nav .tab.active { color: var(--primary); box-shadow: inset 0 -3px 0 var(--primary); }
+.theme-brand .who .show-sm { border-radius: 50%; width: 40px; min-height: 40px; padding: 0; }
+.site-foot { background: #14224a; color: #c9d1ea; margin-top: var(--space-8); border-top: 4px solid #d71f2f; }
+.site-foot-in { max-width: 1200px; margin: 0 auto; padding: var(--space-5); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-3); font-size: var(--fs-sm); }
+.site-foot .brand { color: #fff; }
+
+/* ───── 5. Thẻ, bảng, chip ───── */
+.theme-brand .card, .theme-brand .blueprint { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-2); padding: var(--space-5); }
+.theme-brand .card::before, .theme-brand .blueprint::before { display: none; }
+.theme-brand .card.parking { transition: transform .18s, box-shadow .18s, border-color .18s; overflow: hidden; }
+.theme-brand .card.parking::after { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 4px; background: var(--brand-grad); }
+.theme-brand .card.parking:hover { transform: translateY(-3px); box-shadow: var(--shadow-3); border-color: var(--line); background: var(--card); }
+.theme-brand .card.offline::after { background: var(--off); }
+.theme-brand .lot-name { font-family: var(--font-head); font-weight: 800; font-size: 19px; }
+.theme-brand .big { color: var(--text); }
+.theme-brand .meter { border: 0; border-radius: var(--radius-pill); height: 8px; }
+.theme-brand .meter span { border-radius: var(--radius-pill); }
+.theme-brand .badge, .theme-brand .st, .theme-brand .chip { border-radius: var(--radius-pill); }
+.theme-brand .chip { border-color: var(--line-strong); }
+.theme-brand .scroll { border: 1px solid var(--line); border-radius: var(--r-md); box-shadow: var(--shadow-1); }
+.theme-brand th { font-family: var(--font-head); font-weight: 700; font-size: 12px; letter-spacing: .06em; }
+.theme-brand .plate { border-radius: 6px; }
+
+/* ───── 6. Hero trang Tổng quan ───── */
+.hero { position: relative; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-5); align-items: center;
+  padding: var(--space-6) var(--space-6); margin-bottom: var(--space-6); border-radius: var(--r-lg); background: var(--brand-grad); color: #fff; box-shadow: var(--shadow-red); }
+.hero::before, .hero::after { content: ""; position: absolute; border-radius: 50%; pointer-events: none; }
+.hero::before { width: 340px; height: 340px; right: -90px; top: -150px; background: rgb(255 255 255 / .09); }
+.hero::after { width: 220px; height: 220px; right: 200px; bottom: -150px; background: rgb(255 255 255 / .06); }
+.hero > * { position: relative; z-index: 1; }
+.hero-kicker { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-xs); font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: rgb(255 255 255 / .85); }
+.hero-kicker::before { content: ""; width: 18px; height: 2px; background: #fff; }
+.hero h2 { color: #fff; font-size: clamp(26px, 3.4vw, 38px); line-height: 1.15; margin: var(--space-2) 0 var(--space-3); max-width: 18ch; }
+.hero h2 em { font-style: normal; color: #ffe0e3; }
+.hero p { color: rgb(255 255 255 / .88); max-width: 46ch; margin: 0 0 var(--space-4); }
+.hero-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-3); }
+.theme-brand .hero-cta { background: #fff; color: #c0131f; border-color: #fff; font-weight: 700; padding: 0 var(--space-5); box-shadow: 0 8px 20px rgb(0 0 0 / .18); }
+.theme-brand .hero-cta:hover { background: #fff3f4; transform: translateY(-1px); }
+.hero-note { font-size: var(--fs-sm); color: rgb(255 255 255 / .9); }
+.hero-stats { display: grid; gap: var(--space-3); }
+.hero-stats > div { min-width: 190px; padding: var(--space-4) var(--space-5); border-radius: var(--r-md); background: rgb(255 255 255 / .12); border: 1px solid rgb(255 255 255 / .22); backdrop-filter: blur(4px); }
+.hero-stats b { display: block; font-family: var(--font-head); font-weight: 800; font-size: 34px; line-height: 1.05; }
+.hero-stats span { font-size: var(--fs-sm); color: rgb(255 255 255 / .85); }
+.section-title { display: flex; align-items: center; gap: var(--space-3); }
+.section-title::before { content: ""; width: 6px; height: 22px; border-radius: 3px; background: var(--brand-grad); }
+
+/* ───── 7. Sơ đồ chỗ đỗ ───── */
+.theme-brand .lot { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; }
+.theme-brand .grid { border-radius: var(--r-sm); overflow: hidden; }
+.theme-brand .slot { border-radius: 0; background-clip: padding-box; transition: filter .12s; }
+.theme-brand .slot:hover { filter: brightness(.97); background-image: none; }
+.theme-brand .slot.sel { outline-color: var(--accent); }
+.theme-brand .slot.sel::after { background: var(--accent); }
+.theme-brand .floor { font-family: var(--font-head); font-weight: 800; }
+.theme-brand .timeline { border-radius: 6px; overflow: hidden; border-color: var(--line-strong); }
+.theme-brand .sheet-code { font-family: var(--font-head); font-weight: 800; }
+.theme-brand .booked { border-radius: var(--r-md); }
+
+/* ───── 8. Thông báo, hộp thoại, vé QR ───── */
+.theme-brand .banner { border-radius: var(--r-md); padding: var(--space-3) var(--space-4) var(--space-3) calc(var(--space-4) + 2px); border: 1px solid color-mix(in srgb, var(--warn) 30%, transparent); overflow: hidden; }
+.theme-brand .banner::before { inset: 0 auto 0 0; width: 4px; height: auto; background: var(--warn); }
+.theme-brand .banner.bad { border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
+.theme-brand .banner.bad::before { background: var(--bad); }
+.theme-brand .cmd { border-radius: var(--r-md); }
+.theme-brand .cmd .ic { border-radius: var(--r-sm); }
+.theme-brand .cmd .track { border-radius: 0 0 var(--r-md) var(--r-md); }
+.theme-brand .toast { border-radius: var(--r-md); border-color: var(--line); }
+.theme-brand .toast .ti { border-radius: var(--r-sm); }
+.theme-brand .dialog { border-radius: var(--r-lg); border-color: var(--line); }
+.theme-brand .dialog .big { color: var(--primary); }
+.theme-brand .empty { border-radius: var(--r-lg); background: var(--card); border-color: var(--line-strong); }
+.theme-brand .skeleton { border-radius: var(--r-md); }
+.theme-brand .qr { border-radius: var(--r-sm); border-color: var(--line); }
+.theme-brand .qr-card .ticket-slot { font-family: var(--font-head); font-weight: 800; color: var(--primary); }
+.theme-brand .map { border-radius: var(--r-lg); border-color: var(--line); box-shadow: var(--shadow-2); }
+.theme-brand .map-legend { border-radius: var(--r-sm); border-color: var(--line); box-shadow: var(--shadow-1); }
+.theme-brand .steps { border-radius: var(--r-md); overflow: hidden; }
+.theme-brand .step-n { border-radius: 50%; }
+
+/* ───── 8b. Nhân viên & quản trị ───── */
+.theme-brand .danger.solid { background: var(--bad); color: #fff; border-color: transparent; box-shadow: 0 6px 16px color-mix(in srgb, var(--bad) 30%, transparent); }
+.theme-brand .occupant { border: 1px solid var(--line); border-radius: var(--r-md); background: var(--surface); }
+.theme-brand .charge { border: 1px solid color-mix(in srgb, var(--warn) 40%, transparent); border-left: 5px solid var(--reserved-line); border-radius: var(--r-md); background: var(--warn-soft); }
+.theme-brand .charge-amount { font-family: var(--font-head); font-weight: 800; color: var(--primary); }
+.theme-brand .check input { accent-color: var(--primary); }
+.theme-brand .slot-edit { border-top-color: var(--line); }
+.theme-brand .slot-edit summary { border-radius: var(--radius-pill); padding: 4px 10px; margin-left: -10px; }
+.theme-brand .slot-edit summary:hover { background: var(--surface); }
+/* Cổng */
+.theme-brand .big-btn { font-family: var(--font-head); font-weight: 800; border-radius: var(--r-lg); }
+.theme-brand .big-btn:not(.primary) { border: 2px dashed var(--line-strong); background: var(--card); }
+.theme-brand .big-btn:not(.primary):hover:not(:disabled) { border-color: var(--primary); color: var(--primary); background: var(--primary-soft); }
+.theme-brand .gate-actions .big-btn:not(.primary) { border-style: solid; }
+.theme-brand .gate textarea { border-radius: var(--r-md); }
+.theme-brand .cam { border-radius: var(--r-lg); box-shadow: var(--shadow-2); }
+.theme-brand .cam::before { --lane: #ffffff; }
+.theme-brand .gate-result { border-width: 1px; border-left-width: 6px; border-radius: var(--r-lg); box-shadow: var(--shadow-2); }
+.theme-brand .gate-result .verdict { font-family: var(--font-head); font-weight: 800; letter-spacing: -.01em; }
+.theme-brand .gate-result.out { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.theme-brand .gate-log { border: 1px solid var(--line); border-radius: var(--r-md); overflow: hidden; box-shadow: var(--shadow-1); }
+/* Thống kê */
+.theme-brand .stats .card .big { font-family: var(--font-head); font-weight: 800; }
+.theme-brand .stats .card .kicker { color: var(--muted); }
+.theme-brand .stats .card:first-child { background: var(--brand-grad); border-color: transparent; color: #fff; box-shadow: var(--shadow-red); }
+.theme-brand .stats .card:first-child .kicker, .theme-brand .stats .card:first-child .big { color: #fff; }
+.theme-brand .bars { border: 1px solid var(--line); border-radius: var(--r-lg); box-shadow: var(--shadow-1); padding: var(--space-4) var(--space-4) var(--space-2); }
+.theme-brand .hbar { background: var(--brand-grad); border-radius: 6px 6px 2px 2px; }
+/* Quản trị */
+.theme-brand .card.form { align-items: end; }
+.theme-brand main.dense .page-head h2 { font-size: 26px; }
+.theme-brand .banner.info { border-color: color-mix(in srgb, var(--accent) 25%, transparent); background: var(--accent-soft); }
+.theme-brand .banner.info::before { display: block; background: var(--accent); }
+.theme-brand .banner.info > .i { color: var(--accent); }
+
+/* ───── 9. Đăng nhập ───── */
+.login.theme-brand { min-height: 100vh; display: grid; place-items: center; padding: var(--space-4);
+  background: radial-gradient(1200px 520px at 0% 0%, color-mix(in srgb, var(--primary) 18%, transparent), transparent 60%),
+              radial-gradient(900px 480px at 100% 100%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%), var(--bg); }
+.login.theme-brand form { padding: var(--space-6); border-top: 4px solid var(--primary); }
+.login.theme-brand h1 { font-size: 30px; }
+.login.theme-brand .chip { cursor: pointer; }
+.login.theme-brand .chip:hover { border-color: var(--primary); color: var(--primary); }
+
+/* ───── 10. Điện thoại ───── */
+@container app (max-width: 640px) {
+  .theme-brand h2 { font-size: 24px; }
+  .hero { grid-template-columns: 1fr; padding: var(--space-5); border-radius: var(--r-md); }
+  .hero-stats { grid-template-columns: 1fr 1fr; }
+  .hero-stats > div { min-width: 0; padding: var(--space-3) var(--space-4); }
+  .hero-stats b { font-size: 26px; }
+  .theme-brand .card { padding: var(--space-4); border-radius: var(--r-md); }
+  .site-foot-in { flex-direction: column; align-items: flex-start; }
+}

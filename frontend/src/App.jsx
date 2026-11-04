@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { session, socket, toast } from './api.js';
 import Toaster from './Toaster.jsx';
 import { Icon } from './ui.jsx';
@@ -15,15 +15,26 @@ import CommandStatus from './CommandStatus.jsx';
 
 const ROLE_LABEL = { USER: 'Người dùng', STAFF: 'Nhân viên', ADMIN: 'Quản trị' };
 
+// Trang mở đầu: nhân viên vào thẳng bãi mình phụ trách; người dùng/quản trị vào Tổng quan.
+const homeView = (u) => (u?.role === 'STAFF' && u.parkingId ? { page: 'parking', parkingId: u.parkingId } : { page: 'dashboard' });
+
 export default function App() {
   const [user, setUser] = useState(() => session.get()?.user ?? null);
-  const [view, setView] = useState({ page: 'dashboard' });
+  const [view, setView] = useState(() => homeView(session.get()?.user));
   const [live, setLive] = useState(socket.connected);
+  const userRef = useRef(user);
+  userRef.current = user;
 
   useEffect(() => {
     const on = () => setLive(true);
     const off = () => setLive(false);
-    const node = (e) => toast(
+    const node = (e) => {
+      // Nhân viên chỉ cần biết về bãi mình; trạng thái bãi khác là nhiễu.
+      const u = userRef.current;
+      if (u?.role === 'STAFF' && e.parkingId !== u.parkingId) return;
+      notifyNode(e);
+    };
+    const notifyNode = (e) => toast(
       e.status === 'ONLINE' ? `Bãi ${e.parkingId} đã hoạt động lại.`
         : e.status === 'DEGRADED' ? `Bãi ${e.parkingId} kết nối một phần (mất lease etcd).`
         : `Bãi ${e.parkingId} mất kết nối.`,
@@ -40,7 +51,7 @@ export default function App() {
 
   // đổi người dùng -> nối lại socket để gửi token mới (vào đúng phòng thông báo)
   const relogin = () => { socket.disconnect(); socket.connect(); };
-  if (!user) return <><Login onLogin={(s) => { session.set(s); setUser(s.user); relogin(); }} /><Toaster /></>;
+  if (!user) return <><Login onLogin={(s) => { session.set(s); setUser(s.user); setView(homeView(s.user)); relogin(); }} /><Toaster /></>;
 
   const tabs = [
     ['dashboard', 'Tổng quan'],
@@ -53,7 +64,7 @@ export default function App() {
   const logout = () => { session.set(null); setUser(null); relogin(); setView({ page: 'dashboard' }); };
 
   return (
-    <div className={user.role === 'USER' ? 'app theme-user' : 'app'}>
+    <div className="app theme-brand">
       <header className="bar">
         <strong className="brand"><span className="brand-mark" aria-hidden="true">P</span> Smart Parking</strong>
         <nav>
@@ -76,20 +87,21 @@ export default function App() {
       <main className={user.role === 'USER' ? undefined : 'dense'}>
         <CommandStatus userId={user.id} />
         {view.page === 'dashboard' && <Dashboard hero={user.role === 'USER'} onOpen={(parkingId) => setView({ page: 'parking', parkingId })} />}
-        {view.page === 'parking' && <ParkingDetail key={view.parkingId} parkingId={view.parkingId} user={user} onBack={() => go('dashboard')}
+        {view.page === 'parking' && <ParkingDetail key={`${view.parkingId}:${view.slot ?? ''}`} parkingId={view.parkingId} initialSlot={view.slot} user={user} onBack={() => go('dashboard')}
           onMine={user.role === 'USER' ? () => go('mine') : undefined} />}
         {view.page === 'mine' && <MyReservations />}
         {view.page === 'admin' && <Admin />}
         {view.page === 'account' && <Account user={user} />}
         {view.page === 'stats' && <Stats />}
         {view.page === 'gate' && <Gate parkingId={user.parkingId} />}
-        {view.page === 'history' && <History key={user.role} user={user} />}
+        {view.page === 'history' && <History key={user.role} user={user}
+          onOpenSlot={user.role === 'USER' ? undefined : (parkingId, slot) => setView({ page: 'parking', parkingId, slot })} />}
       </main>
-      {user.role === 'USER' && (
+      {(
         <footer className="site-foot">
           <div className="site-foot-in">
             <strong className="brand"><span className="brand-mark" aria-hidden="true">P</span> Smart Parking</strong>
-            <span>Hệ thống bãi đỗ xe liên kết nhiều bãi · Nhóm 16 – PTIT</span>
+            <span>{user.role === 'USER' ? 'Hệ thống bãi đỗ xe liên kết nhiều bãi' : `Khu vực ${ROLE_LABEL[user.role].toLowerCase()}`} · Nhóm 16 – PTIT</span>
           </div>
         </footer>
       )}

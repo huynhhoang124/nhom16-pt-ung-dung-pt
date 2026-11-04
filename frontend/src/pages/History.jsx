@@ -6,7 +6,9 @@ const time = (t) => (t ? new Date(t).toLocaleString('vi-VN') : '—');
 const money = (v) => (v == null ? '—' : `${v.toLocaleString('vi-VN')} đ`);
 
 // Lịch sử gửi xe. USER: phiên của mình. STAFF/ADMIN: tra biển số trên toàn hệ thống.
-export default function History({ user }) {
+export default function History({ user, onOpenSlot }) {
+  // Nhân viên mở được ô của bãi mình (quản trị: mọi bãi) để cho xe ra / xem chi tiết.
+  const canOpen = (x) => !!onOpenSlot && !x.exitedAt && (user.role === 'ADMIN' || user.parkingId === x.parkingId);
   const mine = user.role === 'USER';
   const [plate, setPlate] = useState('');
   const [searched, setSearched] = useState('');   // biển số của lần tra gần nhất (để hiện tiêu đề kết quả)
@@ -42,7 +44,8 @@ export default function History({ user }) {
       <h2>{mine ? 'Lịch sử gửi xe' : 'Tra cứu biển số'}</h2>
       {!mine && (
         <form className="inline" style={{ marginBottom: 'var(--space-4)' }} onSubmit={(e) => { e.preventDefault(); setSearched(plate); load(plate); }}>
-          <input className="mono" placeholder="Biển số, vd 30A-123.45" aria-label="Biển số" value={plate} onChange={(e) => setPlate(e.target.value)} required />
+          <input className="mono" placeholder="Cả biển hoặc một phần, vd 12345" aria-label="Biển số" value={plate} onChange={(e) => setPlate(e.target.value)} required autoFocus />
+          <span className="muted small" style={{ alignSelf: 'center' }}>Nhập ít nhất 3 ký tự; tìm được cả khi chỉ nhớ một phần biển số.</span>
           <button className="primary"><Icon name="search" /> Tra cứu</button>
         </form>
       )}
@@ -54,7 +57,7 @@ export default function History({ user }) {
       )}
       {!mine && data && searched && (
         <div className="legend" style={{ alignItems: 'center', margin: 'var(--space-4) 0' }}>
-          <Plate value={searched.toUpperCase()} lg />
+          <span>Kết quả cho <b className="mono">“{searched.toUpperCase()}”</b></span>
           <span className="muted small">{data.sessions.length} phiên gửi{data.unavailable.length > 0 && ` · không tra được bãi ${data.unavailable.join(', ')}`}</span>
         </div>
       )}
@@ -105,6 +108,7 @@ export default function History({ user }) {
                 </dd>
               </dl>
               {mine && !x.paidAt && !x.exitedAt && <button className="primary block" onClick={() => startPay(x)}><Icon name="card" /> Thanh toán</button>}
+              {canOpen(x) && <button className="block" onClick={() => onOpenSlot(x.parkingId, x.slotCode)}><Icon name="pin" /> Xem ô {x.slotCode}</button>}
             </li>
           ))}
         </ul>
@@ -120,7 +124,10 @@ export default function History({ user }) {
                 <td>{x.exitedAt ? <span className="mono small">{time(x.exitedAt)}</span> : <span className="st info"><Icon name="car" />Đang gửi</span>}</td>
                 <td className="tnum">{money(x.fee)}</td>
                 <td>{x.paidAt ? <span className="st ok"><Icon name="check" />Đã trả</span> : x.fee ? <span className="st warn"><Icon name="clock" />Chưa trả</span> : <span className="muted">—</span>}</td>
-                <td>{mine && !x.paidAt && !x.exitedAt && <button className="primary" onClick={() => startPay(x)}><Icon name="card" /> Thanh toán</button>}</td>
+                <td>
+                  {mine && !x.paidAt && !x.exitedAt && <button className="primary" onClick={() => startPay(x)}><Icon name="card" /> Thanh toán</button>}
+                  {canOpen(x) && <button onClick={() => onOpenSlot(x.parkingId, x.slotCode)}><Icon name="pin" /> Xem ô {x.slotCode}</button>}
+                </td>
               </tr>
             ))}
           </tbody>

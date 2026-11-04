@@ -201,6 +201,8 @@ test('TC17 vào bằng đặt chỗ rồi ra: đúng 1 phiên, lấy biển số
   assert.equal(await count(pool, 'parking_sessions'), 1);
   // tra theo biển số không phân biệt cách viết; theo user
   assert.equal((await s.listSessions(pool, { plate: '30a r1' })).length, 1);
+  assert.equal((await s.listSessions(pool, { plate: 'r1' })).length, 1);    // khớp một phần biển số
+  assert.equal((await s.listSessions(pool, { plate: '99Z' })).length, 0);
   assert.equal((await s.listSessions(pool, { userId: 'u1' })).length, 1);
   assert.equal((await s.listSessions(pool, { userId: 'u2' })).length, 0);
 });

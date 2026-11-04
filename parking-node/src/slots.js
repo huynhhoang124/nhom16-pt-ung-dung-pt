@@ -237,8 +237,8 @@ function pay(pool, input) { return tx(pool, (c) => payIn(c, input)); }
 // Lịch sử phiên gửi xe. Biển số so khớp sau khi bỏ dấu cách/chấm/gạch, không phân biệt hoa thường.
 const listSessions = async (pool, { plate, userId, from, to } = {}) => (await pool.query(
   `SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
-   WHERE ($1::text IS NULL OR regexp_replace(upper(ps.license_plate), '[^A-Z0-9]', '', 'g')
-                              = regexp_replace(upper($1), '[^A-Z0-9]', '', 'g'))
+   WHERE ($1::text IS NULL OR position(regexp_replace(upper($1), '[^A-Z0-9]', '', 'g')
+                                       in regexp_replace(upper(ps.license_plate), '[^A-Z0-9]', '', 'g')) > 0)   -- khớp một phần: "12345" tìm ra 30A-123.45
      AND ($2::text IS NULL OR ps.user_id = $2)
      AND ($3::timestamptz IS NULL OR ps.entered_at >= $3)
      AND ($4::timestamptz IS NULL OR ps.entered_at < $4)

@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, centralDown, knownNode, message, newKey, nodeApi, rememberNodes, STATUS_LABEL, useLive } from '../api.js';
+import { api, centralDown, formatPlate, knownNode, message, newKey, nodeApi, rememberNodes, STATUS_LABEL, useLive } from '../api.js';
 import { TYPE_LABEL } from './Dashboard.jsx';
 import Pricing from './Pricing.jsx';
 import { commandRequest } from '../api.js';
-import { clock, Icon, NodeBadge, Plate, ResStatus, slotIcon, SlotStatus, TypeTag, TYPE_ICON } from '../ui.jsx';
+import { clock, ConfirmDialog, Icon, NodeBadge, Plate, ResStatus, slotIcon, SlotStatus, TypeTag, TYPE_ICON } from '../ui.jsx';
 
 // Thao tác nhân viên theo trạng thái slot.
 const STAFF_ACTIONS = {
@@ -21,9 +21,16 @@ const fmt = (iso) => {
   return `${p(d.getHours())}:${p(d.getMinutes())} · ${p(d.getDate())}/${p(d.getMonth() + 1)}`;
 };
 
-export default function ParkingDetail({ parkingId, user, onBack, onMine }) {
+const normPlate = (v) => String(v ?? '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+// Thời gian đã gửi: "45 phút" / "2 giờ 05 phút".
+const since = (iso) => {
+  const m = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 60000));
+  return m < 60 ? `${m} phút` : `${Math.floor(m / 60)} giờ ${String(m % 60).padStart(2, '0')} phút`;
+};
+
+export default function ParkingDetail({ parkingId, user, onBack, onMine, initialSlot = null }) {
   const [p, setP] = useState(null);
-  const [selected, setSelected] = useState(null);    // slot đang chọn
+  const [selected, setSelected] = useState(initialSlot);    // slot đang chọn (mở từ "Tra biển số" thì chọn sẵn)
   const [pending, setPending] = useState(null);      // lượt đặt chỗ: { slotCode, key, plate, unknown }
   const [plate, setPlate] = useState('');
   const [when, setWhen] = useState('');               // giờ đến (datetime-local), '' = đặt ngay
@@ -36,6 +43,11 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine }) {
   const [busy, setBusy] = useState(false);            // đang chờ bãi trả lời lượt đặt
   const [loadedAt, setLoadedAt] = useState(null);     // giờ tải dữ liệu bãi gần nhất
   const [booked, setBooked] = useState(null);         // lượt vừa đặt thành công (hiện thẻ xác nhận)
+  const [acting, setActing] = useState(false);        // nhân viên đang gửi xe vào/ra: khoá nút, chống bấm đúp
+  const [occupant, setOccupant] = useState(null);     // phiên gửi của ô đang có xe: biển số, giờ vào, phí tạm tính
+  const [charge, setCharge] = useState(null);         // bước thu tiền mặt khi xe ra mà chưa trả: { slotCode, fee, breakdown, received }
+  const [ask, setAsk] = useState(null);               // hộp xác nhận đang mở (gỡ ô, huỷ đặt chỗ)
+  const [resFilter, setResFilter] = useState('ACTIVE'); // bảng đặt chỗ tại bãi: 'ACTIVE' | 'ALL'
   const asideRef = useRef(null);
   const isStaff = user.role === 'ADMIN' || (user.role === 'STAFF' && user.parkingId === parkingId);
 
@@ -67,6 +79,7 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine }) {
   function pick(slot) {
     setNote(null);
     setBooked(null);
+    setCharge(null);
     setSelected(slot.slotCode);
     if (user.role === 'USER' && slot.status !== 'MAINTENANCE') setPending({ slotCode: slot.slotCode, key: newKey(), unknown: false });
     else setPending(null);
@@ -111,30 +124,84 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine }) {
     load();
   }
 
+  // Ô đang có xe: tải phiên đang mở + phí tạm tính để nhân viên biết đúng xe nào trước khi cho ra.
+  const cur = p?.slots.find((s) => s.slotCode === selected);
+  const curKey = cur ? `${cur.slotCode}:${cur.status}:${cur.version}` : '';
+  useEffect(() => {
+    setOccupant(null);
+    if (!isStaff || cur?.status !== 'OCCUPIED') return undefined;
+    let stop = false;
+    (async () => {
+      const get = (path, nodePath) => (p.direct ? nodeApi(parkingId, nodePath) : api(path));
+      const list = await get(`/api/parkings/${parkingId}/sessions`, '/api/sessions');
+      const s = list.ok && list.data.find((x) => x.slotCode === cur.slotCode && !x.exitedAt);
+      if (!s) { if (!stop) setOccupant({ missing: true }); return; }
+      const q = await get(`/api/parkings/${parkingId}/sessions/${s.id}/quote`, `/api/sessions/${s.id}/quote`);
+      if (!stop) setOccupant({ ...s, quote: q.ok ? q.data : null });
+    })();
+    return () => { stop = true; };
+  }, [curKey, isStaff, p?.direct]);
+
   async function act(action, cash = false) {
+    if (acting) return;
+    setActing(true);
+    try { await doAct(action, cash); }
+    // Giữ khoá thêm một nhịp: nút "Xe ra" hiện đúng chỗ nút "Xe vào", nháy đúp không được ghi thành vào rồi ra.
+    finally { setTimeout(() => setActing(false), 700); }
+  }
+
+  async function doAct(action, cash) {
     const body = { licensePlate: plate || undefined, cash };
     let r = p.direct ? { status: 0 } : await api(`/api/parkings/${parkingId}/slots/${selected}/${action}`, { method: 'POST', body });
     // Trung tâm không trả lời -> làm thẳng với bãi. An toàn kể cả khi lệnh trước thực ra đã tới bãi:
     // xe vào/ra kiểm trạng thái slot (compare-and-swap), lặp lại chỉ nhận 409 chứ không làm hai lần.
     if (isStaff && centralDown(r)) r = await nodeApi(parkingId, `/api/slots/${selected}/${action}`, { method: 'POST', body });
-    const fee = r.data?.session?.fee;
-    if (r.status === 402) {   // chưa trả tiền: nhân viên thu tiền mặt rồi cho ra
-      setNote({ kind: 'error', text: `Chưa thanh toán ${r.data.fee.toLocaleString('vi-VN')} đ.`, cash: true });
+    if (r.status === 402) {   // chưa trả tiền: bước thu tiền bình thường, không phải lỗi
+      setNote(null);
+      setCharge({ slotCode: selected, fee: r.data.fee, plate: occupant?.licensePlate, breakdown: occupant?.quote?.breakdown ?? [], received: false });
     } else {
-      setNote(r.ok
-        ? { kind: 'ok', text: `${selected}: ${STATUS_LABEL[r.data.status]}${fee != null ? ` · Phí gửi xe: ${fee.toLocaleString('vi-VN')} đ` : ''}` }
-        : { kind: 'error', text: message(r.data) });
+      setCharge(null);
+      setNote(r.ok ? { kind: 'ok', text: doneText(action, r.data, cash) } : { kind: 'error', text: message(r.data) });
     }
+    if (r.ok) setPlate('');
     load();
+  }
+
+  // Câu báo kết quả theo nghĩa nghiệp vụ ("Xe … đã ra · thu …"), không phải nhãn trạng thái ô.
+  function doneText(action, d, cash) {
+    const pl = d?.session?.licensePlate ?? (action === 'exit' ? occupant?.licensePlate : plate);
+    const car = pl ? `Xe ${formatPlate(normPlate(pl))}` : 'Xe';
+    const money = (v) => `${Number(v).toLocaleString('vi-VN')} đ`;
+    if (action === 'enter') return `${car} đã vào ô ${selected}.`;
+    if (action === 'exit') {
+      const fee = d?.session?.fee ?? 0;
+      const how = !fee ? 'miễn phí' : cash ? `đã thu ${money(fee)} tiền mặt` : `đã thanh toán ${money(fee)} trên ứng dụng`;
+      return `${car} đã ra khỏi ô ${selected} · ${how}.`;
+    }
+    return action === 'maintenance' ? `Đã khoá ô ${selected} để bảo trì.` : `Đã mở khoá ô ${selected}, ô sẵn sàng nhận xe.`;
   }
 
   // NV-09: quản lý slot (nhân viên bãi này, quản trị)
   async function manage(method, body, code = '') {
     const r = await api(`/api/parkings/${parkingId}/slots${code && `/${code}`}`, { method, body });
-    setNote(r.ok ? { kind: 'ok', text: method === 'DELETE' ? `Đã gỡ ${code}.` : `Đã lưu ${r.data.slotCode}.` } : { kind: 'error', text: message(r.data) });
+    const text = method === 'DELETE' ? `Đã gỡ ô ${code}.` : method === 'POST' ? `Đã thêm ô ${r.data?.slotCode}.` : `Đã lưu ô ${r.data?.slotCode}.`;
+    setNote(r.ok ? { kind: 'ok', text } : { kind: 'error', text: message(r.data) });
     if (r.ok && method === 'DELETE') setSelected(null);
-    load();
+    if (r.ok && method === 'POST') setSelected(r.data.slotCode);   // chọn sẵn ô vừa thêm
+    await load();
+    return r;
   }
+
+  const askRemove = (code) => setAsk({
+    title: `Gỡ ô ${code}?`, body: 'Ô sẽ ẩn khỏi sơ đồ và không nhận đặt chỗ nữa. Lịch sử gửi xe của ô vẫn được giữ.',
+    label: 'Gỡ ô', danger: true, run: () => manage('DELETE', undefined, code),
+  });
+
+  const askCancel = (r) => setAsk({
+    title: `Huỷ đặt chỗ ô ${r.slotCode}?`,
+    body: <>Vé của <Plate value={r.licensePlate} /> ({fmt(r.startTime)}) sẽ bị huỷ và ô được trả lại. Không hoàn tác được.</>,
+    label: 'Huỷ đặt chỗ', danger: true, run: () => cancel(r.id),
+  });
 
   async function cancel(id) {
     const r = await commandRequest(`/api/parkings/${parkingId}/reservations/${id}`, { method: 'DELETE' },()=>setNote({kind:'ok',text:'Đang xử lý yêu cầu huỷ…'}));
@@ -146,6 +213,15 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine }) {
     ? <div className="empty" style={{ borderColor: 'var(--bad)' }}><Icon name="alert" /><strong>Không tải được bãi</strong>{loadError}</div>
     : <div className="stack"><span className="skeleton" style={{ height: 40, width: 280 }} /><span className="skeleton" style={{ height: 320 }} /></div>;
   const slot = p.slots.find((s) => s.slotCode === selected);
+  // Ô đã đặt: vé đang giữ ô (ACTIVE, đến sớm nhất). Cho xe vào phải đúng biển số trên vé.
+  const holder = isStaff && slot?.status === 'RESERVED'
+    ? reservations.filter((r) => r.slotCode === slot.slotCode && r.status === 'ACTIVE')
+      .sort((a, b) => new Date(a.startTime) - new Date(b.startTime))[0] ?? null
+    : null;
+  const shownRes = (resFilter === 'ACTIVE' ? reservations.filter((r) => r.status === 'ACTIVE') : reservations)
+    .slice().sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+  const plateMatch = !!holder && normPlate(plate) === normPlate(holder.licensePlate);
+  const plateMismatch = !!holder && !plateMatch && normPlate(plate).length >= normPlate(holder.licensePlate).length;
   const slots = p.slots.filter((s) => s.status !== 'HIDDEN' && (!type || s.type === type));
   const counts = slots.reduce((m, s) => ({ ...m, [s.status]: (m[s.status] ?? 0) + 1 }), {});
   // Nhóm theo tầng. Bản cache khi bãi mất kết nối không có tầng -> một nhóm chung.
@@ -169,7 +245,6 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine }) {
       <span className="ic"><Icon name={note.kind === 'ok' ? 'circle-check' : 'circle-x'} /></span>
       <span className="cmd-title">{note.kind === 'ok' ? 'Thành công' : 'Không thực hiện được'}</span>
       <span className="cmd-sub">{note.text}</span>
-      {note.cash && <div className="cmd-actions"><button className="primary" onClick={() => act('exit', true)}><Icon name="card" /> Thu tiền mặt và cho ra</button></div>}
     </div>
   );
 
@@ -296,33 +371,77 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine }) {
                     </div>
                   </form>
                 )}
+                {isStaff && slot.status === 'OCCUPIED' && (
+                  <div className="occupant">
+                    {!occupant ? <span className="skeleton" style={{ height: 72 }} />
+                      : occupant.missing ? <p className="muted small" style={{ margin: 0 }}>Không tìm thấy phiên gửi của ô này.</p>
+                      : (
+                        <dl>
+                          <dt>Biển số</dt><dd><Plate value={occupant.licensePlate} /></dd>
+                          <dt>Vào lúc</dt><dd>{fmt(occupant.enteredAt)} <span className="muted small">· đã gửi {since(occupant.enteredAt)}</span></dd>
+                          <dt>Phí tạm tính</dt>
+                          <dd>
+                            <b className="tnum-inline">{(occupant.paidAt ? occupant.fee : occupant.quote?.fee ?? 0).toLocaleString('vi-VN')} đ</b>
+                            {occupant.paidAt ? <span className="st ok"><Icon name="check" />Đã trả</span>
+                              : (occupant.quote?.fee ?? 0) > 0 ? <span className="st warn"><Icon name="clock" />Chưa trả</span>
+                              : <span className="muted small">miễn phí dưới 5 phút</span>}
+                          </dd>
+                        </dl>
+                      )}
+                  </div>
+                )}
+                {isStaff && slot.status === 'RESERVED' && holder && (
+                  <div className="occupant">
+                    <dl>
+                      <dt>Vé đặt cho</dt><dd><Plate value={holder.licensePlate} /></dd>
+                      <dt>Khung giờ</dt><dd>{fmt(holder.startTime)} – {new Date(holder.endTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</dd>
+                    </dl>
+                  </div>
+                )}
+                {isStaff && ['AVAILABLE', 'RESERVED'].includes(slot.status) && (
+                  <label className="field">{holder ? 'Biển số xe đang vào (đối chiếu với vé)' : 'Biển số (tuỳ chọn)'}
+                    <input placeholder="vd 30A-123.45" value={plate} onChange={(e) => setPlate(e.target.value)} autoComplete="off"
+                      aria-invalid={plateMismatch ? 'true' : undefined} />
+                    {plateMismatch && <span className="error">Không khớp vé đặt ({formatPlate(normPlate(holder.licensePlate))}). Kiểm tra lại xe.</span>}
+                  </label>
+                )}
                 {isStaff && (
-                  <>
-                    <label className="field">Biển số (tuỳ chọn)
-                      <input placeholder="vd 30A-123.45" value={plate} onChange={(e) => setPlate(e.target.value)} />
-                    </label>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
-                      {(STAFF_ACTIONS[slot.status] ?? []).map(([a, label], i) => (
-                        <button key={a} className={i === 0 ? 'primary' : undefined} onClick={() => act(a)}>
-                          <Icon name={{ enter: 'login', exit: 'logout', maintenance: 'wrench', unmaintenance: 'wrench' }[a]} />{label}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-2)' }}>
+                    {(STAFF_ACTIONS[slot.status] ?? []).map(([a, label], i) => {
+                      const needMatch = a === 'enter' && holder && !plateMatch;
+                      return (
+                        <button key={a} className={i === 0 ? 'primary' : undefined} onClick={() => act(a)} disabled={acting || needMatch}
+                          title={needMatch ? 'Nhập đúng biển số trên vé để cho xe vào' : undefined}>
+                          {acting && i === 0 ? <Icon name="loader" spin /> : <Icon name={{ enter: 'login', exit: 'logout', maintenance: 'wrench', unmaintenance: 'wrench' }[a]} />}
+                          {a === 'enter' && holder ? (plateMatch ? 'Đúng xe – cho vào' : 'Nhập biển số để đối chiếu') : label}
                         </button>
-                      ))}
+                      );
+                    })}
+                  </div>
+                )}
+                {isStaff && charge && charge.slotCode === slot.slotCode && (
+                  <div className="charge" role="status">
+                    <span className="kicker">Thu phí trước khi cho ra</span>
+                    {charge.plate && <Plate value={charge.plate} />}
+                    <div className="charge-amount">{charge.fee.toLocaleString('vi-VN')}<span> đ</span></div>
+                    {charge.breakdown.length > 0 && (
+                      <ul className="charge-lines">{charge.breakdown.map((b) => <li key={b.label}><span>{b.label}</span><b>{b.amount.toLocaleString('vi-VN')} đ</b></li>)}</ul>
+                    )}
+                    <label className="check">
+                      <input type="checkbox" checked={charge.received} onChange={(e) => setCharge({ ...charge, received: e.target.checked })} />
+                      Đã nhận đủ {charge.fee.toLocaleString('vi-VN')} đ tiền mặt
+                    </label>
+                    <div className="charge-actions">
+                      <button onClick={() => setCharge(null)} disabled={acting}>Huỷ</button>
+                      <button className="primary" disabled={!charge.received || acting} onClick={() => act('exit', true)}>
+                        {acting ? <Icon name="loader" spin /> : <Icon name="card" />} Xác nhận đã thu &amp; cho ra
+                      </button>
                     </div>
-                  </>
+                  </div>
                 )}
                 {isStaff && ['AVAILABLE', 'MAINTENANCE'].includes(slot.status) && (
-                  <div style={{ display: 'grid', gridTemplateColumns: '90px minmax(0, 1fr) auto', gap: 'var(--space-2)', alignItems: 'end' }}>
-                    <label className="field">Tầng
-                      <input type="number" className="num" style={{ width: '100%' }} defaultValue={slot.floor} key={`f${slot.slotCode}`}
-                        onBlur={(e) => Number(e.target.value) !== slot.floor && manage('PATCH', { floor: Number(e.target.value) }, slot.slotCode)} />
-                    </label>
-                    <label className="field">Loại
-                      <select value={slot.type} onChange={(e) => manage('PATCH', { type: e.target.value }, slot.slotCode)}>
-                        {Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-                      </select>
-                    </label>
-                    <button className="danger" onClick={() => confirm(`Gỡ slot ${slot.slotCode}?`) && manage('DELETE', undefined, slot.slotCode)}><Icon name="eye-off" /> Gỡ slot</button>
-                  </div>
+                  <SlotEditor key={`${slot.slotCode}:${slot.version}`} slot={slot}
+                    onSave={(patch) => manage('PATCH', patch, slot.slotCode)} onRemove={() => askRemove(slot.slotCode)} />
                 )}
                 {booked && booked.slotCode === slot.slotCode && (
                   <div className="booked" role="status">
@@ -343,18 +462,20 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine }) {
             )}
             {noteBox}
             {isStaff && p.status !== 'OFFLINE' && !p.direct && (
-              <form className="card stack" style={{ gap: 'var(--space-2)' }} onSubmit={(e) => {
+              <form className="card stack" style={{ gap: 'var(--space-2)' }} onSubmit={async (e) => {
                 e.preventDefault();
-                const f = new FormData(e.target);
-                manage('POST', { slotCode: f.get('code').toUpperCase(), floor: Number(f.get('floor')), type: f.get('type') });
+                const form = e.currentTarget;
+                const f = new FormData(form);
+                const r = await manage('POST', { slotCode: f.get('code').trim().toUpperCase(), floor: Number(f.get('floor')), type: f.get('type') });
+                if (r.ok) { form.elements.code.value = ''; form.elements.code.focus(); }   // giữ tầng/loại để thêm tiếp nhanh
               }}>
-                <h4 style={{ margin: 0 }}>Thêm slot</h4>
+                <h4 style={{ margin: 0 }}>Thêm ô mới</h4>
                 <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 70px 110px', gap: 'var(--space-2)' }}>
-                  <input name="code" placeholder="Mã, vd A21" aria-label="Mã slot" required maxLength="10" />
-                  <input name="floor" type="number" className="num" style={{ width: '100%' }} aria-label="Tầng" defaultValue="1" required />
-                  <select name="type" aria-label="Loại xe">{Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+                  <label className="field">Mã ô<input name="code" placeholder="vd A22" required maxLength="10" autoComplete="off" /></label>
+                  <label className="field">Tầng<input name="floor" type="number" className="num" style={{ width: '100%' }} defaultValue="1" required /></label>
+                  <label className="field">Loại<select name="type">{Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></label>
                 </div>
-                <button><Icon name="plus" /> Thêm</button>
+                <button><Icon name="plus" /> Thêm ô</button>
               </form>
             )}
           </aside>
@@ -366,24 +487,69 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine }) {
         {p.status !== 'OFFLINE' && !p.direct && <Pricing parkingId={parkingId} canEdit={isStaff} />}
         {isStaff && (
           <div>
-            <h3>Đặt chỗ tại bãi</h3>
+            <div className="row" style={{ marginBottom: 'var(--space-3)' }}>
+              <h3 style={{ margin: 0 }}>Đặt chỗ tại bãi</h3>
+              <div className="seg" role="group" aria-label="Lọc đặt chỗ">
+                {[['ACTIVE', `Đang hiệu lực (${reservations.filter((r) => r.status === 'ACTIVE').length})`], ['ALL', `Tất cả (${reservations.length})`]].map(([k, v]) => (
+                  <button key={k} className={resFilter === k ? 'tab active' : 'tab'} aria-pressed={resFilter === k} onClick={() => setResFilter(k)}>{v}</button>
+                ))}
+              </div>
+            </div>
             <div className="scroll"><table>
-              <thead><tr><th>Slot</th><th>Biển số</th><th>Khung giờ</th><th>Trạng thái</th><th /></tr></thead>
+              <thead><tr><th>Ô</th><th>Biển số</th><th>Khung giờ</th><th>Trạng thái</th><th /></tr></thead>
               <tbody>
-                {reservations.map((r) => (
+                {shownRes.map((r) => (
                   <tr key={r.id}>
                     <td className="mono">{r.slotCode}</td><td><Plate value={r.licensePlate} /></td>
-                    <td className="mono small">{new Date(r.startTime).toLocaleString('vi-VN')} – {new Date(r.endTime).toLocaleTimeString('vi-VN')}</td>
+                    <td className="mono small">{fmt(r.startTime)} – {new Date(r.endTime).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</td>
                     <td><ResStatus status={r.status} /></td>
-                    <td>{r.status === 'ACTIVE' && <button className="link" onClick={() => cancel(r.id)}>Huỷ</button>}</td>
+                    <td>{r.status === 'ACTIVE' && <button className="link danger-link" onClick={() => askCancel(r)}>Huỷ</button>}</td>
                   </tr>
                 ))}
-                {!reservations.length && <tr><td colSpan="5" className="muted">Chưa có.</td></tr>}
+                {!shownRes.length && <tr><td colSpan="5" className="muted">{resFilter === 'ACTIVE' ? 'Không có đặt chỗ nào đang hiệu lực.' : 'Chưa có.'}</td></tr>}
               </tbody>
             </table></div>
           </div>
         )}
       </div>
+      <ConfirmDialog ask={ask} onClose={() => setAsk(null)} />
     </>
+  );
+}
+
+// NV-09: sửa ô (tầng, loại) — đổi xong mới lưu bằng nút, không tự lưu khi vừa chọn; gỡ ô qua hộp xác nhận.
+function SlotEditor({ slot, onSave, onRemove }) {
+  const [floor, setFloor] = useState(String(slot.floor ?? ''));
+  const [type, setType] = useState(slot.type);
+  const [saving, setSaving] = useState(false);
+  const dirty = Number(floor) !== slot.floor || type !== slot.type;
+  const bad = floor === '' || !Number.isInteger(Number(floor));
+  async function save(e) {
+    e.preventDefault();
+    if (!dirty || bad) return;
+    setSaving(true);
+    await onSave({ ...(Number(floor) !== slot.floor && { floor: Number(floor) }), ...(type !== slot.type && { type }) });
+    setSaving(false);
+  }
+  return (
+    <details className="slot-edit">
+      <summary><Icon name="pencil" /> Sửa ô {slot.slotCode}</summary>
+      <form onSubmit={save} className="stack" style={{ gap: 'var(--space-3)', marginTop: 'var(--space-3)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '90px minmax(0, 1fr)', gap: 'var(--space-2)' }}>
+          <label className="field">Tầng
+            <input type="number" className="num" style={{ width: '100%' }} value={floor} onChange={(e) => setFloor(e.target.value)} aria-invalid={bad ? 'true' : undefined} />
+          </label>
+          <label className="field">Loại
+            <select value={type} onChange={(e) => setType(e.target.value)}>
+              {Object.entries(TYPE_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="row">
+          <button type="button" className="danger" onClick={onRemove}><Icon name="eye-off" /> Gỡ ô</button>
+          <button className="primary" disabled={!dirty || bad || saving}>{saving && <Icon name="loader" spin />} Lưu thay đổi</button>
+        </div>
+      </form>
+    </details>
   );
 }
