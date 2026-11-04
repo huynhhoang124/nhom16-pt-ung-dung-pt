@@ -177,3 +177,41 @@ test("HTTP ADMIN permissions, pagination and validation", async (t) => {
     404,
   );
 });
+test("broadcast admin command replays unchanged with the same ID and targets; edits are rejected", async (t) => {
+  const { dlq, sent } = await setup(t);
+  const rule = { vehicleType: "CAR", firstBlockMin: 120, firstBlockFee: 31000, nextHourFee: 10000, overnightFee: 30000, maxDayFee: 150000 };
+  const b = {
+    schemaVersion: 1, type: "setPricing", parkingId: "zone-nam",
+    actor: { userId: "u", role: "ADMIN" }, payload: { rules: [rule] }, targets: ["D", "E", "F"],
+  };
+  const key = "cmd.zone-nam.setPricing";
+  const properties = { messageId: "u:broadcast-k", correlationId: "u:broadcast-k", replyTo: "agg.broadcast", type: "setPricing", headers: {} };
+  properties.headers["x-command-signature"] = signature("key", b, properties);
+  const content = Buffer.from(JSON.stringify(b));
+  Object.assign(properties.headers, {
+    "x-original-routing-key": key,
+    "x-failure-reason": "RETRY_EXHAUSTED",
+    "x-dlq-signature": proof("key", content, properties, "RETRY_EXHAUSTED", key),
+  });
+  await dlq.store({ content, properties, fields: { routingKey: "dead" } });
+  const item = (await dlq.list()).items[0];
+  assert.equal(item.type, "setPricing");
+  assert.deepEqual(item.payload, {});
+  await assert.rejects(
+    dlq.replay(item.id, { payload: { rules: [{ ...rule, firstBlockFee: 1 }] } }, "admin"),
+    { code: "EDIT_REQUIRES_PRE_EXECUTION_FAILURE" },
+  );
+  assert.equal((await dlq.replay(item.id, {}, "admin")).messageId, "u:broadcast-k");
+  await dlq.relay();
+  assert.equal(sent[0][1], key);
+  assert.deepEqual(JSON.parse(sent[0][2]).targets, ["D", "E", "F"]);
+});
+test("a user command cannot be edited into an admin command", async (t) => {
+  const { dlq } = await setup(t);
+  await dlq.store(message({}, "INVALID_SCHEMA"));
+  const id = (await dlq.list()).items[0].id;
+  await assert.rejects(
+    dlq.replay(id, { type: "banPlates", payload: { plates: ["30A12345"], banned: true } }, "admin"),
+    { code: /INVALID_PAYLOAD|EDIT_REQUIRES_PRE_EXECUTION_FAILURE/ },
+  );
+});

@@ -9,6 +9,8 @@ const {
   proof,
   equal,
 } = require("./retry-contract");
+const { validateAdmin } = require("./admin-payload");
+const ADMIN_TYPES = ["setPricing", "lockFloor", "banPlates"];
 const fail = (code, status = 422) =>
   Object.assign(new Error(code), { code, status });
 const object = (v) => v && typeof v === "object" && !Array.isArray(v);
@@ -18,6 +20,7 @@ const TYPES = {
   pay: ["sessionId", "method"],
 };
 function validPayload(type, p) {
+  if (ADMIN_TYPES.includes(type)) return validateAdmin(type, p) === null;
   if (
     !object(p) ||
     !Object.hasOwn(TYPES, type) ||
@@ -78,7 +81,7 @@ function view(row) {
     status: row.status,
     createdAt: row.created_at,
     replayMessageId: row.replay_message_id,
-    type: Object.hasOwn(TYPES, b.type) ? b.type : undefined,
+    type: Object.hasOwn(TYPES, b.type) || ADMIN_TYPES.includes(b.type) ? b.type : undefined,
     parkingId:
       typeof b.parkingId === "string" &&
       /^[A-Za-z0-9_-]{1,64}$/.test(b.parkingId)
@@ -165,8 +168,9 @@ function makeDlq({
       if (!validPayload(type, payload)) throw fail("INVALID_PAYLOAD");
       const changed =
         type !== b.type || canonical(payload) !== canonical(b.payload);
+      // Lệnh quản trị chỉ phát lại nguyên bản, cùng ID: mỗi bãi tự chống trùng bằng inbox, không có bãi nào để claim.
       // Only a signed failure before business execution permits an edited new command.
-      if (changed && row.reason !== "INVALID_SCHEMA")
+      if (changed && (row.reason !== "INVALID_SCHEMA" || ADMIN_TYPES.includes(type) || ADMIN_TYPES.includes(b.type)))
         throw fail("EDIT_REQUIRES_PRE_EXECUTION_FAILURE", 409);
       const messageId = changed
         ? `${b.actor.userId}:replay-${row.dedup_key.slice(0, 32)}`
