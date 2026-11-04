@@ -84,6 +84,14 @@ async function loadTrace(traceId) {
   }))) ?? null;
 }
 
+function eventsFollowOutbox(spans) {
+  const producers = new Set(spans.filter((span) =>
+    span.serviceName === 'parking-node' && span.operationName === 'outbox.publish').map((span) => span.spanID));
+  const consumers = spans.filter((span) => span.serviceName === 'aggregator' && span.operationName === 'event.process');
+  return consumers.length > 0 && consumers.every((span) => span.references?.some((ref) =>
+    ref.refType === 'CHILD_OF' && ref.traceID === span.traceID && producers.has(ref.spanID)));
+}
+
 const bookingTraceId = randomBytes(16).toString('hex');
 const bookingRequestId = `pd24-${randomUUID()}`;
 const slotCode = `T${randomBytes(4).toString('hex').toUpperCase()}`;
@@ -179,7 +187,8 @@ try {
       && found.some((span) => span.serviceName === 'parking-node'
         && Object.keys(span.attributes).some((key) => key.startsWith('db.')))
       && found.some((span) => span.operationName === 'socket.emit'
-        && span.attributes['socket.io.event'] === 'COMMAND_RESULT'), 'TC77 spans');
+        && span.attributes['socket.io.event'] === 'COMMAND_RESULT')
+      && eventsFollowOutbox(found), 'TC77 spans and outbox → event parent links');
   const has = (label, predicate) => {
     assert.ok(spans.some(predicate), `TC77 missing ${label}; trace: ${jaeger}/trace/${bookingTraceId}`);
   };
@@ -198,6 +207,7 @@ try {
     span.serviceName === 'parking-node' && span.operationName === 'outbox.publish');
   has('Aggregator event consumer span', (span) =>
     span.serviceName === 'aggregator' && span.operationName === 'event.process');
+  assert.ok(eventsFollowOutbox(spans), `TC77 event.process must be a child of outbox.publish; trace: ${jaeger}/trace/${bookingTraceId}`);
   has('Node reply publish span', (span) =>
     span.serviceName === 'parking-node' && span.operationName === 'command.reply.publish');
   has('Aggregator reply consume span', (span) =>
