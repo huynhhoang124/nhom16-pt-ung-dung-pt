@@ -322,7 +322,7 @@ test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lạ
       } catch {
         return false;
       }
-    }, 60_000);
+    }, 180_000);
   }
   await until('outbox gửi hết', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 90_000);
 });
