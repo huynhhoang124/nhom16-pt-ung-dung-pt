@@ -2,6 +2,7 @@
 const hlc = require('./hlc');
 const { observeHlc } = require('./metrics');
 const { makeConnector } = require('./amqp-connect');
+const { context, propagation, ROOT_CONTEXT } = require('@opentelemetry/api');
 
 const EXCHANGE = 'parking.events';
 const QUEUE = 'aggregator.slot-updates';
@@ -63,7 +64,10 @@ function startConsumer(url, onEvent, log = console, { exchange = EXCHANGE, queue
       await ch.prefetch(50);
       await ch.consume(queue, (m) => {
         if (!m) return;
-        try { onEvent(JSON.parse(m.content.toString())); }
+        try {
+          const parent = propagation.extract(ROOT_CONTEXT, m.properties?.headers ?? {});
+          context.with(parent, () => onEvent(JSON.parse(m.content.toString()), parent));
+        }
         catch (e) { log.error('Bỏ tin lỗi', { error: e.message }); }
         ch.ack(m);
       });

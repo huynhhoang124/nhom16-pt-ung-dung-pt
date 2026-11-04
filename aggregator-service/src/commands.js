@@ -3,6 +3,8 @@ const { randomUUID } = require('node:crypto');
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
 const { signature } = require('./command-signature');
+const { context, propagation, ROOT_CONTEXT, SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
+const commandTracer = trace.getTracer('aggregator/commands');
 
 const EXCHANGE = 'parking.commands';
 const ATTEMPT_HEADER = 'x-command-publish-id';
@@ -78,6 +80,21 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
   }
 
   async function send(parkingId, type, body, opts = {}) {
+    const traceparent = opts.traceparent ?? opts.headers?.traceparent;
+    const parent = traceparent ? propagation.extract(ROOT_CONTEXT, { traceparent }) : context.active();
+    return commandTracer.startActiveSpan('command.publish', {
+      kind: SpanKind.PRODUCER,
+      attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': EXCHANGE, 'parking.id': parkingId },
+    }, parent, async (span) => {
+      const carrier = {};
+      propagation.inject(context.active(), carrier);
+      try { return await sendConfirmed(parkingId, type, body, { ...opts, traceparent: carrier.traceparent ?? traceparent }); }
+      catch (error) { span.recordException(error); span.setStatus({ code: SpanStatusCode.ERROR, message: error.message }); throw error; }
+      finally { span.end(); }
+    });
+  }
+
+  async function sendConfirmed(parkingId, type, body, opts) {
     const key = opts.admin ? `${routingKey(parkingId, type)}.admin` : routingKey(parkingId, type);
     const messageId = opts.messageId ?? randomUUID();
     const correlationId = opts.correlationId ?? messageId;

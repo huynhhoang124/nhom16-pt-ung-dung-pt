@@ -12,6 +12,8 @@ const { checkFencing } = require('./fencing');
 const { normalizePlate, isPlate } = require('./plate');
 const { tokenFor } = require('./gate');
 const { decodeAdmin, dispatchAdminIn } = require('./admin-commands');
+const { context, propagation, ROOT_CONTEXT, SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
+const commandTracer = trace.getTracer('parking-node/commands');
 
 class InvalidCommand extends Error {}
 const object = (v) => v && typeof v === 'object' && !Array.isArray(v);
@@ -121,6 +123,21 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
       throw error;
     }
 
+    const parent = env.traceparent ? propagation.extract(ROOT_CONTEXT, { traceparent: env.traceparent }) : ROOT_CONTEXT;
+    return commandTracer.startActiveSpan('command.receive', {
+      kind: SpanKind.CONSUMER,
+      attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': m.fields?.routingKey ?? `cmd.${parkingId}` },
+    }, parent, async (span) => {
+      try { return await processEnvelope(m, env, adminCommand); }
+      catch (error) {
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+        throw error;
+      } finally { span.end(); }
+    });
+  };
+
+  async function processEnvelope(m, env, adminCommand) {
     // Cập nhật HLC ngay khi nhận lệnh, trước khi phát sinh sự kiện mới.
     if (env.hlc !== undefined) {
       hlc.update(env.hlc);
@@ -167,6 +184,9 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
           .map((k) => [k, env[k]])
       );
 
+      const carrier = {};
+      propagation.inject(context.active(), carrier);
+      if (carrier.traceparent) metadata.traceparent = carrier.traceparent;
       // Phản hồi là thông điệp mới của Node, nên dùng timestamp mới.
       metadata.hlc = hlc.now();
       const payload = { schemaVersion: 1, type: 'COMMAND_RESULT', commandType: env.type, parkingId, commandId: env.messageId,
@@ -185,7 +205,7 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
       await c.query('ROLLBACK').catch(() => {});
       throw e;
     } finally { c.release(); }
-  };
+  }
 }
 
 function crashAfterCommitOnce(result) {

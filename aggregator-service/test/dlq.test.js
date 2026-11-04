@@ -35,13 +35,14 @@ function message(payload = {}, reason = "INVALID_SCHEMA") {
     parkingId: "A",
     actor: { userId: "u", role: "USER" },
     payload,
+    traceparent: "00-11111111111111111111111111111111-2222222222222222-01",
   };
   const properties = {
     messageId: "u:key",
     correlationId: "corr",
     replyTo: "agg.1",
     type: "reserve",
-    headers: {},
+    headers: { traceparent: b.traceparent },
   };
   properties.headers["x-command-signature"] = signature("key", b, properties);
   const content = Buffer.from(JSON.stringify(b));
@@ -92,7 +93,11 @@ test("replay edit creates one durable intent, relay retries same ID after publis
   await dlq.relay();
   assert.equal(sent[0][3].messageId, r.messageId);
   assert.equal((await dlq.list()).items[0].status, "BROKER_CONFIRMED");
-  assert.equal(JSON.parse(sent[0][2]).actor.userId, "u");
+  const replayed = JSON.parse(sent[0][2]);
+  assert.equal(replayed.actor.userId, "u");
+  assert.equal(replayed.traceparent, "00-11111111111111111111111111111111-2222222222222222-01");
+  assert.equal(sent[0][3].headers.traceparent, replayed.traceparent);
+  assert.equal(sent[0][3].headers["x-command-signature"], signature("key", replayed, sent[0][3]));
 });
 test("exhausted retry reuses original ID unchanged; editing cannot force an already committed operation", async (t) => {
   const { dlq } = await setup(t);

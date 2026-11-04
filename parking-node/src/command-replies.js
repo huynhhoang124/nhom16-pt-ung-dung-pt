@@ -1,6 +1,8 @@
 const amqp = require('amqplib');
 const { randomUUID } = require('node:crypto');
 const { makeConnector } = require('./amqp-connect');
+const { context, propagation, ROOT_CONTEXT, SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
+const replyTracer = trace.getTracer('parking-node/replies');
 const EXCHANGE = 'parking.replies';
 const unavailable = () => ({ ok: false, scope: 'infrastructure', code: 'REPLY_BROKER_UNAVAILABLE' });
 
@@ -48,6 +50,26 @@ function makeReplyPublisher(url, { connect = (u) => amqp.connect(u, { timeout: 2
     return opening;
   }
   async function publishDetailed(replyTo, payload, properties) {
+    const traceparent = properties?.headers?.traceparent ?? payload?.traceparent;
+    const parent = traceparent ? propagation.extract(ROOT_CONTEXT, { traceparent }) : ROOT_CONTEXT;
+    return replyTracer.startActiveSpan('command.reply.publish', {
+      kind: SpanKind.PRODUCER,
+      attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': EXCHANGE },
+    }, parent, async (span) => {
+      const carrier = {};
+      propagation.inject(context.active(), carrier);
+      try {
+        const result = await publishConfirmed(replyTo, payload, properties, carrier);
+        if (!result.ok) span.setStatus({ code: SpanStatusCode.ERROR, message: result.code });
+        return result;
+      } catch (error) {
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+        throw error;
+      } finally { span.end(); }
+    });
+  }
+  async function publishConfirmed(replyTo, payload, properties, carrier) {
     let content;
     try {
       if (typeof replyTo !== 'string' || !replyTo || !properties || typeof properties !== 'object') throw new TypeError();
@@ -66,7 +88,8 @@ function makeReplyPublisher(url, { connect = (u) => amqp.connect(u, { timeout: 2
       try {
         s.ch.publish(EXCHANGE, replyTo, content, {
           ...properties, contentType: 'application/json', persistent: true, mandatory: true,
-          headers: { ...properties.headers, 'x-reply-publish-id': id },
+          // Transport context is outside the signed payload; never mutate/re-sign the durable reply.
+          headers: { ...properties.headers, ...carrier, 'x-reply-publish-id': id },
         }, (e) => done(e ? { ok: false, scope: 'infrastructure', code: 'REPLY_NACKED' } : { ok: true }));
       } catch (error) {
         // AMQP field encoding rejects a malformed row before writing to the channel.
