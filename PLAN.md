@@ -293,9 +293,9 @@ Nhánh này đã gộp #80, #81 và sửa lỗi tích hợp với PD-06. Chỉ s
 
 ### B13 – PD-24 trace lệnh qua broker – sau PR PD-24 của Hiệp, B2
 
-- [ ] Gắn `traceparent` vào header lệnh và phản hồi (`commands.send`, consumer node, `command-replies`, consumer `agg.replies`).
-- [ ] Kiểm tra: một trace đặt chỗ ở `COMMAND_MODE=broker` có đủ HTTP → AMQP lệnh → node → DB → AMQP phản hồi → Socket.IO; chụp ảnh. Ảnh trace saga 3 bãi có bù trừ (sau B5).
-- [ ] PR, merge.
+- [x] Gắn `traceparent` vào header lệnh và phản hồi (`commands.send`, consumer node, `command-replies`, consumer `agg.replies`).
+- [x] Kiểm tra: một trace đặt chỗ ở `COMMAND_MODE=broker` có đủ HTTP → AMQP lệnh → node → DB → AMQP phản hồi → Socket.IO; chụp ảnh. Ảnh trace saga 3 bãi có bù trừ (sau B5).
+- [x] PR, merge.
 
 #### B13 chi tiết (05/11, nhánh `huynh/PD-B13`, đang giữa `git merge` PR #83 của Hiệp)
 

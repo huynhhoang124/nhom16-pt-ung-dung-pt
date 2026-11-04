@@ -51,3 +51,9 @@ B13 chi tiet chi sua file: chua chay test, chua co anh hay bang chung runtime.
 
 Trace duoc gui bat dong bo va khong thay the Transactional Outbox, log hay
 metrics. Cac API nghiep vu khong phu thuoc Collector hoac Jaeger.
+
+## Ảnh trace (05/11, `COMMAND_MODE=broker`)
+
+- Đặt chỗ: [pd-24-trace-dat-cho.png](anh/pd-24-trace-dat-cho.png).
+- Saga 3 bãi thành công (TC75): [pd-24-trace-saga.png](anh/pd-24-trace-saga.png).
+- Saga có bù trừ (TC76): [pd-24-trace-saga-bu-tru.png](anh/pd-24-trace-saga-bu-tru.png). Cùng một trace có `cmd.A.reserve`, `cmd.B.reserve`, `cmd.C.reserve`, rồi `cmd.A.cancel`, `cmd.B.cancel`.
