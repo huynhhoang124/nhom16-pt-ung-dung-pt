@@ -4,6 +4,7 @@
 const { calcFee, fromRow } = require('./pricing');
 const { requestId } = require('./log');
 const hlc = require('./hlc');
+const { context, propagation } = require('@opentelemetry/api');
 const { fenceIn } = require('./fencing');
 const { guardAdminIn } = require('./admin-guards');
 
@@ -67,10 +68,12 @@ async function emit(c, parkingId, type, slotCode, status, version, plate,extra =
     requestId: requestId(),
   };
 
+  const carrier = {};
+  propagation.inject(context.active(), carrier);
   return c.query(
-    `INSERT INTO parking_events(event_type, slot_code, license_plate, payload, hlc)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [type, slotCode, plate ?? null, payload, timestamp],
+    `INSERT INTO parking_events(event_type, slot_code, license_plate, payload, hlc, traceparent)
+     VALUES ($1, $2, $3, $4, $5, $6)`,
+    [type, slotCode, plate ?? null, payload, timestamp, carrier.traceparent ?? null],
   );
 }
 

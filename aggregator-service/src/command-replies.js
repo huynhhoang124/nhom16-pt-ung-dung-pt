@@ -3,6 +3,8 @@ const {randomUUID,createHash}=require('node:crypto');
 const {makeConnector}=require('./amqp-connect');
 const {canonical,verifySignature}=require('./command-signature');
 const {applyEvent}=require('./events');
+const {propagation,ROOT_CONTEXT,SpanKind,SpanStatusCode,trace}=require('@opentelemetry/api');
+const replyTracer=trace.getTracer('aggregator/replies');
 const INSTANCE_QUEUE_ARGS={'x-queue-type':'quorum','x-message-ttl':60000};
 const RECOVERY='agg.replies.recovery';
 
@@ -12,6 +14,12 @@ function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{}})
     const p=m.properties;
     if(!b||b.type!=='COMMAND_RESULT'||b.schemaVersion!==1||!Number.isInteger(b.statusCode)||b.statusCode<200||b.statusCode>599||
       !b.result||typeof b.result!=='object'||!verifySignature(internalKey,b,{...p,headers:{...p.headers,'x-command-signature':p.headers?.['x-reply-signature']}}))return false;
+    const traceparent=p.headers?.traceparent??b.traceparent;
+    const parent=traceparent?propagation.extract(ROOT_CONTEXT,{traceparent}):ROOT_CONTEXT;
+    return replyTracer.startActiveSpan('command.reply.receive',{
+      kind:SpanKind.CONSUMER,attributes:{'messaging.system':'rabbitmq','messaging.destination.name':'parking.replies'},
+    },parent,async span=>{
+    try{
     const c=await pool.connect();let row,changed=false,accepted=false;
     try{
       await c.query('BEGIN');
@@ -31,6 +39,9 @@ function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{}})
     if(accepted&&row.slot)applyEvent(cache,{parkingId:row.parking_id,slot:row.slot.slotCode,status:row.slot.status,version:row.slot.version});
     if(changed)await signal(row); // durable update and notify precede broker ack.
     return accepted;
+    }catch(error){span.recordException(error);span.setStatus({code:SpanStatusCode.ERROR,message:error.message});throw error;}
+    finally{span.end();}
+    });
   };
 }
 
@@ -55,7 +66,16 @@ async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onR
       c.on('error',lost);c.on('end',lost);
       c.on('notification',async n=>{
         if(n.channel!=='command_results')return;
-        try{const row=await flow.get(n.payload);if(row&&row.status!=='PENDING')onResult?.(row);}catch{log.error('command notification failed');}
+        try{
+          let notice;try{notice=JSON.parse(n.payload);}catch{/* Legacy instances notify with a raw commandId. */}
+          const id=typeof notice?.id==='string'?notice.id:n.payload;
+          const row=await flow.get(id);
+          if(row&&row.status!=='PENDING'){
+            const traceparent=notice?.traceparent??row.envelope?.traceparent;
+            const parent=traceparent?propagation.extract(ROOT_CONTEXT,{traceparent}):ROOT_CONTEXT;
+            onResult?.(row,parent);
+          }
+        }catch{log.error('command notification failed');}
       });
       await c.query('LISTEN command_results');
     }catch{if(listener){listener.release(true);listener=undefined;}reconnectListener();}

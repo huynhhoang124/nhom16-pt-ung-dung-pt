@@ -3,8 +3,10 @@
 // Chết giữa "publish" và "đánh dấu" => lần sau gửi lại (at-least-once); Aggregator bỏ tin trùng nhờ version.
 const { makeConnector } = require('./amqp-connect');
 const { log } = require('./log');
+const { context, propagation, SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
 
 const EXCHANGE = 'parking.events';
+const relayTracer = trace.getTracer('parking-node/outbox');
 
 // publish(routingKey, payload) -> true nếu broker đã xác nhận. Tự kết nối lại khi broker sập.
 function amqpPublisher(url) {
@@ -28,12 +30,27 @@ function amqpPublisher(url) {
     ch = c;
     return c;
   }
-  const publish = async (routingKey, payload) => {
+  const publish = async (routingKey, payload, traceparent) => {
     try {
       const c = await channel();
-      c.publish(EXCHANGE, routingKey, Buffer.from(JSON.stringify(payload)),
-        { persistent: true, contentType: 'application/json', ...(payload.requestId && { correlationId: payload.requestId }) });
-      await c.waitForConfirms();
+      const parent = traceparent ? propagation.extract(context.active(), { traceparent }) : context.active();
+      await relayTracer.startActiveSpan('outbox.publish', { kind: SpanKind.PRODUCER,
+        attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': EXCHANGE, 'messaging.rabbitmq.routing_key': routingKey },
+      }, parent, async (span) => {
+        try {
+          const headers = {};
+          propagation.inject(context.active(), headers);
+          c.publish(EXCHANGE, routingKey, Buffer.from(JSON.stringify(payload)),
+            { persistent: true, contentType: 'application/json', headers, ...(payload.requestId && { correlationId: payload.requestId }) });
+          await c.waitForConfirms();
+        } catch (error) {
+          span.recordException(error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+          throw error;
+        } finally {
+          span.end();
+        }
+      });
       return true;
     } catch {
       reset();
@@ -44,23 +61,35 @@ function amqpPublisher(url) {
 
 
   publish.publishBatch = async (events) => {
+    const spans = [];
     try {
       const c = await channel();
 
       for (const e of events) {
         const key = `parking.${e.payload.parkingId}.slot.${e.payload.slot}`;
-        c.publish(EXCHANGE, key, Buffer.from(JSON.stringify(e.payload)), {
-          persistent: true,
-          contentType: 'application/json',
-          ...(e.payload.requestId && { correlationId: e.payload.requestId }),
+        const parent = e.traceparent ? propagation.extract(context.active(), { traceparent: e.traceparent }) : context.active();
+        relayTracer.startActiveSpan('outbox.publish', { kind: SpanKind.PRODUCER,
+          attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': EXCHANGE, 'messaging.rabbitmq.routing_key': key },
+        }, parent, (span) => {
+          spans.push(span);
+          const headers = {};
+          propagation.inject(context.active(), headers);
+          c.publish(EXCHANGE, key, Buffer.from(JSON.stringify(e.payload)),
+            { persistent: true, contentType: 'application/json', headers, ...(e.payload.requestId && { correlationId: e.payload.requestId }) });
         });
       }
 
       await c.waitForConfirms();
       return true;
-    } catch {
+    } catch (error) {
+      for (const span of spans) {
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+      }
       reset();
       return false;
+    } finally {
+      for (const span of spans) span.end();
     }
   };
 
@@ -84,7 +113,7 @@ function makeRelay(pool, publish, logger = log, onConfirmed = () => {}) {
       await client.query('BEGIN');
 
       const { rows } = await client.query(`
-        SELECT id, payload, created_at
+        SELECT id, payload, created_at, traceparent
         FROM parking_events
         WHERE published_at IS NULL
         ORDER BY id
@@ -104,7 +133,7 @@ function makeRelay(pool, publish, logger = log, onConfirmed = () => {}) {
         confirmed = true;
         for (const e of rows) {
           const key = `parking.${e.payload.parkingId}.slot.${e.payload.slot}`;
-          if (!(await publish(key, e.payload))) {
+          if (!(await publish(key, e.payload, e.traceparent))) {
             confirmed = false;
             break;
           }

@@ -15,6 +15,7 @@ function msg(deadlineAt = 60000) {
     payload: {},
     issuedAt: 0,
     deadlineAt,
+    traceparent: "00-11111111111111111111111111111111-2222222222222222-01",
   };
   const properties = {
     messageId: "u:key",
@@ -22,7 +23,7 @@ function msg(deadlineAt = 60000) {
     replyTo: "agg.1",
     expiration: "60000",
     type: "reserve",
-    headers: { actor: b.actor, traceparent: "trace" },
+    headers: { actor: b.actor, traceparent: b.traceparent },
   };
   properties.headers["x-command-signature"] = signature("key", b, properties);
   return {
@@ -49,6 +50,8 @@ test("retry 2s then 10s then dead preserves identity and immutable deadline", as
     assert.equal(s.p.replyTo, "agg.1");
     assert.equal(s.p.expiration, undefined);
     assert.equal(JSON.parse(s.content).deadlineAt, 60000);
+    assert.equal(s.p.headers.traceparent, JSON.parse(s.content).traceparent);
+    assert.equal(s.p.headers.traceparent, "00-11111111111111111111111111111111-2222222222222222-01");
     assert.ok(trusted("key", JSON.parse(s.content), s.p));
     m = { content: s.content, properties: s.p, fields: { routingKey: s.key } };
   }
@@ -233,7 +236,7 @@ test("two transient failures roll back the real inbox transaction before the thi
     b = JSON.parse(m.content);
   b.issuedAt = Date.now();
   b.deadlineAt = b.issuedAt + 60000;
-  b.traceparent = "trace";
+  b.traceparent = m.properties.headers.traceparent;
   b.payload = { slotCode: "A01", licensePlate: "30A-123.45" };
   m.content = Buffer.from(JSON.stringify(b));
   m.properties.headers["x-command-signature"] = signature(

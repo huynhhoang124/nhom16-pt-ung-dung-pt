@@ -3,6 +3,7 @@
 // Có kết quả trong hạn thì trả 201/409, quá hạn trả 202 + commandId để client hỏi lại GET /api/commands/:id.
 const { createHash, randomUUID } = require('node:crypto');
 const { canonical } = require('./command-signature');
+const { context, propagation } = require('@opentelemetry/api');
 
 const terminal = (row) => row && row.status !== 'PENDING';
 const fail = (code, status) => Object.assign(new Error(code), { code, status });
@@ -65,8 +66,11 @@ function makeCommandFlow({
     if (!terminal(row)) return;
     require('./metrics').observeCommand(row);   // PD-25: command_duration_seconds
     settle(row.id, row);
-    onResult(row);
-    await pool.query("SELECT pg_notify('command_results',$1)", [row.id]);
+    const carrier = {};
+    propagation.inject(context.active(), carrier);
+    const traceparent = carrier.traceparent ?? row.envelope?.traceparent;
+    onResult(row, context.active());
+    await pool.query("SELECT pg_notify('command_results',$1)", [JSON.stringify({ id: row.id, traceparent })]);
   }
 
   async function markFailed(id, reason) {
@@ -104,6 +108,9 @@ function makeCommandFlow({
     const actor = { userId: user.sub, role: user.role, ...(user.parkingId && { parkingId: user.parkingId }) };
     const hash = createHash('sha256').update(canonical({ parkingId, type, actor, payload })).digest('hex');
     const issuedAt = now();
+    const carrier = {};
+    propagation.inject(context.active(), carrier);
+    traceparent ??= carrier.traceparent;
     const envelope = { issuedAt, deadlineAt: issuedAt + (config?.get('commandTtlMs', ttlMs) ?? ttlMs),
       ...(traceparent && { traceparent }), ...(fencingToken !== undefined && { fencingToken }) };
     const waiter = wait(id);   // phải đăng ký chờ TRƯỚC khi ghi ý định, vì worker có thể gửi ngay sau đó
