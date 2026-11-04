@@ -91,7 +91,8 @@ export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, 
     assert.equal(sh(`docker inspect -f "{{.State.ExitCode}}" ${originalContainer}`), '0', 'normal shutdown must close consumer/jobs cleanly');
     compose(`run -d --no-deps --name ${container} -e NODE_ENV=test -e COMMAND_TEST_CRASH_MESSAGE_ID=${messageId} parking-a`);
     launched = true;
-    await commands.send('A', 'reserve', { slotCode, licensePlate: '30A-665.53' }, { messageId, replyTo, actor });
+    // TTL dài: bị dồn tải, node khởi động lại quá 10 s thì tin hết hạn sang cmd.expired, không được giao lại.
+    await commands.send('A', 'reserve', { slotCode, licensePlate: '30A-665.53' }, { messageId, replyTo, actor, expiration: 120000 });
     await until('exit 86 after committed command', () => sh(`docker inspect -f "{{.State.Status}}:{{.State.ExitCode}}" ${container}`) === 'exited:86');
     assert.equal(sql('db-a', `SELECT count(*) FROM reservations WHERE request_id='${messageId}'`), '1');
     assert.equal(sql('db-a', `SELECT status_code FROM inbox_messages WHERE message_id='${messageId}'`), '201');
