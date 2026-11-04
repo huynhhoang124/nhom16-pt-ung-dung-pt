@@ -34,15 +34,23 @@ function amqpPublisher(url) {
     try {
       const c = await channel();
       const parent = traceparent ? propagation.extract(context.active(), { traceparent }) : context.active();
-      await new Promise((resolve, reject) => relayTracer.startActiveSpan('outbox.publish', { kind: SpanKind.PRODUCER,
+      await relayTracer.startActiveSpan('outbox.publish', { kind: SpanKind.PRODUCER,
         attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': EXCHANGE, 'messaging.rabbitmq.routing_key': routingKey },
-      }, parent, (span) => {
-        try { c.publish(EXCHANGE, routingKey, Buffer.from(JSON.stringify(payload)),
-          { persistent: true, contentType: 'application/json', headers: traceparent ? { traceparent } : {}, ...(payload.requestId && { correlationId: payload.requestId }) });
-          span.end(); resolve();
-        } catch (error) { span.recordException(error); span.setStatus({ code: SpanStatusCode.ERROR, message: error.message }); span.end(); reject(error); }
-      }));
-      await c.waitForConfirms();
+      }, parent, async (span) => {
+        try {
+          const headers = {};
+          propagation.inject(context.active(), headers);
+          c.publish(EXCHANGE, routingKey, Buffer.from(JSON.stringify(payload)),
+            { persistent: true, contentType: 'application/json', headers, ...(payload.requestId && { correlationId: payload.requestId }) });
+          await c.waitForConfirms();
+        } catch (error) {
+          span.recordException(error);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+          throw error;
+        } finally {
+          span.end();
+        }
+      });
       return true;
     } catch {
       reset();
@@ -53,26 +61,35 @@ function amqpPublisher(url) {
 
 
   publish.publishBatch = async (events) => {
+    const spans = [];
     try {
       const c = await channel();
 
       for (const e of events) {
         const key = `parking.${e.payload.parkingId}.slot.${e.payload.slot}`;
         const parent = e.traceparent ? propagation.extract(context.active(), { traceparent: e.traceparent }) : context.active();
-        await new Promise((resolve, reject) => relayTracer.startActiveSpan('outbox.publish', { kind: SpanKind.PRODUCER,
+        relayTracer.startActiveSpan('outbox.publish', { kind: SpanKind.PRODUCER,
           attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': EXCHANGE, 'messaging.rabbitmq.routing_key': key },
         }, parent, (span) => {
-          try { c.publish(EXCHANGE, key, Buffer.from(JSON.stringify(e.payload)), { persistent: true, contentType: 'application/json', headers: e.traceparent ? { traceparent: e.traceparent } : {}, ...(e.payload.requestId && { correlationId: e.payload.requestId }) });
-            span.end(); resolve();
-          } catch (error) { span.recordException(error); span.setStatus({ code: SpanStatusCode.ERROR, message: error.message }); span.end(); reject(error); }
-        }));
+          spans.push(span);
+          const headers = {};
+          propagation.inject(context.active(), headers);
+          c.publish(EXCHANGE, key, Buffer.from(JSON.stringify(e.payload)),
+            { persistent: true, contentType: 'application/json', headers, ...(e.payload.requestId && { correlationId: e.payload.requestId }) });
+        });
       }
 
       await c.waitForConfirms();
       return true;
-    } catch {
+    } catch (error) {
+      for (const span of spans) {
+        span.recordException(error);
+        span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
+      }
       reset();
       return false;
+    } finally {
+      for (const span of spans) span.end();
     }
   };
 
