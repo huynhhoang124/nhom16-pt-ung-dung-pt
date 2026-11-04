@@ -355,7 +355,9 @@ export function registerTc60Pd05Tests({
       // ---------------------------------------------------------------
       // 2. Discover the two real PD-13 Parking A containers.
       // ---------------------------------------------------------------
-
+      // TC60 cần hai Parking A nodes thật.
+      // Chỉ khởi động replica khi TC60 bắt đầu để không ảnh hưởng TC53 (PD-02).
+      compose('up', '-d', '--wait', 'parking-a-2');
       const parkingNodes = [
         {
           service: 'parking-a',
