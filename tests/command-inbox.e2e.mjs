@@ -10,7 +10,7 @@ const { makeCommands } = require('../aggregator-service/src/commands');
 
 // No full HTTP request/reply assertions until PD-03 implements that contract.
 export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot }) {
-  const options = { timeout: 300000 };
+  const options = { timeout: 540000 }; // 180 s chờ RabbitMQ + 90 s chờ consumer, còn lại cho thân test
   const url = process.env.PD02_AMQP_URL ?? 'amqp://parking:parking@localhost/%2F';
   async function setup(t) {
     // TC49 vừa khởi động lại rabbitmq: chờ cổng mở lại thay vì lỗi ECONNREFUSED ngay.
