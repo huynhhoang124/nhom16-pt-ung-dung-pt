@@ -11,12 +11,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: npm, cache-dependency-path: "**/package-lock.json" }
-      # aggregator-service/test dùng lại code parking-node nên cài parking-node trước
-      - run: npm ci && npm test
+      # Hai package dùng chéo mã nguồn của nhau, nên cài dependencies cả hai trước khi chạy test.
+      - run: npm ci
         working-directory: parking-node
-      - run: npm ci && npm test
+      - run: npm ci
         working-directory: aggregator-service
-      - run: npm ci && npm test
+      - run: npm ci
+        working-directory: notification-service
+      - run: npm test
+        working-directory: parking-node
+      - run: npm test
+        working-directory: aggregator-service
+      - run: npm test
         working-directory: notification-service
 
   frontend:
