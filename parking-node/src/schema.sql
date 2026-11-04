@@ -75,12 +75,14 @@ CREATE TABLE IF NOT EXISTS parking_events (
   slot_code     VARCHAR(10) NOT NULL,
   license_plate VARCHAR(20),
   payload       JSONB NOT NULL,
+  traceparent   VARCHAR(55),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at  TIMESTAMPTZ
 );
 -- PD-17: bổ sung HLC cho các sự kiện mới; dữ liệu lịch sử cũ giữ nguyên.
 ALTER TABLE parking_events
   ADD COLUMN IF NOT EXISTS hlc VARCHAR(18);
+ALTER TABLE parking_events ADD COLUMN IF NOT EXISTS traceparent VARCHAR(55);
 CREATE INDEX IF NOT EXISTS ix_events_unpublished ON parking_events(id) WHERE published_at IS NULL;
 -- PD-18: báo relay ngay khi có sự kiện mới trong outbox.
 CREATE OR REPLACE FUNCTION notify_parking_event_outbox()
