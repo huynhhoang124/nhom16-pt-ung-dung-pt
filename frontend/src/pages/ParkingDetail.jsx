@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, centralDown, knownNode, message, newKey, nodeApi, rememberNodes, STATUS_LABEL, useLive } from '../api.js';
 import { TYPE_LABEL } from './Dashboard.jsx';
 import Pricing from './Pricing.jsx';
@@ -13,7 +13,15 @@ const STAFF_ACTIONS = {
   MAINTENANCE: [['unmaintenance', 'Mở khoá']],
 };
 
-export default function ParkingDetail({ parkingId, user, onBack }) {
+// Chú thích sơ đồ: chỉ trạng thái của ô (không lẫn trạng thái kết nối của bãi).
+const SLOT_STATUSES = ['AVAILABLE', 'RESERVED', 'OCCUPIED', 'MAINTENANCE'];
+const fmt = (iso) => {
+  const d = new Date(iso);
+  const p = (n) => String(n).padStart(2, '0');
+  return `${p(d.getHours())}:${p(d.getMinutes())} · ${p(d.getDate())}/${p(d.getMonth() + 1)}`;
+};
+
+export default function ParkingDetail({ parkingId, user, onBack, onMine }) {
   const [p, setP] = useState(null);
   const [selected, setSelected] = useState(null);    // slot đang chọn
   const [pending, setPending] = useState(null);      // lượt đặt chỗ: { slotCode, key, plate, unknown }
@@ -27,6 +35,8 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   const [type, setType] = useState('');               // lọc loại xe, '' = tất cả
   const [busy, setBusy] = useState(false);            // đang chờ bãi trả lời lượt đặt
   const [loadedAt, setLoadedAt] = useState(null);     // giờ tải dữ liệu bãi gần nhất
+  const [booked, setBooked] = useState(null);         // lượt vừa đặt thành công (hiện thẻ xác nhận)
+  const asideRef = useRef(null);
   const isStaff = user.role === 'ADMIN' || (user.role === 'STAFF' && user.parkingId === parkingId);
 
   // PT-05: Aggregator sập -> nhân viên đọc/ghi thẳng node của bãi (p.direct = true)
@@ -56,9 +66,17 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
   // NV-01: đặt trước được cả slot đang bận (khác khung giờ); đặt ngay thì slot phải trống.
   function pick(slot) {
     setNote(null);
+    setBooked(null);
     setSelected(slot.slotCode);
     if (user.role === 'USER' && slot.status !== 'MAINTENANCE') setPending({ slotCode: slot.slotCode, key: newKey(), unknown: false });
     else setPending(null);
+    // Màn hẹp: panel nằm dưới sơ đồ -> cuộn tới để người dùng thấy ngay form.
+    setTimeout(() => {   // chờ React vẽ panel của ô mới chọn
+      const el = asideRef.current;
+      if (!el || el.getBoundingClientRect().top <= window.innerHeight * 0.6) return;
+      const smooth = !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      el.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' });
+    }, 50);
   }
 
   // Lịch đã đặt của slot đang chọn, theo ngày của giờ đến.
@@ -79,15 +97,16 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
     }, () => setNote({ kind: 'ok', text: 'Đang xử lý yêu cầu đặt chỗ…' }));
     setBusy(false);
     if (r.ok) {
-      const t = (k) => new Date(r.data[k]).toLocaleString('vi-VN');
-      setNote({ kind: 'ok', text: `Đã đặt ${pending.slotCode} từ ${t('start_time')} đến ${t('end_time')}. Đến muộn quá ${t('expire_time')} sẽ mất chỗ. Mã QR vào cổng ở mục "Đặt chỗ của tôi".` });
+      setNote(null);
+      setBooked({ slotCode: pending.slotCode, plate, start: r.data.start_time, end: r.data.end_time, expire: r.data.expire_time });
       setPending(null);
     } else if (r.status === 504 || r.status === 0) {
       setPending({ ...pending, unknown: true });   // giữ nguyên key để thử lại an toàn
       setNote({ kind: 'error', text: message(r.status ? r.data : { error: 'TIMEOUT_UNKNOWN_RESULT' }) });
     } else {
-      setNote({ kind: 'error', text: message(r.data) });
-      setPending(null);
+      // Bãi đã từ chối: giữ form để sửa và gửi lại (key mới vì là yêu cầu mới).
+      setNote({ kind: 'error', text: message(r.data), field: ['INVALID_PLATE', 'PLATE_ALREADY_INSIDE'].includes(r.data?.error) ? 'plate' : null });
+      setPending({ ...pending, key: newKey(), unknown: false });
     }
     load();
   }
@@ -145,7 +164,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
     </button>
   );
 
-  const noteBox = note && (
+  const noteBox = note && !note.field && (
     <div className={note.kind === 'ok' ? 'cmd ok' : 'cmd bad'} role="status">
       <span className="ic"><Icon name={note.kind === 'ok' ? 'circle-check' : 'circle-x'} /></span>
       <span className="cmd-title">{note.kind === 'ok' ? 'Thành công' : 'Không thực hiện được'}</span>
@@ -182,7 +201,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
             <button key={k} className={type === k ? 'tab active' : 'tab'} onClick={() => setType(k)}>{v}</button>
           ))}
         </div>
-        {Object.entries(STATUS_LABEL).map(([k, v]) => <span key={k} className={`chip ${k}`}><Icon name={slotIcon(k)} />{v}: <b>{counts[k] ?? 0}</b></span>)}
+        {SLOT_STATUSES.map((k) => <span key={k} className={`chip ${k}`}><Icon name={slotIcon(k)} />{STATUS_LABEL[k]}: <b>{counts[k] ?? 0}</b></span>)}
       </div>
 
       <div className={p.stale ? undefined : 'split'}>
@@ -205,7 +224,7 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
         </div>
 
         {!p.stale && (
-          <aside className="stack">
+          <aside className="stack" ref={asideRef}>
             {!slot && (
               <div className="card">
                 <div className="empty" style={{ border: 0, padding: 'var(--space-5) var(--space-2)' }}>
@@ -225,7 +244,10 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
                 {pending && (
                   <form onSubmit={reserve} className="stack" style={{ gap: 'var(--space-3)' }}>
                     <label className="field">Biển số
-                      <input placeholder="vd 30A-123.45" value={plate} onChange={(e) => setPlate(e.target.value)} required />
+                      <input placeholder="vd 30A-123.45" value={plate} required autoComplete="off"
+                        aria-invalid={note?.field === 'plate' ? 'true' : undefined}
+                        onChange={(e) => { setPlate(e.target.value); if (note?.field === 'plate') setNote(null); }} />
+                      {note?.field === 'plate' && <span className="error">{note.text}</span>}
                     </label>
                     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 'var(--space-2)' }}>
                       <label className="field">Giờ đến
@@ -254,6 +276,8 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
                         <span className="cmd-meta">#{pending.key.slice(0, 8)}</span>
                         <div className="cmd-actions"><button className="primary"><Icon name="retry" /> Thử lại</button></div>
                       </div>
+                    ) : slot.status !== 'AVAILABLE' && !when ? (
+                      <button className="primary" type="button" disabled>Ô đang bận – chọn giờ đến</button>
                     ) : (
                       <button className="primary">{when ? 'Đặt trước' : 'Đặt ngay'}</button>
                     )}
@@ -300,7 +324,21 @@ export default function ParkingDetail({ parkingId, user, onBack }) {
                     <button className="danger" onClick={() => confirm(`Gỡ slot ${slot.slotCode}?`) && manage('DELETE', undefined, slot.slotCode)}><Icon name="eye-off" /> Gỡ slot</button>
                   </div>
                 )}
-                {!pending && !isStaff && <p className="muted" style={{ margin: 0 }}>Ô đang bảo trì, tạm không nhận đặt chỗ.</p>}
+                {booked && booked.slotCode === slot.slotCode && (
+                  <div className="booked" role="status">
+                    <div className="booked-head"><Icon name="circle-check" /><strong>Đã giữ chỗ {booked.slotCode}</strong></div>
+                    <dl>
+                      <dt>Biển số</dt><dd><Plate value={booked.plate.toUpperCase().replace(/[^0-9A-Z]/g, '')} /></dd>
+                      <dt>Khung giờ</dt><dd>{fmt(booked.start)} – {new Date(booked.end).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</dd>
+                      <dt>Đến trước</dt><dd><b>{fmt(booked.expire)}</b> <span className="muted small">(quá giờ sẽ mất chỗ)</span></dd>
+                    </dl>
+                    <div className="booked-actions">
+                      {onMine && <button className="primary" onClick={onMine}><Icon name="qr" /> Xem vé &amp; mã QR</button>}
+                      <button onClick={() => { setBooked(null); setSelected(null); }}>Đặt thêm ô khác</button>
+                    </div>
+                  </div>
+                )}
+                {!pending && !booked && !isStaff && slot.status === 'MAINTENANCE' && <p className="muted" style={{ margin: 0 }}>Ô đang bảo trì, tạm không nhận đặt chỗ.</p>}
               </div>
             )}
             {noteBox}

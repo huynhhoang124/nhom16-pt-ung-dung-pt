@@ -135,8 +135,9 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     res.json(await s.slotSchedule(pool, req.params.code, req.query.date));
   });
 
+  // ACTIVE: QR để vào. USED (xe đang trong bãi): vẫn trả QR để khách quét ở cổng ra (cổng không kiểm hạn khi ra).
   app.get('/api/reservations', async (req, res) => res.json((await s.listReservations(pool, req.query.userId))
-    .map((r) => (r.status === 'ACTIVE' ? { ...r, qrToken: tokenFor(qrSecret, parkingId, r) } : r))));
+    .map((r) => (['ACTIVE', 'USED'].includes(r.status) ? { ...r, qrToken: tokenFor(qrSecret, parkingId, r) } : r))));
 
   // Lịch sử gửi xe: ?plate=&userId=&from=&to= (ISO 8601)
   app.get('/api/sessions', async (req, res) => {

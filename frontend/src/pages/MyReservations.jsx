@@ -61,7 +61,7 @@ export default function MyReservations() {
                   )}
                   {r.status === 'ACTIVE' && <div><button className="danger" onClick={() => cancel(r)}><Icon name="x" /> Huỷ</button></div>}
                 </div>
-                {r.qrToken && <div className="qr-wrap"><QrCode value={r.qrToken} /><span className="muted small">QR vào cổng · chạm để phóng to</span></div>}
+                {r.qrToken && <div className="qr-wrap"><QrCode value={r.qrToken} /><span className="muted small">{r.status === 'USED' ? 'QR ra cổng' : 'QR vào cổng'} · chạm để phóng to</span></div>}
               </div>
             );
           })}

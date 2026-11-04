@@ -13,7 +13,7 @@ export function km([lat1, lng1], [lat2, lng2]) {
   return 12742 * Math.asin(Math.sqrt(a));
 }
 
-export default function Dashboard({ onOpen }) {
+export default function Dashboard({ onOpen, hero = false }) {
   const [items, setItems] = useState(null);
   const [type, setType] = useState('');   // '' = mọi loại xe
   const [error, setError] = useState('');
@@ -59,14 +59,33 @@ export default function Dashboard({ onOpen }) {
 
   return (
     <>
-      <div className="page-head">
-        <div>
-          <h2>Tổng quan các bãi</h2>
-          <p className="muted" style={{ margin: 0 }}>
-            {online.length}/{items.length} bãi đang hoạt động · <b className="mono">{free}</b> chỗ trống{type && ` cho ${TYPE_LABEL[type].toLowerCase()}`}
-          </p>
+      {hero ? (
+        <section className="hero">
+          <div className="hero-text">
+            <span className="hero-kicker">Bãi đỗ xe thông minh</span>
+            <h2>Tìm và giữ chỗ đỗ xe <em>chỉ trong vài giây</em></h2>
+            <p>Xem chỗ trống theo thời gian thực ở mọi bãi, đặt trước và vào cổng bằng mã QR.</p>
+            <div className="hero-actions">
+              <button className="hero-cta" onClick={locate}><Icon name="pin" /> Tìm bãi gần tôi</button>
+              {geoNote && <span className="hero-note">{geoNote}</span>}
+            </div>
+          </div>
+          <div className="hero-stats">
+            <div><b>{free}</b><span>chỗ trống{type && ` · ${TYPE_LABEL[type].toLowerCase()}`}</span></div>
+            <div><b>{online.length}/{items.length}</b><span>bãi đang hoạt động</span></div>
+          </div>
+        </section>
+      ) : (
+        <div className="page-head">
+          <div>
+            <h2>Tổng quan các bãi</h2>
+            <p className="muted" style={{ margin: 0 }}>
+              {online.length}/{items.length} bãi đang hoạt động · <b className="mono">{free}</b> chỗ trống{type && ` cho ${TYPE_LABEL[type].toLowerCase()}`}
+            </p>
+          </div>
         </div>
-      </div>
+      )}
+      {hero && <h3 className="section-title">Danh sách bãi đỗ</h3>}
       <div className="legend" style={{ alignItems: 'center', marginBottom: 'var(--space-5)' }}>
         <div className="seg" role="group" aria-label="Loại xe">
           {[['', 'Tất cả'], ...Object.entries(TYPE_LABEL)].map(([k, v]) => (
@@ -77,8 +96,8 @@ export default function Dashboard({ onOpen }) {
           <button className={view === 'list' ? 'tab active' : 'tab'} onClick={() => setView('list')}>Danh sách</button>
           <button className={view === 'map' ? 'tab active' : 'tab'} onClick={() => setView('map')}>Bản đồ</button>
         </div>
-        <button className="link" onClick={locate}><Icon name="pin" /> Tìm bãi gần tôi</button>
-        {geoNote && <span className="muted small">{geoNote}</span>}
+        {!hero && <button className="link" onClick={locate}><Icon name="pin" /> Tìm bãi gần tôi</button>}
+        {!hero && geoNote && <span className="muted small">{geoNote}</span>}
       </div>
       {view === 'map' && (
         <Suspense fallback={<span className="skeleton map" />}>

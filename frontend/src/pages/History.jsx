@@ -86,7 +86,31 @@ export default function History({ user }) {
         </div>
       )}
       {data && data.sessions.length > 0 && (
-        <div className="scroll"><table>
+        // Màn hẹp: mỗi phiên là một thẻ, phí và nút Thanh toán luôn nằm trong tầm nhìn.
+        <ul className="session-cards narrow-only">
+          {data.sessions.map((x) => (
+            <li key={`${x.parkingId}:${x.id}`} className="card session-card">
+              <div className="session-top">
+                <Plate value={x.licensePlate} />
+                {x.exitedAt ? <span className="muted small">Đã ra</span> : <span className="st info"><Icon name="car" />Đang gửi</span>}
+              </div>
+              <dl>
+                <dt>Bãi · ô</dt><dd>{x.parkingId} · <span className="mono">{x.slotCode}</span></dd>
+                <dt>Vào</dt><dd className="mono small">{time(x.enteredAt)}</dd>
+                {x.exitedAt && <><dt>Ra</dt><dd className="mono small">{time(x.exitedAt)}</dd></>}
+                <dt>Phí</dt>
+                <dd>
+                  <b className="tnum-inline">{money(x.fee)}</b>{' '}
+                  {x.paidAt ? <span className="st ok"><Icon name="check" />Đã trả</span> : x.fee ? <span className="st warn"><Icon name="clock" />Chưa trả</span> : null}
+                </dd>
+              </dl>
+              {mine && !x.paidAt && !x.exitedAt && <button className="primary block" onClick={() => startPay(x)}><Icon name="card" /> Thanh toán</button>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {data && data.sessions.length > 0 && (
+        <div className="scroll wide-only"><table>
           <thead><tr><th>Bãi</th><th>Slot</th><th>Biển số</th><th>Vào</th><th>Ra</th><th className="tnum">Phí</th><th>Đã trả</th><th /></tr></thead>
           <tbody>
             {data.sessions.map((x) => (

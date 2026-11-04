@@ -53,7 +53,7 @@ export default function App() {
   const logout = () => { session.set(null); setUser(null); relogin(); setView({ page: 'dashboard' }); };
 
   return (
-    <div className="app">
+    <div className={user.role === 'USER' ? 'app theme-user' : 'app'}>
       <header className="bar">
         <strong className="brand"><span className="brand-mark" aria-hidden="true">P</span> Smart Parking</strong>
         <nav>
@@ -75,8 +75,9 @@ export default function App() {
       </header>
       <main className={user.role === 'USER' ? undefined : 'dense'}>
         <CommandStatus userId={user.id} />
-        {view.page === 'dashboard' && <Dashboard onOpen={(parkingId) => setView({ page: 'parking', parkingId })} />}
-        {view.page === 'parking' && <ParkingDetail key={view.parkingId} parkingId={view.parkingId} user={user} onBack={() => go('dashboard')} />}
+        {view.page === 'dashboard' && <Dashboard hero={user.role === 'USER'} onOpen={(parkingId) => setView({ page: 'parking', parkingId })} />}
+        {view.page === 'parking' && <ParkingDetail key={view.parkingId} parkingId={view.parkingId} user={user} onBack={() => go('dashboard')}
+          onMine={user.role === 'USER' ? () => go('mine') : undefined} />}
         {view.page === 'mine' && <MyReservations />}
         {view.page === 'admin' && <Admin />}
         {view.page === 'account' && <Account user={user} />}
@@ -84,6 +85,14 @@ export default function App() {
         {view.page === 'gate' && <Gate parkingId={user.parkingId} />}
         {view.page === 'history' && <History key={user.role} user={user} />}
       </main>
+      {user.role === 'USER' && (
+        <footer className="site-foot">
+          <div className="site-foot-in">
+            <strong className="brand"><span className="brand-mark" aria-hidden="true">P</span> Smart Parking</strong>
+            <span>Hệ thống bãi đỗ xe liên kết nhiều bãi · Nhóm 16 – PTIT</span>
+          </div>
+        </footer>
+      )}
       <Toaster />
     </div>
   );

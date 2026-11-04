@@ -76,9 +76,11 @@ test('TC29–TC32 QR ở cổng: đúng thì vào/ra được; sửa ký tự 40
   const enter = await scan(qrToken);                                                   // TC29
   assert.deepEqual([enter.status, enter.body.status, enter.body.session.licensePlate], [200, 'OCCUPIED', '30A12345']);
   assert.deepEqual([(await scan(qrToken)).status, (await scan(qrToken)).body.error], [409, 'QR_USED']);   // TC32
+  // xe đang trong bãi (USED): danh sách vẫn trả QR để khách quét ở cổng ra
+  assert.equal((await call('/api/reservations')).body[0].qrToken, qrToken);
   assert.equal((await scan(qrToken, 'exit')).body.status, 'AVAILABLE');               // ra bằng QR (dưới 5 phút: miễn phí)
   assert.deepEqual((await scan(qrToken, 'exit')).body, { error: 'NOT_INSIDE' });
-  // danh sách đặt chỗ: chỉ reservation ACTIVE mới có QR
+  // đã ra khỏi bãi: không còn QR
   assert.equal((await call('/api/reservations')).body[0].qrToken, undefined);
 });
 

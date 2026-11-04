@@ -24,7 +24,7 @@ export default function Login({ onLogin }) {
   const toggle = () => { setSignup(!signup); setError(''); setForm({ username: '', password: '', confirm: '' }); };
 
   return (
-    <div className="login">
+    <div className="login theme-user">
       <form className="card" onSubmit={submit}>
         <div>
           <h1><span className="brand-mark" aria-hidden="true">P</span>Smart Parking</h1>
