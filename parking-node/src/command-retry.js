@@ -4,6 +4,7 @@ const route = (b) => `cmd.${b.parkingId}.${b.type}`;
 const error = (code) => Object.assign(new Error(code), { code });
 
 // PD-02 integration: wrap its processor; no second business transaction here.
+const { TYPES: ADMIN_TYPES } = require("./admin-commands");
 function withDeadline(
   processCommand,
   { internalKey, parkingId, pool, now = Date.now, beforeDispatch } = {},
@@ -45,7 +46,8 @@ function withDeadline(
           "SELECT 1 FROM inbox_messages WHERE message_id=$1 AND processed_at IS NOT NULL",
           [m.properties.messageId],
         ));
-      if (!prior?.rowCount) throw error("COMMAND_EXPIRED");
+      // PD-04: lệnh quản trị hết hạn vẫn vào processor để ghi kết quả 410 và trả phản hồi cho từng bãi.
+      if (!prior?.rowCount && !ADMIN_TYPES.includes(b.type)) throw error("COMMAND_EXPIRED");
     }
     // Broker keeps retry.N as fields.routingKey. Only a signed envelope determines destination.
     const allowed = [route(b), `${route(b)}.admin`];
