@@ -10,10 +10,12 @@ const { makeCommands } = require('../aggregator-service/src/commands');
 
 // No full HTTP request/reply assertions until PD-03 implements that contract.
 export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot }) {
-  const options = { timeout: 120000 };
+  const options = { timeout: 540000 }; // 180 s chờ RabbitMQ + 90 s chờ consumer, còn lại cho thân test
   const url = process.env.PD02_AMQP_URL ?? 'amqp://parking:parking@localhost/%2F';
   async function setup(t) {
-    const conn = await amqp.connect(url);
+    // TC49 vừa khởi động lại rabbitmq: chờ cổng mở lại thay vì lỗi ECONNREFUSED ngay.
+    let conn;
+    await until('RabbitMQ nhận kết nối', async () => { conn = await amqp.connect(url).catch(() => null); return conn; }, 180000);
     const ch = await conn.createChannel();
     await ch.assertExchange('parking.replies', 'direct', { durable: true });
     const { queue } = await ch.assertQueue('', { exclusive: true });
@@ -89,7 +91,8 @@ export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, 
     assert.equal(sh(`docker inspect -f "{{.State.ExitCode}}" ${originalContainer}`), '0', 'normal shutdown must close consumer/jobs cleanly');
     compose(`run -d --no-deps --name ${container} -e NODE_ENV=test -e COMMAND_TEST_CRASH_MESSAGE_ID=${messageId} parking-a`);
     launched = true;
-    await commands.send('A', 'reserve', { slotCode, licensePlate: '30A-665.53' }, { messageId, replyTo, actor });
+    // TTL dài: bị dồn tải, node khởi động lại quá 10 s thì tin hết hạn sang cmd.expired, không được giao lại.
+    await commands.send('A', 'reserve', { slotCode, licensePlate: '30A-665.53' }, { messageId, replyTo, actor, expiration: 120000 });
     await until('exit 86 after committed command', () => sh(`docker inspect -f "{{.State.Status}}:{{.State.ExitCode}}" ${container}`) === 'exited:86');
     assert.equal(sql('db-a', `SELECT count(*) FROM reservations WHERE request_id='${messageId}'`), '1');
     assert.equal(sql('db-a', `SELECT status_code FROM inbox_messages WHERE message_id='${messageId}'`), '201');

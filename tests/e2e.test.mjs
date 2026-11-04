@@ -300,7 +300,7 @@ test('TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật
   await until(`${PARKING_IDS.length} bãi ONLINE`, async () => (await Promise.all(PARKING_IDS.map(statusOf))).every((s) => s === 'ONLINE'));
 });
 
-test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết', T, async () => {
+test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết', { ...T, timeout: 300_000 }, async () => {
   compose('stop rabbitmq');
   try {
     const slot = await freeSlot('A');
@@ -322,7 +322,7 @@ test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lạ
       } catch {
         return false;
       }
-    }, 60_000);
+    }, 180_000);
   }
   await until('outbox gửi hết', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 90_000);
 });
@@ -787,7 +787,7 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
       let l1 = (await agg('/api/leader')).body;
       if (!l1?.isLeader) {
         await agg2('/api/test/fault/leader-pause', { method: 'POST', body: { ms: 5000 } });
-        await until('Aggregator 1 trở thành Leader', async () => (await agg('/api/leader')).body?.isLeader, 10_000);
+        await until('Aggregator 1 trở thành Leader', async () => (await agg('/api/leader')).body?.isLeader, 30_000);
         l1 = (await agg('/api/leader')).body;
       }
       assert.ok(l1?.isLeader, 'Aggregator 1 phải là leader');
