@@ -346,11 +346,11 @@ Chỉ sửa file, không chạy lệnh shell, không commit.
 
 ### B15 – PD-27 Đo trước/sau (issue #45) – sau tất cả
 
-- [ ] `tests/load/k6.js`: kịch bản 300 người dùng ảo; `node scripts/net.mjs B latency 1500`.
-- [ ] 4 cặp so sánh: `COMMAND_MODE` http/broker; 3/6 bãi; 2/4 Aggregator; bãi A đồng bộ/bất đồng bộ.
-- [ ] Mỗi lần ghi p50, p95, p99, tỉ lệ 504/503, thông lượng; lưu log k6 và ảnh Grafana.
-- [ ] `tai-lieu/ket-qua-do-so-sanh.md`: bảng số liệu, đối chiếu SLO mục 3.3. Không có số ước lượng.
-- [ ] TC80: 300 người dùng ảo, bãi chậm 1,5 s → tỉ lệ 504 về 0, p95 trong ngưỡng.
+- [x] `tests/load/k6.js`: kịch bản 300 người dùng ảo; `node scripts/net.mjs B latency 1500`.
+- [x] 4 cặp so sánh: `COMMAND_MODE` http/broker; 3/6 bãi; 2/4 Aggregator; bãi A đồng bộ/bất đồng bộ.
+- [x] Mỗi lần ghi p50, p95, p99, tỉ lệ 504/503, thông lượng; lưu log k6. Chưa có ảnh Grafana.
+- [x] `tai-lieu/ket-qua-do-so-sanh.md`: bảng số liệu, đối chiếu SLO mục 3.3. Không có số ước lượng.
+- [ ] (Đã đo, chưa đạt, xem kết quả) TC80: 300 người dùng ảo, bãi chậm 1,5 s → tỉ lệ 504 về 0, p95 trong ngưỡng.
 - [ ] PR, merge.
 
 ### B16 – Kết thúc
