@@ -145,3 +145,106 @@ test('GS-04 /metrics: không cần khoá; có thời gian request, outbox chưa 
   assert.match(text, /parking_slots\{type="CAR",state="available",parking="B"\} 2/);
   assert.match(text, /http_request_duration_seconds_count\{parking="B",method="POST",route="\/api\/slots\/:code\/:action",code="200"\} 1/);
 });
+
+test('PD-17 chỉ request nội bộ được phép cập nhật HLC qua HTTP', async (t) => {
+  const crypto = require('node:crypto');
+  const { compareHlc } = require('../src/hlc');
+
+  const { privateKey, publicKey } = crypto.generateKeyPairSync('rsa', {
+    modulusLength: 2048,
+    privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+    publicKeyEncoding: { type: 'spki', format: 'pem' },
+  });
+
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString('base64url');
+
+  const claims = {
+    role: 'STAFF',
+    parkingId: 'B',
+    exp: Date.now() / 1000 + 600,
+  };
+
+  const data = `${b64({ alg: 'RS256', typ: 'JWT' })}.${b64(claims)}`;
+  const token = `${data}.${crypto.sign('RSA-SHA256', Buffer.from(data), privateKey).toString('base64url')}`;
+
+  const pool = await makePool('B', 3);
+  const server = makeApp({
+    pool,
+    parkingId: 'B',
+    internalKey: 'k',
+    jwtPublicKey: publicKey,
+  }).listen(0);
+
+  await new Promise((resolve) => server.once('listening', resolve));
+
+  t.after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    await pool.db.close();
+  });
+
+  const base = `http://127.0.0.1:${server.address().port}`;
+
+  const call = async (path, headers = {}) => {
+    const response = await fetch(base + path, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...headers,
+      },
+      body: JSON.stringify({}),
+    });
+
+    return {
+      status: response.status,
+      body: await response.json(),
+    };
+  };
+
+  // 1. JWT hợp lệ nhưng tự gửi HLC tương lai: node phải bỏ qua.
+  const forgedHlc = `${String(Date.now() + 86_400_000).padStart(13, '0')}-0000`;
+
+  const staffResult = await call('/api/slots/B01/enter', {
+    authorization: `Bearer ${token}`,
+    'x-hlc': forgedHlc,
+  });
+
+  assert.equal(staffResult.status, 200);
+
+  assert.ok(
+    compareHlc(staffResult.body.session.hlc, forgedHlc) < 0,
+    'Nhân viên không được tự điều khiển HLC của node',
+  );
+
+  // 2. Internal key đúng nhưng HLC không hợp lệ: phải bị từ chối.
+  const invalid = await call('/api/slots/B02/enter', {
+    'x-internal-key': 'k',
+    'x-hlc': 'invalid-hlc',
+  });
+
+  assert.deepEqual(invalid, {
+    status: 400,
+    body: { error: 'INVALID_HLC' },
+  });
+
+  // Slot B02 vẫn phải trống vì request lỗi không được thực hiện nghiệp vụ.
+  const slot = await pool.query(
+    `SELECT status FROM parking_slots WHERE slot_code = 'B02'`,
+  );
+
+  assert.equal(slot.rows[0].status, 'AVAILABLE');
+
+  // 3. Internal key đúng và HLC hợp lệ: session phải lớn hơn HLC cha.
+  const parentHlc = `${String(Date.now() + 120_000).padStart(13, '0')}-0000`;
+
+  const internalResult = await call('/api/slots/B02/enter', {
+    'x-internal-key': 'k',
+    'x-hlc': parentHlc,
+  });
+
+  assert.equal(internalResult.status, 200);
+
+  assert.ok(
+    compareHlc(internalResult.body.session.hlc, parentHlc) > 0,
+    'Parking Node phải cập nhật HLC trước khi tạo session',
+  );
+});

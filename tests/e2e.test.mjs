@@ -313,6 +313,16 @@ test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lạ
     else await until('outbox gửi hết qua nút khác khi rabbitmq còn tắt', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 30_000);
   } finally {
     compose('start rabbitmq');
+
+    // Chờ RabbitMQ primary thực sự sẵn sàng trước khi test tiếp theo kết nối.
+    await until('RabbitMQ primary sẵn sàng nhận kết nối', () => {
+      try {
+        compose('exec -T rabbitmq rabbitmq-diagnostics -q check_port_connectivity');
+        return true;
+      } catch {
+        return false;
+      }
+    }, 60_000);
   }
   await until('outbox gửi hết', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 90_000);
 });

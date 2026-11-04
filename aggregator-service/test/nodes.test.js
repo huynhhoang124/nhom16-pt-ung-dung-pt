@@ -138,3 +138,78 @@ test('resolveUrl: tên -> IP (request thật không phải tra DNS); IP giữ ng
   assert.equal(await resolveUrl('http://10.0.0.5:8002'), 'http://10.0.0.5:8002');
   assert.equal(await resolveUrl('http://khong-ton-tai.invalid:8003'), 'http://khong-ton-tai.invalid:8003');
 });
+
+test('PD-17 HLC truyền từ Aggregator sang Parking Node qua HTTP', async (t) => {
+  // Dựng Parking Node thật với database PGlite.
+  const node = await startNode('D', 3);
+
+  // Dựng Aggregator thật, kết nối đến Parking Node qua HTTP.
+  const agg = await startAggregator({ D: node.url });
+
+  t.after(async () => {
+    await Promise.all([
+      new Promise((resolve) => node.server.close(resolve)),
+      new Promise((resolve) => agg.server.close(resolve)),
+      node.pool.end(),
+      agg.pool.end(),
+    ]);
+  });
+
+  const target = agg.reg.get('D');
+  target.status = 'ONLINE';
+
+  // Giả lập HLC của event CAR_EXIT mà Aggregator đã quan sát.
+  // Dùng thời điểm tương lai để chứng minh D thực sự nhận HLC cha.
+  const parentHlc =
+    `${String(Date.now() + 60_000).padStart(13, '0')}-0000`;
+
+  const { applyEvent } = require('../src/events');
+
+  applyEvent(agg.cache, {
+    parkingId: 'A',
+    slot: 'A01',
+    status: 'AVAILABLE',
+    version: 1,
+    hlc: parentHlc,
+  });
+
+  // Gửi xe vào D qua API Aggregator, không gọi trực tiếp Parking Node.
+  const token = await agg.login('admin');
+
+  const result = await agg.call(
+    '/api/parkings/D/slots/D01/enter',
+    {
+      method: 'POST',
+      token,
+      body: { licensePlate: '30A-123.45' },
+    },
+  );
+
+  assert.equal(result.status, 200, JSON.stringify(result.body));
+
+  const sessionHlc = result.body.session.hlc;
+
+  assert.ok(sessionHlc, 'Session phải có HLC');
+
+  const { compareHlc } = require('../src/hlc');
+
+  assert.ok(
+    compareHlc(sessionHlc, parentHlc) > 0,
+    `HLC của session D phải lớn hơn HLC cha: ${sessionHlc} <= ${parentHlc}`,
+  );
+
+  // Kiểm tra HLC thực sự được ghi vào parking_events.
+  const event = await node.pool.query(
+    `SELECT hlc
+     FROM parking_events
+     WHERE event_type = 'CAR_ENTER' AND slot_code = 'D01'
+     ORDER BY id DESC
+     LIMIT 1`,
+  );
+
+  assert.equal(
+    event.rows[0]?.hlc,
+    sessionHlc,
+    'HLC của CAR_ENTER phải trùng với HLC đã lưu trong session',
+  );
+});
