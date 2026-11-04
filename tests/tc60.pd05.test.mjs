@@ -11,13 +11,28 @@ const require = createRequire(
 const amqp = require('amqplib');
 const { makeCommands } = require('../aggregator-service/src/commands');
 
-const options = { timeout: 120000 };
-const url = process.env.PD02_AMQP_URL ?? 'amqp://parking:parking@localhost/%2F';
+const COMPOSE_ARGS = [
+  '-f', 'docker-compose.yml',
+  '-f', 'docker-compose.pd13.yml',
+  '--profile', 'ha',
+  '--profile', 'pd13',
+];
+
+const MANAGEMENT_URL = () =>
+  (process.env.PD05_RABBITMQ_MANAGEMENT_URL ?? 'http://localhost:15672')
+    .replace(/\/+$/, '');
+
+const MANAGEMENT_USER = () =>
+  process.env.PD05_RABBITMQ_USER ?? 'parking';
+
+const MANAGEMENT_PASSWORD = () =>
+  process.env.PD05_RABBITMQ_PASSWORD ?? 'parking';
+
+const AMQP_URL = () =>
+  process.env.PD02_AMQP_URL ?? 'amqp://parking:parking@localhost/%2F';
 
 export function registerTc60Pd05Tests({
   ROOT,
-  sh,
-  sql,
   node,
   login,
   freeSlot,
@@ -27,14 +42,112 @@ export function registerTc60Pd05Tests({
     execFileSync('docker', args, {
       cwd: ROOT,
       encoding: 'utf8',
+      timeout: 30000,
       stdio: ['ignore', 'pipe', 'pipe'],
     }).trim();
 
-  async function waitFor(label, predicate, timeoutMs = 15000, intervalMs = 100) {
-    const started = Date.now();
+  const compose = (...args) =>
+    docker('compose', ...COMPOSE_ARGS, ...args);
+
+  // Run SQL through docker exec with separate arguments.
+  // Avoid passing SQL through the Windows shell.
+  function querySql(db, query) {
+    return compose(
+      'exec',
+      '-T',
+      db,
+      'psql',
+      '-U',
+      'postgres',
+      '-d',
+      'parking',
+      '-tAc',
+      query
+    );
+  }
+
+  function inspectContainer(containerId) {
+    return JSON.parse(docker('inspect', containerId))[0];
+  }
+
+  function serviceContainer(service) {
+    const ids = compose('ps', '-q', service)
+      .split(/\r?\n/)
+      .map(value => value.trim())
+      .filter(Boolean);
+
+    assert.equal(
+      ids.length,
+      1,
+      `Expected exactly one running container for ${service}; found ${ids.length}`
+    );
+
+    return {
+      service,
+      containerId: ids[0],
+      info: inspectContainer(ids[0]),
+    };
+  }
+
+  function defaultNetworkIp(container) {
+    const networks = Object.entries(
+      container.info.NetworkSettings.Networks ?? {}
+    );
+
+    const entry =
+      networks.find(([name]) => name.endsWith('_default')) ??
+      networks[0];
+
+    assert.ok(entry, `${container.service} has no Docker network`);
+
+    const ip = entry[1].IPAddress;
+    assert.ok(ip, `${container.service} has no Docker IP`);
+
+    return ip;
+  }
+
+  function containerEnv(container, name) {
+    const entry = (container.info.Config.Env ?? [])
+      .find(value => value.startsWith(`${name}=`));
+
+    return entry?.slice(name.length + 1);
+  }
+
+  function databaseTarget(container) {
+    const value = containerEnv(container, 'DATABASE_URL');
+
+    assert.ok(
+      value,
+      `${container.service} is missing DATABASE_URL`
+    );
+
+    const parsed = new URL(value);
+
+    return `${parsed.hostname}:${parsed.port || 5432}${parsed.pathname}`;
+  }
+
+  async function healthy(nodeInfo) {
+    try {
+      const response = await fetch(nodeInfo.healthUrl, {
+        signal: AbortSignal.timeout(3000),
+      });
+
+      return response.status === 200;
+    } catch {
+      return false;
+    }
+  }
+
+  async function waitFor(
+    label,
+    predicate,
+    timeoutMs = 15000,
+    intervalMs = 100
+  ) {
+    const deadline = Date.now() + timeoutMs;
     let lastError;
 
-    while (Date.now() - started < timeoutMs) {
+    while (Date.now() < deadline) {
       try {
         const result = await predicate();
         if (result) return result;
@@ -42,7 +155,7 @@ export function registerTc60Pd05Tests({
         lastError = error;
       }
 
-      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      await new Promise(resolve => setTimeout(resolve, intervalMs));
     }
 
     throw new Error(
@@ -51,193 +164,128 @@ export function registerTc60Pd05Tests({
     );
   }
 
-  function listAConsumers() {
-    const output = sh(
-      'docker compose --profile ha exec -T rabbitmq rabbitmqctl list_consumers -p /'
-    );
+  async function managementGet(path) {
+    const credentials = Buffer
+      .from(`${MANAGEMENT_USER()}:${MANAGEMENT_PASSWORD()}`)
+      .toString('base64');
 
-    return output
-      .split(/\r?\n/)
-      .map((line) => line.trim().split(/\s+/))
-      .filter((parts) => parts[0] === 'cmd.A')
-      .map((parts) => ({
-        consumerTag: parts[2],
-        active: parts[5] === 'true',
+    const response = await fetch(`${MANAGEMENT_URL()}${path}`, {
+      headers: {
+        Authorization: `Basic ${credentials}`,
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+
+    if (!response.ok) {
+      throw new Error(
+        `RabbitMQ Management API ${path}: HTTP ${response.status}`
+      );
+    }
+
+    return response.json();
+  }
+
+  async function listAConsumers() {
+    const consumers = await managementGet('/api/consumers/%2F');
+
+    return consumers
+      .filter(item => item.queue?.name === 'cmd.A')
+      .map(item => ({
+        consumerTag: item.consumer_tag,
+        active: item.active === true,
+        peerHost: item.channel_details?.peer_host,
       }));
   }
 
+  async function queueInfo() {
+    return managementGet('/api/queues/%2F/cmd.A');
+  }
+
+  function inboxCount(messagePrefix) {
+    return Number(
+      querySql(
+        'db-a',
+        `SELECT count(*) FROM inbox_messages WHERE message_id LIKE '${messagePrefix}%'`
+      )
+    );
+  }
+
   test(
-    'TC60 PD-05 SAC: 100 numbered commands preserve FIFO order after active consumer failure',
-    options,
-    async (t) => {
+    'TC60 PD-05 SAC: 100 numbered commands preserve FIFO after real PD-13 node failure',
+    { timeout: 240000 },
+    async t => {
       const runId = randomUUID().replaceAll('-', '').slice(0, 12);
-      const helperName = `pd05-sac-${runId}`;
-      const prefix = `${runId}:pd05-`;
-      const helperScript = `
-const { Pool } = require('pg');
-const {
-  startCommandConsumer,
-  makeCommandProcessor
-} = require('./src/commands');
-
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL
-});
-
-pool.on('error', (error) => {
-  console.error('PD05 database pool error:', error.message);
-});
-
-const parkingId = process.env.PARKING_ID || 'A';
-const internalKey = process.env.INTERNAL_KEY || 'dev';
-const delayMs = Number(process.env.PD05_PROCESS_DELAY_MS || 0);
-
-const processor = makeCommandProcessor({
-  pool,
-  parkingId,
-  internalKey,
-  reservationMinutes: Number(process.env.RESERVATION_MINUTES || 15),
-  qrSecret: process.env.QR_SECRET ||
-    (internalKey + ':qr:' + parkingId)
-});
-
-const log = {
-  info: (msg, fields = {}) =>
-    console.log(JSON.stringify({ msg, ...fields })),
-  error: (msg, fields = {}) =>
-    console.error(JSON.stringify({ msg, ...fields }))
-};
-
-const consumer = startCommandConsumer({
-  url: process.env.RABBITMQ_URL,
-  pool,
-  parkingId,
-  internalKey,
-  log,
-  processCommand: async (message) => {
-    if (delayMs) {
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-    return processor(message);
-  }
-});
-
-async function shutdown() {
-  try {
-    await consumer.stop();
-  } finally {
-    await pool.end().catch(() => {});
-    process.exit(0);
-  }
-}
-
-process.once('SIGTERM', shutdown);
-process.once('SIGINT', shutdown);
-
-process.on('uncaughtException', (error) => {
-  console.error(error);
-  process.exit(1);
-});
-
-process.on('unhandledRejection', (error) => {
-  console.error(error);
-  process.exit(1);
-});
-`;
 
       let connection;
       let channel;
       let commands;
-      let helperCreated = false;
-      let parkingAStopped = false;
-      let allCommandsPublished = false;
-      let firstMessageId;
+
+      let activeNode;
+      let publishAttemptedCount = 0;
+
       let messagePrefix;
+      let firstMessageId;
       let actor;
 
-      const token = await login('user1');
-      actor = {
-        userId: JSON.parse(
-          Buffer.from(token.split('.')[1], 'base64url')
-        ).sub,
-        role: 'USER',
-      };
-
-      messagePrefix = `${actor.userId}:pd05-${runId}-`;
-      firstMessageId = `${messagePrefix}001`;
-
-      const slotCode = await freeSlot('A');
-
-      connection = await amqp.connect(url);
-      channel = await connection.createChannel();
-
-      await channel.assertExchange('parking.replies', 'direct', {
-        durable: true,
-      });
-
-      const { queue } = await channel.assertQueue('', {
-        exclusive: true,
-      });
-
-      const replyTo = `test.${randomUUID()}`;
-      await channel.bindQueue(queue, 'parking.replies', replyTo);
-
-      await channel.consume(queue, (message) => {
-        if (message) channel.ack(message);
-      });
-
-      commands = makeCommands(url, { signingKey: KEY });
-
+      // Register cleanup before setup so failed preconditions do not skip cleanup.
       t.after(async () => {
-        // Kill and remove the temporary consumer, if it was created.
-        if (helperCreated) {
+        // Restore the node that was active when the test started.
+        if (activeNode) {
           try {
-            docker('rm', '-f', helperName);
-          } catch {}
-        }
+            const state = inspectContainer(activeNode.containerId).State;
 
-        // Always restore the original parking-a service.
-        if (parkingAStopped) {
-          try {
-            docker('compose', 'start', 'parking-a');
+            if (state.Paused) {
+              docker('unpause', activeNode.containerId);
+            }
+
+            if (!state.Running) {
+              docker('start', activeNode.containerId);
+            }
 
             await waitFor(
-              'parking-a HTTP service restored',
-              async () => (await node('A', '/api/slots')).status === 200,
-              20000
+              `${activeNode.service} restored`,
+              () => healthy(activeNode),
+              45000
             );
           } catch (error) {
-            console.error('TC60 cleanup: parking-a restore failed:', error.message);
+            console.error(
+              `TC60 cleanup: ${activeNode.service} restore failed:`,
+              error.message
+            );
           }
         }
 
-        // Drain all submitted test messages before removing their DB records.
-        let drained = !allCommandsPublished;
+        // Only remove test records after every attempted publish is processed.
+        // If a publisher confirm fails ambiguously, preserve the records safely.
+        let drained = publishAttemptedCount === 0;
 
-        if (allCommandsPublished) {
+        if (publishAttemptedCount > 0 && messagePrefix) {
           try {
             await waitFor(
-              'TC60 cleanup: all messages processed',
-              () =>
-                sql(
-                  'db-a',
-                  `SELECT count(*) FROM inbox_messages WHERE message_id LIKE '${messagePrefix}%'`
-                ) === '100',
-              30000
+              `TC60 cleanup: all ${publishAttemptedCount} attempted messages processed`,
+              () => inboxCount(messagePrefix) === publishAttemptedCount,
+              45000
             );
+
             drained = true;
-          } catch {}
+          } catch (error) {
+            console.error(
+              'TC60 cleanup: messages were not fully drained:',
+              error.message
+            );
+          }
         }
 
         if (drained && messagePrefix) {
           try {
-            const stored = sql(
+            const stored = querySql(
               'db-a',
               `SELECT result::text FROM inbox_messages WHERE message_id='${firstMessageId}'`
             );
 
             if (stored) {
               const result = JSON.parse(stored);
+
               if (result?.id) {
                 await node('A', `/api/reservations/${result.id}`, {
                   method: 'DELETE',
@@ -245,21 +293,27 @@ process.on('unhandledRejection', (error) => {
               }
             }
           } catch (error) {
-            console.error('TC60 cleanup: reservation restore:', error.message);
+            console.error(
+              'TC60 cleanup: reservation restore:',
+              error.message
+            );
           }
 
           try {
-            sql(
-                'db-a',
-                `DELETE FROM command_reply_outbox WHERE command_id LIKE '${messagePrefix}%'`
+            querySql(
+              'db-a',
+              `DELETE FROM command_reply_outbox WHERE command_id LIKE '${messagePrefix}%'`
             );
 
-            sql(
-                'db-a',
-                `DELETE FROM inbox_messages WHERE message_id LIKE '${messagePrefix}%'`
+            querySql(
+              'db-a',
+              `DELETE FROM inbox_messages WHERE message_id LIKE '${messagePrefix}%'`
             );
           } catch (error) {
-            console.error('TC60 cleanup: test records:', error.message);
+            console.error(
+              'TC60 cleanup: test records:',
+              error.message
+            );
           }
         }
 
@@ -268,99 +322,218 @@ process.on('unhandledRejection', (error) => {
         await connection?.close().catch(() => {});
       });
 
-      // Preconditions: cmd.A is empty and has only its normal active consumer.
-      const initialQueue = await channel.checkQueue('cmd.A');
-      assert.equal(initialQueue.messageCount, 0, 'cmd.A must be empty before TC60');
+      // ---------------------------------------------------------------
+      // 1. Preconditions: three-node RabbitMQ HA cluster.
+      // ---------------------------------------------------------------
 
-      const initialConsumers = listAConsumers();
-      assert.equal(initialConsumers.length, 1, 'expected one initial cmd.A consumer');
-      assert.equal(initialConsumers[0].active, true);
+      for (const service of ['rabbitmq', 'rabbitmq-2', 'rabbitmq-3']) {
+        const broker = serviceContainer(service);
 
-      // Stop the original active consumer before creating the test consumer.
-      docker('compose', 'stop', 'parking-a');
-      parkingAStopped = true;
+        assert.equal(
+          broker.info.State.Health?.Status,
+          'healthy',
+          `${service} must be healthy`
+        );
+      }
 
-      await waitFor(
-        'original cmd.A consumer disconnected',
-        () => listAConsumers().length === 0,
-        10000
+      const clusterStatus = compose(
+        'exec', '-T', 'rabbitmq',
+        'rabbitmqctl', 'cluster_status'
       );
 
-      // Start the test consumer first. Its small delay creates a deterministic
-      // backlog so that failure occurs while messages are still unacknowledged.
-      helperCreated = true;
+      for (const member of [
+        'rabbit@rabbitmq',
+        'rabbit@rabbitmq-2',
+        'rabbit@rabbitmq-3',
+      ]) {
+        assert.ok(
+          clusterStatus.includes(member),
+          `RabbitMQ cluster is missing ${member}`
+        );
+      }
 
-      docker(
-        'compose',
-        'run',
-        '-d',
-        '--no-deps',
-        '--name',
-        helperName,
-        '-e',
-        'PD05_PROCESS_DELAY_MS=50',
-        'parking-a',
-        'node',
-        '-e',
-        helperScript
-      );
+      // ---------------------------------------------------------------
+      // 2. Discover the two real PD-13 Parking A containers.
+      // ---------------------------------------------------------------
 
-      await waitFor(
-        'temporary consumer registered as active',
-        () => {
-          const consumers = listAConsumers();
-          return consumers.length === 1 && consumers[0].active;
+      const parkingNodes = [
+        {
+          service: 'parking-a',
+          healthUrl: 'http://localhost:8001/health',
         },
-        15000
-      );
-
-      // Restart the original node. It must register as the SAC standby.
-      docker('compose', 'start', 'parking-a');
-
-      const twoConsumers = await waitFor(
-        'both cmd.A consumers registered',
-        () => {
-          const consumers = listAConsumers();
-          return consumers.length === 2 &&
-            consumers.filter((c) => c.active).length === 1 &&
-            consumers.filter((c) => !c.active).length === 1
-            ? consumers
-            : false;
+        {
+          service: 'parking-a-2',
+          healthUrl: 'http://localhost:8101/health',
         },
-        20000
+      ].map(item => {
+        const container = serviceContainer(item.service);
+
+        return {
+          ...container,
+          healthUrl: item.healthUrl,
+          ip: defaultNetworkIp(container),
+        };
+      });
+
+      for (const parking of parkingNodes) {
+        assert.equal(
+          parking.info.State.Running,
+          true,
+          `${parking.service} must be running`
+        );
+
+        assert.equal(
+          containerEnv(parking, 'PARKING_ID'),
+          'A',
+          `${parking.service} must use PARKING_ID=A`
+        );
+
+        assert.equal(
+          await healthy(parking),
+          true,
+          `${parking.service} must respond HTTP 200`
+        );
+      }
+
+      assert.notEqual(
+        parkingNodes[0].ip,
+        parkingNodes[1].ip,
+        'The two Parking A nodes must have different Docker IPs'
       );
 
-      const helperLogs = docker('logs', helperName);
-      const readyLine = helperLogs
-        .split(/\r?\n/)
-        .map((line) => {
-          try {
-            return JSON.parse(line);
-          } catch {
-            return null;
-          }
-        })
-        .find((entry) => entry?.msg === 'command consumer ready');
-
-      assert.ok(readyLine?.consumerTag, 'temporary consumer did not report ready');
-
-      const helperTag = readyLine.consumerTag;
       assert.equal(
-        twoConsumers.find((consumer) => consumer.active)?.consumerTag,
-        helperTag,
-        'the first consumer must remain the SAC active consumer'
+        databaseTarget(parkingNodes[0]),
+        databaseTarget(parkingNodes[1]),
+        'Both Parking A nodes must use the same database'
       );
 
-      // Send 100 numbered commands through the project's real command publisher.
+      // ---------------------------------------------------------------
+      // 3. Verify cmd.A is empty and both real nodes registered.
+      // ---------------------------------------------------------------
+
+      const initialQueue = await queueInfo();
+
+      assert.equal(initialQueue.type, 'quorum', 'cmd.A must be a quorum queue');
+
+      assert.equal(
+        initialQueue.arguments?.['x-single-active-consumer'],
+        true,
+        'cmd.A must have x-single-active-consumer enabled'
+      );
+
+      assert.equal(initialQueue.messages, 0, 'cmd.A must be empty');
+      assert.equal(initialQueue.messages_ready, 0);
+      assert.equal(initialQueue.messages_unacknowledged, 0);
+
+      const consumers = await waitFor(
+        'both PD-13 nodes registered as cmd.A consumers',
+        async () => {
+          const current = await listAConsumers();
+          return current.length === 2 ? current : false;
+        },
+        20000,
+        100
+      );
+
+      assert.equal(
+        consumers.filter(item => item.active).length,
+        1,
+        'cmd.A must have exactly one active consumer'
+      );
+
+      assert.equal(
+        consumers.filter(item => !item.active).length,
+        1,
+        'cmd.A must have exactly one standby consumer'
+      );
+
+      const expectedIps = parkingNodes.map(item => item.ip).sort();
+      const actualIps = consumers.map(item => item.peerHost).sort();
+
+      assert.deepEqual(
+        actualIps,
+        expectedIps,
+        'cmd.A consumers must belong to the two real PD-13 containers'
+      );
+
+      const activeConsumer = consumers.find(item => item.active);
+
+      activeNode = parkingNodes.find(
+        item => item.ip === activeConsumer.peerHost
+      );
+
+      const standbyNode = parkingNodes.find(
+        item => item.ip !== activeConsumer.peerHost
+      );
+
+      assert.ok(activeNode, 'Cannot map active consumer to a Parking node');
+      assert.ok(standbyNode, 'Cannot identify the standby Parking node');
+
+      console.log(
+        `[TC60] Active: ${activeNode.service} (${activeNode.ip})`
+      );
+
+      console.log(
+        `[TC60] Standby: ${standbyNode.service} (${standbyNode.ip})`
+      );
+
+      // ---------------------------------------------------------------
+      // 4. Prepare the real command publisher and reply queue.
+      // ---------------------------------------------------------------
+
+      const token = await login('user1');
+
+      const jwtPayload = JSON.parse(
+        Buffer.from(token.split('.')[1], 'base64url').toString('utf8')
+      );
+
+      actor = {
+        userId: jwtPayload.sub,
+        role: 'USER',
+      };
+
+      messagePrefix = `${actor.userId}:pd05-${runId}-`;
+      firstMessageId = `${messagePrefix}001`;
+
+      const slotCode = await freeSlot('A');
+
+      connection = await amqp.connect(AMQP_URL());
+      channel = await connection.createChannel();
+
+      await channel.assertExchange('parking.replies', 'direct', {
+        durable: true,
+      });
+
+      const { queue: replyQueue } = await channel.assertQueue('', {
+        exclusive: true,
+        autoDelete: true,
+      });
+
+      const replyTo = `test.${randomUUID()}`;
+
+      await channel.bindQueue(
+        replyQueue,
+        'parking.replies',
+        replyTo
+      );
+
+      await channel.consume(replyQueue, message => {
+        if (message) channel.ack(message);
+      });
+
+      commands = makeCommands(AMQP_URL(), {
+        signingKey: KEY,
+      });
+
       const messages = Array.from({ length: 100 }, (_, index) => {
         const sequence = index + 1;
-        const messageId = `${messagePrefix}${String(sequence).padStart(3, '0')}`;
 
         const plateNumber = 600 + Math.floor(index / 99);
         const plateSuffix = (index % 99) + 1;
 
         return {
-          messageId,
+          messageId:
+            `${messagePrefix}${String(sequence).padStart(3, '0')}`,
           payload: {
             slotCode,
             licensePlate:
@@ -370,94 +543,229 @@ process.on('unhandledRejection', (error) => {
         };
       });
 
-      await Promise.all(
-        messages.map(({ messageId, payload }) =>
-          commands.send('A', 'reserve', payload, {
-            messageId,
-            replyTo,
-            actor,
-          })
-        )
+      const redeliverBefore = Number(
+        initialQueue.message_stats?.redeliver ?? 0
       );
 
-      allCommandsPublished = true;
+      // ---------------------------------------------------------------
+      // 5. Create a deterministic backlog on the real active node.
+      // ---------------------------------------------------------------
 
-      const inboxCount = () =>
-        Number(
-          sql(
-            'db-a',
-            `SELECT count(*) FROM inbox_messages WHERE message_id LIKE '${messagePrefix}%'`
-          )
-        );
+      // Pause only the active Parking process. Its RabbitMQ connection stays
+      // registered, so RabbitMQ can deliver up to the consumer prefetch limit.
+      docker('pause', activeNode.containerId);
+
+      // Await each publisher confirm before sending the next command.
+      // This preserves the intended publication sequence for FIFO verification.
+      for (const { messageId, payload } of messages) {
+        // Count the attempt before awaiting the confirm.
+        // A failed confirm may leave the broker's publish outcome uncertain.
+        publishAttemptedCount++;
+
+        await commands.send('A', 'reserve', payload, {
+          messageId,
+          replyTo,
+          actor,
+          expiration: 300000,
+        });
+      }
 
       await waitFor(
-        'active consumer processes the first commands',
-        () => inboxCount() >= 5,
-        15000
+        'active consumer has unacknowledged messages and a ready backlog',
+        async () => {
+          const current = await queueInfo();
+
+          return current.messages_unacknowledged > 0 &&
+            current.messages_ready > 0
+            ? current
+            : false;
+        },
+        15000,
+        50
       );
 
-      // Kill the active consumer without a graceful cancel/ack.
+      // Let the active node process some messages before failing it.
+      docker('unpause', activeNode.containerId);
+
+      const progress = await waitFor(
+        'active consumer commits part of the numbered command batch',
+        async () => {
+          const processed = inboxCount(messagePrefix);
+          const current = await queueInfo();
+
+          return processed > 0 &&
+            processed < 100 &&
+            current.messages_unacknowledged > 0
+            ? { processed, queue: current }
+            : false;
+        },
+        20000,
+        25
+      );
+
+      assert.ok(
+        progress.processed > 0 && progress.processed < 100,
+        'Failure must happen after partial processing but before all 100 commands finish'
+      );
+
+      assert.ok(
+        progress.queue.messages_unacknowledged > 0,
+        'There must be unacknowledged commands at failure time'
+      );
+
+      console.log(
+        `[TC60] Before failure: ${progress.processed}/100 processed; ` +
+        `${progress.queue.messages_unacknowledged} unacknowledged`
+      );
+
+      // ---------------------------------------------------------------
+      // 6. Kill the active real node and verify SAC failover.
+      // ---------------------------------------------------------------
+
       const failoverStarted = Date.now();
-      docker('kill', helperName);
 
-      await waitFor(
-        'parking-a takes over within five seconds',
-        () => {
-          const consumers = listAConsumers();
-          return consumers.length === 1 &&
-            consumers[0].active &&
-            consumers[0].consumerTag !== helperTag;
+      docker('kill', activeNode.containerId);
+
+      const newActiveConsumer = await waitFor(
+        'standby node takes over cmd.A within five seconds',
+        async () => {
+          const current = await listAConsumers();
+
+          return current.length === 1 &&
+            current[0].active &&
+            current[0].peerHost === standbyNode.ip
+            ? current[0]
+            : false;
         },
         5000,
         50
       );
 
       const failoverMs = Date.now() - failoverStarted;
+
+      assert.ok(
+        newActiveConsumer.active,
+        'The standby node must become active'
+      );
+
       assert.ok(
         failoverMs <= 5000,
         `SAC failover took ${failoverMs}ms; expected at most 5000ms`
       );
 
-      // Every numbered command must eventually be committed to the inbox.
+      console.log(
+        `[TC60] Failover PASS: ${standbyNode.service} active in ${failoverMs}ms`
+      );
+
+      // RabbitMQ must record at least one redelivery after the active
+      // consumer connection is lost with unacknowledged messages.
+      const redeliverAfter = await waitFor(
+        'RabbitMQ records message redelivery',
+        async () => {
+          const current = await queueInfo();
+          const count = Number(current.message_stats?.redeliver ?? 0);
+
+          return count > redeliverBefore ? count : false;
+        },
+        15000,
+        50
+      );
+
+      assert.ok(
+        redeliverAfter > redeliverBefore,
+        'At least one unacknowledged message must be redelivered'
+      );
+
+      // ---------------------------------------------------------------
+      // 7. Verify all 100 commands, FIFO ordering and no duplicate effects.
+      // ---------------------------------------------------------------
+
       await waitFor(
-        'all 100 commands processed',
-        () => inboxCount() === 100,
-        30000
+        'all 100 commands processed after failover',
+        () => inboxCount(messagePrefix) === 100,
+        45000,
+        100
       );
 
-      assert.equal(inboxCount(), 100);
-
-      const processedCount = sql(
+      const processedCount = querySql(
         'db-a',
-        `SELECT count(*) FROM inbox_messages WHERE message_id LIKE '${messagePrefix}%' AND processed_at IS NOT NULL`
+        `SELECT count(*) FROM inbox_messages
+         WHERE message_id LIKE '${messagePrefix}%'
+           AND processed_at IS NOT NULL`
       );
 
-      assert.equal(processedCount, '100', 'all inbox entries must be processed');
-
-      // The zero-padded message IDs sort in submitted sequence order.
-      // A violation means a later command was processed before an earlier one.
-      const orderViolations = sql(
-        'db-a',
-        `SELECT count(*) FROM (SELECT processed_at, lag(processed_at) OVER (ORDER BY message_id) AS previous_processed_at FROM inbox_messages WHERE message_id LIKE '${messagePrefix}%') AS ordered WHERE previous_processed_at > processed_at`
+      assert.equal(
+        processedCount,
+        '100',
+        'All 100 inbox entries must be processed'
       );
+
+      const orderViolationQuery = `
+        SELECT COALESCE(
+          string_agg(
+            previous_message_id || ' [' || previous_processed_at::text ||
+            '] -> ' || message_id || ' [' || processed_at::text || ']',
+            '; '
+          ),
+          ''
+        )
+        FROM (
+          SELECT
+            message_id,
+            processed_at,
+            lag(message_id) OVER (ORDER BY message_id) AS previous_message_id,
+            lag(processed_at) OVER (ORDER BY message_id) AS previous_processed_at
+          FROM inbox_messages
+          WHERE message_id LIKE '${messagePrefix}%'
+        ) AS ordered
+        WHERE previous_processed_at > processed_at
+      `.replace(/\s+/g, ' ').trim();
+
+      const orderViolations = querySql('db-a', orderViolationQuery);
+
       assert.equal(
         orderViolations,
-        '0',
-        'processed_at must preserve the submitted command order'
+        '',
+        `processed_at violated FIFO: ${orderViolations}`
       );
 
-      // All commands target one slot: only the first reservation may succeed.
-      const reservationsCreated = sql(
+      const reservationsCreated = querySql(
         'db-a',
-        `SELECT count(*) FROM reservations WHERE request_id LIKE '${messagePrefix}%'`
+        `SELECT count(*)
+         FROM reservations
+         WHERE request_id LIKE '${messagePrefix}%'`
       );
 
       assert.equal(
         reservationsCreated,
         '1',
-        'only the first command should create a reservation for the selected slot'
+        'Only the first command should create a reservation for the selected slot'
       );
-      console.log(`TC60 passed: 100 commands; SAC failover ${failoverMs}ms`);
+
+      const duplicateReplies = querySql(
+        'db-a',
+        `SELECT count(*)
+         FROM (
+           SELECT command_id
+           FROM command_reply_outbox
+           WHERE command_id LIKE '${messagePrefix}%'
+           GROUP BY command_id
+           HAVING count(*) > 1
+         ) AS duplicates`
+      );
+
+      assert.equal(
+        duplicateReplies,
+        '0',
+        'A command must not create duplicate reply outbox records'
+      );
+
+      console.log(
+        `TC60 passed: 100 commands; ` +
+        `${progress.processed} processed before failure; ` +
+        `SAC failover ${failoverMs}ms; ` +
+        `${redeliverAfter - redeliverBefore} redeliveries`
+      );
     }
   );
 }
