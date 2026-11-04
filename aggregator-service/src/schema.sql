@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS commands (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE commands DROP CONSTRAINT IF EXISTS commands_failure_phase_check;
+ALTER TABLE commands ADD CONSTRAINT commands_failure_phase_check
+  CHECK (failure_phase IN ('SEND','EXECUTION'));
 CREATE INDEX IF NOT EXISTS ix_commands_publish ON commands(next_publish_at) WHERE status='PENDING' AND publish_state<>'CONFIRMED';
 CREATE INDEX IF NOT EXISTS ix_commands_user ON commands(user_id,created_at DESC);
 CREATE TABLE IF NOT EXISTS aggregator_instances (
@@ -81,3 +84,23 @@ CREATE TABLE IF NOT EXISTS aggregator_instances (
   owner TEXT NOT NULL,
   lease_until TIMESTAMPTZ NOT NULL
 );
+
+-- PD-08: additive migration, source bytes/properties never returned directly by the API.
+CREATE TABLE IF NOT EXISTS dead_letters (
+  id BIGSERIAL PRIMARY KEY,
+  dedup_key TEXT UNIQUE NOT NULL,
+  message_id TEXT,
+  content_base64 TEXT NOT NULL,
+  properties JSONB NOT NULL,
+  routing_key TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'READY' CHECK(status IN ('READY','PUBLISHING','BROKER_CONFIRMED','REPLAY_EXPIRED')),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  replay_message_id TEXT,
+  replay_body JSONB,
+  replay_properties JSONB,
+  replay_admin TEXT,
+  replay_requested_at TIMESTAMPTZ,
+  replayed_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS ix_dead_letters_pending ON dead_letters(id) WHERE status='PUBLISHING';

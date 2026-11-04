@@ -103,7 +103,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
     };
 
     // Giữ thời điểm phát hành và hạn xử lý của command từ dev.
-    for (const field of ['issuedAt', 'deadlineAt']) {
+    for (const field of ['issuedAt', 'deadlineAt', 'targets']) {
       if (opts[field] !== undefined) {
         envelope[field] = opts[field];
       }

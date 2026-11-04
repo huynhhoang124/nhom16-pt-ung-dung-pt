@@ -2,6 +2,8 @@
 
 PD-03: [API request–reply, cấu hình và runbook](tai-lieu/pd-03-request-reply.md).
 
+PD-08: [retry 2s/10s, DLQ, trang đẩy lại và kiểm thử trực tiếp trên dev](tai-lieu/pd-08-retry-dlq.md).
+
 **Môn:** Hệ thống / Ứng dụng phân tán – PTIT
 
 **Thành viên:** Vũ Văn Hùng, Hoàng Văn Huynh, Nguyễn Văn Luân, Trịnh Kim Loan, Đỗ Huyền Trang, Phạm Sỹ Hiệp
@@ -97,3 +99,7 @@ Endpoint bổ sung `POST /api/admin/parkings/:id/commands` (ADMIN) dùng broker 
 Node nhận lệnh đã được server ký từ `cmd.<PARKING_ID>`, ghi inbox + nghiệp vụ + outbox phản hồi trong cùng transaction rồi mới ack. Tin giao lại dùng kết quả cũ; key dùng cho nội dung khác trả 422. `INTERNAL_KEY` phải nhất quán giữa Aggregator và node. Dọn inbox quá 7 ngày mỗi 30 giây; không bảo đảm dedup vô hạn.
 
 API nghiệp vụ cũ tiếp tục dùng HTTP. PD-02 chưa có HTTP request–reply/tra cứu kết quả của PD-03. Xem [thiết kế, schema, nâng cấp bảo toàn dữ liệu và TC52/TC53 broker](tai-lieu/pd-02-command-inbox.md). Chạy `node --test --test-name-pattern='PD-02' tests/e2e.test.mjs` trên stack Docker test cô lập; test khôi phục service và không xóa volume.
+
+## PD-04 – Phát lệnh quản trị A–F
+
+Đăng nhập `admin`, mở **Quản trị** để đổi bảng giá, khóa/mở tầng hoặc cấm/bỏ cấm biển số tại A–F. Một publish qua broker; kết quả từng bãi được lưu bền vững và tự cập nhật khi phản hồi muộn. Chạy trực tiếp trên stack dev, không cần candidate, patch hay source ngoài. Xem [API, topology, cách chạy và bằng chứng giao diện/DB thật](tai-lieu/pd-04-broadcast-abc.md). Phần nối PD-03 và TC61 sáu bãi do Huynh tiếp nhận.

@@ -11,6 +11,7 @@ const { reserveIn, endReservationIn, confirmSagaIn, payIn } = require('./slots')
 const { checkFencing } = require('./fencing');
 const { normalizePlate, isPlate } = require('./plate');
 const { tokenFor } = require('./gate');
+const { decodeAdmin, dispatchAdminIn } = require('./admin-commands');
 
 class InvalidCommand extends Error {}
 const object = (v) => v && typeof v === 'object' && !Array.isArray(v);
@@ -109,23 +110,23 @@ async function epochError(pool, c) {
   }
 }
 
-function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now }) {
+function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now, adminEnabled = true, beforeDispatch }) {
   return async (m) => {
-    const env = decodeCommand(m, parkingId, internalKey);
+    const adminCommand = /^cmd\.(zone-|all\.)/.test(m.fields?.routingKey ?? '');
+    let env;
+    try {
+      env = adminCommand && adminEnabled ? decodeAdmin(m, parkingId, internalKey) : decodeCommand(m, parkingId, internalKey);
+    } catch (error) {
+      if (adminCommand && !(error instanceof InvalidCommand)) throw new InvalidCommand(error.message);
+      throw error;
+    }
 
     // Cập nhật HLC ngay khi nhận lệnh, trước khi phát sinh sự kiện mới.
     if (env.hlc !== undefined) {
       hlc.update(env.hlc);
     }
 
-    const hash = createHash('sha256')
-    .update(canonical({
-      type: env.type,
-      parkingId: env.parkingId,
-      actor: env.actor,
-      payload: env.payload,
-    }))
-    .digest('hex');
+    const hash = createHash('sha256').update(canonical({ type: env.type, parkingId, actor: env.actor, payload: env.payload })).digest('hex');
     const c = await pool.connect();
     try {
       await c.query('BEGIN');
@@ -154,7 +155,8 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         out = { code: 410, body: { error: 'COMMAND_EXPIRED' } };
         await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
       } else {
-        out = await dispatch(c, env, { parkingId, reservationMinutes, qrSecret });
+        await beforeDispatch?.(m, c); // Test-only faults exercise the real inbox transaction rollback.
+        out = adminCommand ? await dispatchAdminIn(c, env, { parkingId }) : await dispatch(c, env, { parkingId, reservationMinutes, qrSecret });
         // Normalize Date values once: first delivery and replay return identical JSON.
         out.body = JSON.parse(JSON.stringify(out.body));
         await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
@@ -257,9 +259,10 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
               } catch (error) {
                 log.error('command processing failed', { parkingId, error: error.message });
                 if (s.dead) return;
-                // PD-08 may replace this hook with confirmed delayed retry/dead transfer.
+                // PD-08 transfers only after rollback; a failed transfer leaves the source unacked.
                 const transferred = await retryOrDead?.({ ch, message: m, error, permanent: error instanceof InvalidCommand });
                 if (transferred === true) ch.ack(m);
+                else if (retryOrDead) end(s); // Failed transfer: keep source unacked, including malformed messages.
                 else if (error instanceof InvalidCommand) ch.nack(m, false, false); // durable DLX target; no hot requeue.
                 else end(s); // Leave unacked, close/reconnect with backoff after rollback.
               }

@@ -77,6 +77,31 @@ test('crash after broker confirm before durable send update recovers with identi
   await f.flow.pump();await completed(f.flow);
   assert.equal(f.calls[0].messageId,f.calls[1].messageId);assert.equal(f.calls[0].deadlineAt,f.calls[1].deadlineAt);
 });
+test('DLQ failure finishes a PENDING command and signals its waiting request', async t => {
+  const results = [];
+  const { flow, set } = await setup(t, { onResult: row => results.push(row) });
+  set(opts => flow.markFailed(opts.messageId, 'RETRY_EXHAUSTED'));
+  const response = await flow.execute(request);
+  const row = await flow.get('user:key');
+  assert.equal(response.code, 500);
+  assert.equal(response.body.error, 'RETRY_EXHAUSTED');
+  assert.equal(row.status, 'FAILED');
+  assert.equal(row.failure_phase, 'EXECUTION');
+  assert.equal(row.last_error, 'RETRY_EXHAUSTED');
+  assert.equal(results.length, 1);
+  assert.equal(results[0].id, row.id);
+  assert.equal(flow.pending.size, 0);
+});
+test('DLQ failure cannot overwrite a DONE command or signal it again', async t => {
+  const results = [];
+  const { flow } = await setup(t, { onResult: row => results.push(row) });
+  await flow.execute(request);
+  const before = await flow.get('user:key');
+  await flow.markFailed(before.id, 'RETRY_EXHAUSTED');
+  assert.deepEqual(await flow.get(before.id), before);
+  assert.equal(results.length, 1);
+});
+
 test('reply topology not ready prevents publish; retry after recovery retains the same command',async t=>{
   const f=await setup(t);f.flow.setReady(false);
   const rejected=await f.flow.execute(request);assert.equal(rejected.code,503);assert.equal(rejected.body.sendStatus,'FAILED_TO_SEND');assert.equal(f.calls.length,0);

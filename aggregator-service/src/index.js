@@ -12,6 +12,9 @@ const { makeCommands } = require('./commands');
 const { makeCommandFlow } = require('./command-flow');
 const { startReplyService } = require('./command-replies');
 const { startExpiredConsumer } = require('./expired-commands');
+const { makeDlq, startDlq } = require('./dlq');
+const { makeBroadcasts } = require('./broadcast');
+const { startBroadcastReplies } = require('./broadcast-runtime');
 const { log } = require('./log');
 
 const env = (k, d) => process.env[k] ?? d;
@@ -21,6 +24,7 @@ async function init(pool, users) {
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   await pool.query(schema);
   if (users.sharded) for (const p of users.all()) await p.query(schema);   // PD-16: mỗi phân mảnh có bảng users riêng
+  await pool.query(fs.readFileSync(path.join(__dirname, 'broadcast-schema.sql'), 'utf8'));
   for (const n of JSON.parse(env('NODES', '[]'))) {
     // bãi đã có: api_url theo cấu hình hiện tại (vd đổi sang toxiproxy khi demo mạng xấu); toạ độ/địa chỉ công khai chỉ bổ sung nếu chưa có
     await pool.query(
@@ -90,17 +94,6 @@ async function main() {
     discovery.start().catch((e) => log.error('Lỗi khởi động discovery etcd', { error: e.message }));
   }
 
-  if (discovery.active || config.active || leader.active) {
-    const cleanup = async () => {
-      if (discovery.active) await discovery.stop();
-      if (config.active) await config.stop();
-      if (leader.active) await leader.stop();
-      process.exit(0);
-    };
-    process.once('SIGINT', cleanup);
-    process.once('SIGTERM', cleanup);
-  }
-
   const cache = new Map();
   const b64 = (k) => (process.env[k] ? Buffer.from(process.env[k], 'base64').toString() : undefined);
   const auth = makeAuth(env('JWT_SECRET', 'dev-secret'), { privateKey: b64('JWT_PRIVATE_KEY_B64'), publicKey: b64('JWT_PUBLIC_KEY_B64') });
@@ -112,8 +105,43 @@ async function main() {
     pool, publisher: commands, instanceId, config,
     waitMs: Number(env('REPLY_WAIT_MS', 3000)), ttlMs: Number(env('COMMAND_TTL_MS', 10000)),
   });
+  const dlq = makeDlq({ pool, url: env('RABBITMQ_URL', 'amqp://localhost/%2F'),
+    internalKey: env('INTERNAL_KEY', 'dev'), ttlMs: Number(env('COMMAND_TTL_MS', 10000)),
+    markFailed: commandFlow.markFailed,
+    claimReplay: async (parkingId, messageId, replayMessageId) => {
+      const node = reg.get(parkingId);
+      if (!node) throw Object.assign(new Error('PARKING_NOT_FOUND'), { code: 'PARKING_NOT_FOUND', status: 404 });
+      const response = await fetch(`${node.url}/api/internal/commands/replay-claim`, {
+        method: 'POST', headers: { 'content-type': 'application/json', 'x-internal-key': env('INTERNAL_KEY', 'dev') },
+        body: JSON.stringify({ messageId, replayMessageId }), signal: AbortSignal.timeout(3000),
+      });
+      if (!response.ok) throw Object.assign(new Error('INBOX_CLAIM_REJECTED'), { code: 'INBOX_CLAIM_REJECTED', status: response.status });
+    },
+  });
+  const dlqWorker = startDlq({ url: env('RABBITMQ_URL', 'amqp://localhost/%2F'), dlq, log });
+  const broadcastEnabled = env('ADMIN_BROADCAST_ENABLED', 'true') === 'true';
+  const broadcastPublisher = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'), {
+    signingKey: env('INTERNAL_KEY', 'dev'),
+  });
+  const zones = JSON.parse(env('PARKING_ZONES', '{"A":"bac","B":"bac","C":"bac","D":"nam","E":"nam","F":"nam"}'));
+  const broadcasts = makeBroadcasts({
+    pool, publisher: broadcastPublisher, reg, zones,
+    internalKey: env('INTERNAL_KEY', 'dev'), enabled: broadcastEnabled,
+  });
+  Object.defineProperty(broadcasts, 'zones', {
+    get: () => [...new Set(reg.all()
+      .filter((n) => ['A', 'B', 'C', 'D', 'E', 'F'].includes(n.id))
+      .map((n) => n.zone ?? zones[n.id]).filter(Boolean))].sort(),
+  });
+  let broadcastReplies;
+  if (broadcastEnabled) {
+    broadcastReplies = startBroadcastReplies({
+      url: env('RABBITMQ_URL', 'amqp://localhost/%2F'), broadcasts, log,
+    });
+    broadcasts.start();
+  }
   const app = makeApp({
-    pool, users, reg, cache, auth, commands, commandFlow, commandMode, config, leader,
+    pool, users, reg, cache, auth, commands, broadcasts, commandFlow, dlq, commandMode, config, leader,
     reserveTimeoutMs: config.get('reserveTimeoutMs', 3000),
   });
   const server = http.createServer(app);
@@ -137,7 +165,13 @@ async function main() {
   }
   for(const signal of ['SIGTERM','SIGINT'])process.once(signal,async()=>{
     const timeout=setTimeout(()=>process.exit(1),10000);
-    await commandFlow.stop();await replies?.stop();await commands.close();clearTimeout(timeout);process.exit(0);
+    await dlqWorker.stop();
+    await broadcasts.stop(); await broadcastReplies?.stop(); await broadcastPublisher.close();
+    await commandFlow.stop(); await replies?.stop(); await commands.close();
+    if (discovery.active) await discovery.stop();
+    if (config.active) await config.stop();
+    if (leader.active) await leader.stop();
+    clearTimeout(timeout); process.exit(0);
   });
   // NV-08: socket có token hợp lệ thì vào phòng "user:<id>" để nhận thông báo riêng; không có vẫn nhận realtime chung.
   io.use((socket, next) => {

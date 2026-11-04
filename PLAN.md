@@ -239,13 +239,51 @@ Nền: `feature/PD-14b-auto-failover-epoch` (Luận). Lấy `a613d05 c13fc62 512
 
 ### B11 – Nối PD-08, PD-04 vào PD-03; TC61 – sau PR PD-08, PD-04 của Hùng, B1, B2
 
-- [ ] Retry của PD-08 bọc consumer lệnh, có cả phản hồi request–reply: lỗi tạm thời thì thử lại theo độ trễ; quá giới hạn thì vào `cmd.dead` và `commands.status='FAILED'`.
-- [ ] PD-04 phát lệnh nhiều bãi dùng luồng `commands` của B2. Kết quả từng bãi lưu và hiện trên trang Quản trị.
-- [ ] Bỏ `skip` ở TC61, chạy trên 6 bãi.
-- [ ] Kiểm tra:
+- [x] Retry của PD-08 bọc consumer lệnh, có cả phản hồi request–reply: lỗi tạm thời thì thử lại theo độ trễ; quá giới hạn thì vào `cmd.dead` và `commands.status='FAILED'`.
+- [x] PD-04 phát lệnh nhiều bãi dùng luồng `commands` của B2. Kết quả từng bãi lưu và hiện trên trang Quản trị.
+- [x] TC61 chạy ở TC61, chạy trên 6 bãi.
+- [x] Kiểm tra:
   - TC57, TC58 với `COMMAND_MODE=broker`.
   - TC61: tắt F → 2/3; bật F trong 10 phút → F áp dụng.
 - [ ] PR, merge.
+
+#### B11 chi tiết (04/11, nhánh `huynh/PD-B11`)
+
+Nhánh này đã gộp #80, #81 và sửa lỗi tích hợp với PD-06. Chỉ sửa file, không chạy lệnh shell. Giữ thay đổi gọn, không đổi logic đã có của #80, #81 ngoài các mục dưới.
+
+- [x] **Nối `markFailed`.** Trong `aggregator-service/src/index.js`, truyền `markFailed` vào `makeDlq`.
+  - Đọc `aggregator-service/src/command-flow.js` trước, xác nhận `commands.id` khớp `messageId` của tin. Nếu không khớp, tra đúng cột.
+  - Làm: `UPDATE commands SET status='FAILED', failure_phase, last_error, status_code, result, updated_at WHERE id=$1 AND status='PENDING'`. Dùng giá trị `failure_phase` có sẵn trong CHECK của `schema.sql`; không có thì thêm giá trị mới theo cách migrate đang dùng.
+  - Kết quả lỗi phải tới người dùng giống các đường FAILED khác trong `command-flow.js` (dùng lại hàm có sẵn nếu có, ví dụ phát `COMMAND_RESULT`).
+  - Lệnh đã DONE thì không đổi.
+  - Unit test trong `aggregator-service/test/dlq.test.js` hoặc test của `command-flow`: PENDING thành FAILED; DONE giữ nguyên; lý do `UNVERIFIED` không gọi `markFailed`.
+- [x] **PD-04 ra 6 bãi.**
+  - `aggregator-service/src/broadcast.js`: mặc định `parkingIds` thành A–F.
+  - `aggregator-service/src/index.js` và `docker-compose.yml`: `PARKING_ZONES` mặc định A, B, C là `bac`; D, E, F là `nam`. Bỏ dòng ghi chú "Assignment 01/11".
+  - `aggregator-service/src/broadcast-runtime.js`: kiểm lại logic bind/unbind cho D, E, F (dòng 24–39, seed `bac` chỉ của A, B, C).
+  - `rabbitmq/definitions.json`: policy `admin-command-delivery` đổi thành `^cmd\.[A-F]\.admin$`; thêm binding `cmd.zone-nam.#` và `cmd.all.#` cho `cmd.D.admin`, `cmd.E.admin`, `cmd.F.admin`, cùng dạng binding của A.
+  - Tìm các chỗ còn cố định A–C: `git grep`-tương-đương cho `"A", "B", "C"` và `ABC` trong `aggregator-service/src`, `parking-node/src`, `frontend/src`. Sửa chỗ thuộc broadcast/admin; không đụng phần khác.
+  - `README.md` dòng 105: đổi "A–C" thành "A–F".
+  - Sửa unit test bị ảnh hưởng trong `aggregator-service/test/broadcast.test.js`.
+- [x] **Trang Quản trị.** Đọc `frontend/src/pages/Broadcast.jsx`: phải hiện kết quả từng bãi (đã áp dụng, từ chối kèm lỗi, đang chờ). Thiếu phần nào thì thêm, theo style có sẵn.
+- [x] **TC61, e2e mới `tests/tc61.pd04.e2e.mjs`.** Lấy mẫu `tests/pd04-abc.e2e.mjs`, chạy độc lập, có `skip: !process.env.SCALE` (cần stack `docker-compose.scale.yml` 6 bãi).
+  - `docker compose stop parking-f`.
+  - Admin phát lệnh vùng `nam`: chờ tới khi D, E áp dụng, F còn chờ (2/3).
+  - `docker compose start parking-f`: chờ tới khi F áp dụng (3/3), không quá 10 phút TTL.
+  - `finally` luôn bật lại `parking-f` và trả cấu hình về như cũ.
+  - Xác nhận tên service thật trong `docker-compose.scale.yml`.
+- [x] **TC57, TC58, e2e mới `tests/tc57-58.pd08.e2e.mjs`.** Lấy mẫu `tests/pd08-retry.integration.cjs`, `tests/pd08-compose.test.yml` và `testFailures` trong `parking-node/src/command-retry.js`. Có `skip: process.env.COMMAND_MODE !== 'broker'`.
+  - TC57: lỗi tạm thời vài lần, lệnh tự thử lại rồi DONE, đúng 1 reservation.
+  - TC58: lỗi vượt giới hạn, tin vào `cmd.dead`, có bản ghi `dead_letters`, `commands.status='FAILED'`, `GET /api/commands/:id` trả FAILED.
+  - Thêm vào `tests/pd08-compose.test.yml` nếu cần biến bật lỗi giả. Không bật lỗi giả trong `docker-compose.yml` thường.
+
+**Bàn giao B11 chi tiết (05/11):** Phạm vi chỉ năm checkbox của “B11 chi tiết”; không tick B11 tổng hay B khác. Các dấu `[x]` ở mục này xác nhận đã sửa/viết file, **không xác nhận test đạt**. Không chạy shell, test/build/Docker hay commit/PR theo giới hạn của mục này.
+- `commands.id` được gửi nguyên vẹn thành `messageId` trong `command-flow.publishOne`; DLQ dùng đúng ID đó. Dùng lại `signal()` để trả request đang chờ và `pg_notify('command_results', ...)` để các Aggregator phát `COMMAND_RESULT`.
+- `failure_phase` trước đó không có CHECK; thêm `EXECUTION` cùng `SEND` bằng mẫu DROP/ADD constraint có sẵn trong schema. Chỉ cập nhật lệnh `PENDING`, không sửa `DONE`.
+- Trang Quản trị đã có bảng từng bãi: đã áp dụng / từ chối kèm lỗi / chưa phản hồi; giữ nguyên, chỉ đổi nhãn sáu bãi/vùng Nam.
+- TC58 cần lỗi cả ba lần giao; mở giới hạn hook `testFailures` từ 2 lên 3, vẫn chỉ bật trong `NODE_ENV=test` và khớp chính xác messageId. Không thay thuật toán retry hay bật lỗi giả ở Compose thường. TC58 quan sát bản sao routing `dead` bằng queue exclusive, không giành tin `cmd.dead` của worker thật; đồng thời kiểm tra `dead_letters`, DB `commands` và API.
+- Review tĩnh cuối: không xác nhận được lỗi chặn trong thay đổi B11. Giữ assertion cleanup TC57/58: lỗi ở `finally` của subtest không bỏ qua `finally` ngoài cùng (vẫn khôi phục node/đóng AMQP); cần báo cleanup lỗi thay vì im lặng. Không đổi hai default TTL có sẵn trong `config.js` vì ngoài phạm vi B11; stack retry đặt `COMMAND_TTL_MS=60000` cho cả hai.
+- Chờ chạy `node --test --test-concurrency=2 test/*.test.js` trong `aggregator-service` và `parking-node`; build frontend; TC61 trên stack scale; TC57/58 trên project `pd08-*` cô lập với `COMMAND_MODE=broker`, override `tests/pd08-compose.test.yml` và TTL 60000 ms. Hai file e2e mới có lệnh chạy ở đầu file. Không chạy đồng thời với bộ e2e khác có dừng node/đổi bảng giá.
 
 ### B12 – PD-15 ra 6 bãi – sau PR PD-15 của Loan, B3
 

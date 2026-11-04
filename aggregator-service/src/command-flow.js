@@ -69,6 +69,15 @@ function makeCommandFlow({
     await pool.query("SELECT pg_notify('command_results',$1)", [row.id]);
   }
 
+  async function markFailed(id, reason) {
+    const { rows } = await pool.query(
+      `UPDATE commands SET status='FAILED', failure_phase='EXECUTION', last_error=$2,
+         status_code=500, result=$3, updated_at=now()
+       WHERE id=$1 AND status='PENDING' RETURNING *`,
+      [id, reason, { error: reason }]);
+    if (rows[0]) await signal(rows[0]);
+  }
+
   async function failBeforeSend(id, code, status, extraWhere) {
     await pool.query(
       `UPDATE commands SET status='FAILED', status_code=$3, result=$2, failure_phase='SEND', last_error=$4,
@@ -264,7 +273,7 @@ function makeCommandFlow({
     while (publishing || scanning) await new Promise((r) => setTimeout(r, 10));
   }
 
-  return { execute, get, pump, scan, start, stop, signal, pending, setReady(v) { replyReady = v; } };
+  return { execute, get, pump, scan, start, stop, signal, markFailed, pending, setReady(v) { replyReady = v; } };
 }
 
 module.exports = { makeCommandFlow, response, terminal };
