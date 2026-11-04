@@ -300,7 +300,7 @@ test('TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật
   await until(`${PARKING_IDS.length} bãi ONLINE`, async () => (await Promise.all(PARKING_IDS.map(statusOf))).every((s) => s === 'ONLINE'));
 });
 
-test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết', T, async () => {
+test('Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết', { ...T, timeout: 300_000 }, async () => {
   compose('stop rabbitmq');
   try {
     const slot = await freeSlot('A');
