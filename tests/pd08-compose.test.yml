@@ -23,7 +23,7 @@ services:
     image: pd08-dev/aggregator:20261103
     ports: !override ["127.0.0.1:18010:8000"]
     environment:
-      COMMAND_MODE: http
+      COMMAND_MODE: ${COMMAND_MODE:-http}
       COMMAND_TTL_MS: "60000"
   frontend:
     image: pd08-dev/frontend:20261103

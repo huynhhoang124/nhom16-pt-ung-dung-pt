@@ -106,7 +106,7 @@ export default function Broadcast() {
   }
   return (
     <section className="card">
-      <h3>Phát lệnh quản trị A–C</h3>
+      <h3>Phát lệnh quản trị A–F</h3>
       <p className="muted">
         Lệnh có hạn 10 phút. Kết quả tự cập nhật; bãi chưa phản hồi vẫn có thể
         áp dụng sau đó.
@@ -115,9 +115,9 @@ export default function Broadcast() {
         <label>
           Vùng{" "}
           <select value={zone} onChange={(e) => setZone(e.target.value)}>
-            <option value="all">Ba bãi A–C</option>
+            <option value="all">Tất cả bãi A–F</option>
             {zones.map((z) => (
-                <option key={z} value={z}>{z === 'bac' ? 'Vùng Bắc (A–C)' : z}</option>
+                <option key={z} value={z}>{z === 'bac' ? 'Vùng Bắc (A–C)' : z === 'nam' ? 'Vùng Nam (D–F)' : z}</option>
             ))}
           </select>
         </label>

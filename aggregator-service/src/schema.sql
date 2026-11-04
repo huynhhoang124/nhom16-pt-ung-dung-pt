@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS commands (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE commands DROP CONSTRAINT IF EXISTS commands_failure_phase_check;
+ALTER TABLE commands ADD CONSTRAINT commands_failure_phase_check
+  CHECK (failure_phase IN ('SEND','EXECUTION'));
 CREATE INDEX IF NOT EXISTS ix_commands_publish ON commands(next_publish_at) WHERE status='PENDING' AND publish_state<>'CONFIRMED';
 CREATE INDEX IF NOT EXISTS ix_commands_user ON commands(user_id,created_at DESC);
 CREATE TABLE IF NOT EXISTS aggregator_instances (

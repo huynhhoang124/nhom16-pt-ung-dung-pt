@@ -10,7 +10,7 @@ const hash = (value) =>
 const segment = (s) => typeof s === "string" && /^[a-z0-9_-]{1,32}$/.test(s);
 
 // Transitional zone source: only registered lots are eligible; OFFLINE is still a target.
-function snapshotTargets(reg, zones, zone, parkingIds = ["A", "B", "C"]) {
+function snapshotTargets(reg, zones, zone, parkingIds = ["A", "B", "C", "D", "E", "F"]) {
   if (!segment(zone)) throw fail("INVALID_ZONE");
   const ids = reg
     .all()
@@ -33,7 +33,7 @@ function makeBroadcasts({
   waitMs = 5000,
   now = Date.now,
   enabled = false,
-  parkingIds = ["A", "B", "C"],
+  parkingIds = ["A", "B", "C", "D", "E", "F"],
 }) {
   let stopped = false,
     ready = false,

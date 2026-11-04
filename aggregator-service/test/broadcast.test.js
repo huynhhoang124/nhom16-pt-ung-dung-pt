@@ -6,7 +6,8 @@ const express = require("express"),
   http = require("node:http");
 const { PGlite } = require("@electric-sql/pglite");
 const { makeBroadcasts, snapshotTargets, TTL } = require("../src/broadcast");
-const { mountBroadcasts } = require("../src/broadcast-runtime");
+const { mountBroadcasts, startBroadcastReplies } = require("../src/broadcast-runtime");
+const { EventEmitter } = require("node:events");
 const { signature } = require("../src/command-signature");
 const { makeAuth } = require("../src/auth");
 const reg = {
@@ -42,16 +43,16 @@ const reply = (id, parkingId, code = 200) => {
 };
 test("target snapshot includes offline lots; unknown zone and no ordinary/admin double routing", () => {
   assert.deepEqual(snapshotTargets(reg, zones, "bac"), ["A", "B", "C"]);
-  assert.deepEqual(snapshotTargets({ all: () => [...reg.all(), { id: "D", zone: "bac" }] }, zones, "all"), ["A", "B", "C"]);
+  assert.deepEqual(snapshotTargets({ all: () => [...reg.all(), { id: "D", zone: "bac" }] }, zones, "all"), ["A", "B", "C", "D"]);
   assert.throws(() => snapshotTargets(reg, zones, "nam"), {
     code: "ZONE_NOT_FOUND",
   });
   const d = JSON.parse(
     fs.readFileSync(path.join(__dirname, "../../rabbitmq/definitions.json")),
   );
-  for (const id of ["A", "B", "C"])
+  for (const id of ["A", "B", "C", "D", "E", "F"])
     for (const key of [
-      "cmd.zone-bac.#",
+      `cmd.zone-${"ABC".includes(id) ? "bac" : "nam"}.#`,
       "cmd.all.#",
     ]) {
       const targets = d.bindings.filter(
@@ -68,7 +69,9 @@ test("target snapshot includes offline lots; unknown zone and no ordinary/admin 
     ],
     TTL,
   );
-  assert(!d.bindings.some((b) => /^cmd\.[DEF](\.|$)/.test(b.destination) && /cmd\.(all|zone-)/.test(b.routing_key)));
+  const adminPolicy = new RegExp(d.policies.find((p) => p.name === "admin-command-delivery").pattern);
+  for (const id of ["A", "B", "C", "D", "E", "F"]) assert(adminPolicy.test(`cmd.${id}.admin`));
+  assert(!d.bindings.some((b) => /^cmd\.[DEF](\.|$)/.test(b.destination) && b.routing_key === "cmd.zone-bac.#"));
   assert(
     d.policies.find((p) => p.name === "admin-command-delivery").priority >
       d.policies.find((p) => p.name === "command-delivery").priority,
@@ -84,7 +87,6 @@ test("target snapshot includes offline lots; unknown zone and no ordinary/admin 
       },
       { D: "bac" },
       "nam",
-      ["D", "E", "F"], // Explicit extension point, not an enabled six-lot runtime.
     ),
     ["D", "E", "F"],
   );
@@ -113,6 +115,35 @@ test("target snapshot includes offline lots; unknown zone and no ordinary/admin 
   ])
     assert.equal(validate(type, body), nodeValidate(type, body));
 });
+test("runtime binds D-F to nam and removes only the original seed when a lot changes zone", async () => {
+  const calls = [];
+  const ch = new EventEmitter();
+  for (const name of ["assertExchange", "assertQueue", "bindQueue", "unbindQueue", "prefetch", "cancel"])
+    ch[name] = async (...args) => { calls.push([name, ...args]); };
+  ch.consume = async () => ({ consumerTag: "test" });
+  const conn = new EventEmitter();
+  conn.createChannel = async () => ch;
+  conn.close = async () => { conn.emit("close"); };
+  let ready;
+  const started = new Promise(resolve => { ready = resolve; });
+  const broadcasts = { setReady: value => { if (value) ready(); }, handle: async () => {} };
+  const worker = startBroadcastReplies({ url: "amqp://localhost", broadcasts, connect: async () => conn });
+  try {
+    await started;
+    await broadcasts.ensureTargets(["D", "E", "F"].map(id => ({ id, zone: "nam" })));
+    for (const id of ["D", "E", "F"]) {
+      assert(calls.some(([method, queue, exchange, key]) => method === "bindQueue" &&
+        queue === `cmd.${id}.admin` && exchange === "parking.commands" && key === "cmd.zone-nam.#"));
+    }
+    assert(!calls.some(([method]) => method === "unbindQueue"));
+    await broadcasts.ensureTargets([{ id: "D", zone: "bac" }, { id: "A", zone: "nam" }]);
+    assert.deepEqual(calls.filter(([method]) => method === "unbindQueue"), [
+      ["unbindQueue", "cmd.D.admin", "parking.commands", "cmd.zone-nam.#"],
+      ["unbindQueue", "cmd.A.admin", "parking.commands", "cmd.zone-bac.#"],
+    ]);
+  } finally { await worker.stop(); }
+});
+
 test("persistent snapshot, per-lot dedup and late replies, key reuse, unknown publish, admin authorization", async () => {
   const db = new PGlite();
   const query = async (sql, p) => {

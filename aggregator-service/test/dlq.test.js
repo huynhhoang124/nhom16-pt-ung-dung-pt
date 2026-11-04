@@ -124,6 +124,20 @@ test("unverified DLQ and invalid edits rejected; expired pending replay never re
   assert.equal(sent.length, 0);
   assert.equal((await dlq.list()).items[0].status, "REPLAY_EXPIRED");
 });
+test("UNVERIFIED dead letters never call markFailed", async (t) => {
+  const { pool } = await setup(t);
+  const failures = [];
+  const dlq = makeDlq({ pool, internalKey: "key", publish: async () => {},
+    markFailed: async (...args) => failures.push(args) });
+  const unsigned = message(valid, "RETRY_EXHAUSTED");
+  delete unsigned.properties.headers["x-dlq-signature"];
+  await dlq.store(unsigned);
+  await dlq.store(message(valid, "UNVERIFIED"));
+  assert.deepEqual(failures, []);
+  await dlq.store(message(valid, "RETRY_EXHAUSTED"));
+  assert.deepEqual(failures, [["u:key", "RETRY_EXHAUSTED"]]);
+});
+
 test("HTTP ADMIN permissions, pagination and validation", async (t) => {
   const { dlq } = await setup(t);
   const app = express();

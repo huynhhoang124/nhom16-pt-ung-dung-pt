@@ -117,6 +117,15 @@ test("test hook is off by default in production and scoped to one ID", () => {
   on(msg());
 });
 
+test("test hook can exhaust all three deliveries without affecting another command", () => {
+  const fault = testFailures({ enabled: true, messageId: "u:key", count: 3 });
+  const other = msg();
+  other.properties.messageId = "u:other";
+  fault(other);
+  for (let i = 0; i < 3; i++) assert.throws(() => fault(msg()), { code: "TEST_TRANSIENT" });
+  fault(msg());
+});
+
 test("business 409 returns normally; no retry classification is invoked", async () => {
   const wrapped = withDeadline(
     async () => ({ code: 409, body: { error: "TIME_CONFLICT" } }),

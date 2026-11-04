@@ -31,9 +31,10 @@ function startBroadcastReplies({
           "x-single-active-consumer": true,
         },
       });
-      // A/B/C definitions seed bac; a different static zone requires removing that owned seed binding.
-      if (["A", "B", "C"].includes(id) && zone !== "bac")
-        await ch.unbindQueue(queue, "parking.commands", "cmd.zone-bac.#");
+      const seedZone = ["A", "B", "C"].includes(id) ? "bac"
+        : ["D", "E", "F"].includes(id) ? "nam" : undefined;
+      if (seedZone && zone !== seedZone)
+        await ch.unbindQueue(queue, "parking.commands", `cmd.zone-${seedZone}.#`);
       await ch.bindQueue(queue, "parking.commands", "cmd.all.#");
       if (zone)
         await ch.bindQueue(queue, "parking.commands", `cmd.zone-${zone}.#`);

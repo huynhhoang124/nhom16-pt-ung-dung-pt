@@ -115,6 +115,12 @@
     }
   ],
   "bindings": [
+    { "source": "parking.commands", "vhost": "/", "destination": "cmd.D.admin", "destination_type": "queue", "routing_key": "cmd.zone-nam.#", "arguments": {} },
+    { "source": "parking.commands", "vhost": "/", "destination": "cmd.D.admin", "destination_type": "queue", "routing_key": "cmd.all.#", "arguments": {} },
+    { "source": "parking.commands", "vhost": "/", "destination": "cmd.E.admin", "destination_type": "queue", "routing_key": "cmd.zone-nam.#", "arguments": {} },
+    { "source": "parking.commands", "vhost": "/", "destination": "cmd.E.admin", "destination_type": "queue", "routing_key": "cmd.all.#", "arguments": {} },
+    { "source": "parking.commands", "vhost": "/", "destination": "cmd.F.admin", "destination_type": "queue", "routing_key": "cmd.zone-nam.#", "arguments": {} },
+    { "source": "parking.commands", "vhost": "/", "destination": "cmd.F.admin", "destination_type": "queue", "routing_key": "cmd.all.#", "arguments": {} },
     { "source": "parking.commands", "vhost": "/", "destination": "cmd.A.admin", "destination_type": "queue", "routing_key": "cmd.A.*.admin", "arguments": {} },
     { "source": "parking.commands", "vhost": "/", "destination": "cmd.B.admin", "destination_type": "queue", "routing_key": "cmd.B.*.admin", "arguments": {} },
     { "source": "parking.commands", "vhost": "/", "destination": "cmd.C.admin", "destination_type": "queue", "routing_key": "cmd.C.*.admin", "arguments": {} },
@@ -260,7 +266,7 @@
     {
       "vhost": "/",
       "name": "admin-command-delivery",
-      "pattern": "^cmd\\.[ABC]\\.admin$",
+      "pattern": "^cmd\\.[A-F]\\.admin$",
       "apply-to": "quorum_queues",
       "priority": 20,
       "definition": {

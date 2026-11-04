@@ -100,6 +100,6 @@ Node nhận lệnh đã được server ký từ `cmd.<PARKING_ID>`, ghi inbox +
 
 API nghiệp vụ cũ tiếp tục dùng HTTP. PD-02 chưa có HTTP request–reply/tra cứu kết quả của PD-03. Xem [thiết kế, schema, nâng cấp bảo toàn dữ liệu và TC52/TC53 broker](tai-lieu/pd-02-command-inbox.md). Chạy `node --test --test-name-pattern='PD-02' tests/e2e.test.mjs` trên stack Docker test cô lập; test khôi phục service và không xóa volume.
 
-## PD-04 – Phát lệnh quản trị A–C
+## PD-04 – Phát lệnh quản trị A–F
 
-Đăng nhập `admin`, mở **Quản trị** để đổi bảng giá, khóa/mở tầng hoặc cấm/bỏ cấm biển số tại A–C. Một publish qua broker; kết quả từng bãi được lưu bền vững và tự cập nhật khi phản hồi muộn. Chạy trực tiếp trên stack dev, không cần candidate, patch hay source ngoài. Xem [API, topology, cách chạy và bằng chứng giao diện/DB thật](tai-lieu/pd-04-broadcast-abc.md). Phần nối PD-03 và TC61 sáu bãi do Huynh tiếp nhận.
+Đăng nhập `admin`, mở **Quản trị** để đổi bảng giá, khóa/mở tầng hoặc cấm/bỏ cấm biển số tại A–F. Một publish qua broker; kết quả từng bãi được lưu bền vững và tự cập nhật khi phản hồi muộn. Chạy trực tiếp trên stack dev, không cần candidate, patch hay source ngoài. Xem [API, topology, cách chạy và bằng chứng giao diện/DB thật](tai-lieu/pd-04-broadcast-abc.md). Phần nối PD-03 và TC61 sáu bãi do Huynh tiếp nhận.

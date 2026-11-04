@@ -122,7 +122,7 @@ function makeDlq({
       [hash, p.messageId ?? null, m.content.toString("base64"), p, key, reason],
     );
     if (stored.rowCount) require("./metrics").incCmdDead(); // PD-25: mọi đường vào cmd.dead đều qua đây
-    if (verified) await markFailed(p.messageId, reason);
+    if (verified && reason !== "UNVERIFIED") await markFailed(p.messageId, reason);
   }
   async function list({ limit = 20, offset = 0 } = {}) {
     const r = await pool.query(

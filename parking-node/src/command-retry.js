@@ -161,7 +161,7 @@ function testFailures({
       m.properties.messageId !== messageId ||
       !Number.isInteger(count) ||
       count < 1 ||
-      count > 2
+      count > 3
     )
       return;
     const n = seen.get(messageId) ?? 0;

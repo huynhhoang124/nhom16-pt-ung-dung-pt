@@ -105,9 +105,9 @@ async function main() {
     pool, publisher: commands, instanceId, config,
     waitMs: Number(env('REPLY_WAIT_MS', 3000)), ttlMs: Number(env('COMMAND_TTL_MS', 10000)),
   });
-  // PD-08 has its own durable DLQ/replay state. PD-03 status integration remains an optional hook.
   const dlq = makeDlq({ pool, url: env('RABBITMQ_URL', 'amqp://localhost/%2F'),
     internalKey: env('INTERNAL_KEY', 'dev'), ttlMs: Number(env('COMMAND_TTL_MS', 10000)),
+    markFailed: commandFlow.markFailed,
     claimReplay: async (parkingId, messageId, replayMessageId) => {
       const node = reg.get(parkingId);
       if (!node) throw Object.assign(new Error('PARKING_NOT_FOUND'), { code: 'PARKING_NOT_FOUND', status: 404 });
@@ -123,15 +123,14 @@ async function main() {
   const broadcastPublisher = makeCommands(env('RABBITMQ_URL', 'amqp://localhost/%2F'), {
     signingKey: env('INTERNAL_KEY', 'dev'),
   });
-  const zones = JSON.parse(env('PARKING_ZONES', '{"A":"bac","B":"bac","C":"bac"}'));
+  const zones = JSON.parse(env('PARKING_ZONES', '{"A":"bac","B":"bac","C":"bac","D":"nam","E":"nam","F":"nam"}'));
   const broadcasts = makeBroadcasts({
     pool, publisher: broadcastPublisher, reg, zones,
     internalKey: env('INTERNAL_KEY', 'dev'), enabled: broadcastEnabled,
   });
-  // Assignment 01/11: Hùng verifies A–C; Huynh owns the six-lot/PD-03 integration.
   Object.defineProperty(broadcasts, 'zones', {
     get: () => [...new Set(reg.all()
-      .filter((n) => ['A', 'B', 'C'].includes(n.id))
+      .filter((n) => ['A', 'B', 'C', 'D', 'E', 'F'].includes(n.id))
       .map((n) => n.zone ?? zones[n.id]).filter(Boolean))].sort(),
   });
   let broadcastReplies;
