@@ -1,5 +1,18 @@
 // GS-04: số đo cho Prometheus ở GET /metrics (registry riêng mỗi app).
 const client = require('prom-client');
+const { parseHlc } = require('./hlc');
+
+const hlcDrift = new client.Gauge({
+  name: 'hlc_drift_ms', help: 'Độ lệch tuyệt đối (ms) giữa thời gian HLC sự kiện gần nhất và đồng hồ Aggregator',
+  labelNames: ['parking_id'], registers: [],
+});
+
+function observeHlc(value, parkingId) {
+  let remote;
+  try { remote = parseHlc(value); } catch { return false; }
+  hlcDrift.set({ parking_id: parkingId }, Math.abs(remote.l - Date.now()));
+  return true;
+}
 
 // PD-25: số đo kênh lệnh, ghi từ command-flow và expired-commands. Tạo một lần ở mức module, mỗi registry đăng ký lại.
 const commandDuration = new client.Histogram({
@@ -19,6 +32,7 @@ function mountMetrics(app, { reg, leader, pool, instance = process.env.INSTANCE_
   registry.setDefaultLabels({ aggregator: `aggregator-${instance}` });   // không dùng tên 'instance': Prometheus đã có nhãn đó
   registry.registerMetric(commandDuration);
   registry.registerMetric(cmdDead);
+  registry.registerMetric(hlcDrift);
   // Lệnh PENDING lâu nhất: tăng dần khi bãi/broker gián đoạn (lệnh chờ trong bảng commands)
   if (pool) new client.Gauge({
     name: 'cmd_oldest_age_seconds', help: 'Tuổi (giây) của lệnh PENDING lâu nhất, 0 nếu không có', registers: [registry],
@@ -69,4 +83,4 @@ function mountMetrics(app, { reg, leader, pool, instance = process.env.INSTANCE_
   return crossZone;
 }
 
-module.exports = { mountMetrics, observeCommand, incCmdDead: () => cmdDead.inc() };
+module.exports = { mountMetrics, observeCommand, observeHlc, incCmdDead: () => cmdDead.inc() };

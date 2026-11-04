@@ -226,7 +226,7 @@ Nền: `feature/PD-14b-auto-failover-epoch` (Luận). Lấy `a613d05 c13fc62 512
   - `cmd_oldest_age_seconds`
   - `aggregator_is_leader`
   - `fencing_rejected_total`
-  - `hlc_drift_ms` (gọi khi PD-17 của Loan đã merge) — CHƯA làm: PD-17 chưa merge. `aggregator_is_leader`, `fencing_rejected_total` đã có từ PD-10, giữ nguyên.
+  - [x] `hlc_drift_ms`: PD-17 đã merge; gauge độ lệch tuyệt đối giữa thành phần thời gian HLC nhận được và `Date.now()` của Aggregator, theo bãi. Bỏ HLC sai nhưng vẫn cập nhật slot; có unit test, chưa chạy. `aggregator_is_leader`, `fencing_rejected_total` đã có từ PD-10, giữ nguyên.
 - [x] `observability/prometheus.yml`: thêm job cho `failover-manager`, `stats-service` (repo chưa có service này, bỏ qua), etcd, RabbitMQ `/metrics/detailed?family=queue_coarse_metrics`.
 - [x] Alertmanager: service trong profile `obs`, file `observability/alertmanager.yml` và `observability/alerts.yml` theo ngưỡng mục 10.2.
 - [x] 2 dashboard `observability/grafana/dashboards/` ("Kênh lệnh", "Điều phối"), theo mẫu `nhom16.json`.
@@ -335,3 +335,18 @@ Nhánh này đã gộp #80, #81 và sửa lỗi tích hợp với PD-06. Chỉ s
 - B4 câu 2: `scripts/them-phan-manh.mjs` chỉ cần **thêm phân mảnh thứ ba** (2 → 3), chuyển những username đổi chủ. Lưu trạng thái di chuyển ở bảng `shard_migrations` trong `db-agg`; chấp nhận chặn ghi ngắn (cờ trong bảng đó, Aggregator đọc trước khi ghi `users`) để đối chiếu số lượng + checksum rồi chuyển đọc. Có thêm cờ `--import-agg` chép một lần các user cũ từ bảng `users` ở `db-agg` sang đúng phân mảnh. `seedUsers` ghi mỗi user mẫu vào đúng phân mảnh của nó. Có `--dry-run`. Không có `USERS_DATABASE_URLS` thì chạy như cũ (bảng `users` ở `db-agg`).
 - B6, hàng đợi admin: lệnh quản trị là các lệnh do ADMIN phát cho nhiều bãi (PD-04: đổi bảng giá, bảo trì hàng loạt). `commands.send(parkingId, type, payload, { admin: true })` gửi vào `cmd.<bãi>.admin`; mặc định (`reserve`, `cancel`, `pay`) vẫn vào `cmd.<bãi>`. Hiện chưa có nơi nào gửi `admin: true`; PD-04 sẽ dùng sau. Node mở 2 channel: prefetch 16 cho `cmd.<bãi>`, 4 cho `cmd.<bãi>.admin`, cùng một processor/inbox. Khai báo hàng đợi admin trong `rabbitmq/definitions.json` và lúc node khởi động (giống `cmd.<bãi>`).
 - Làm nốt phần còn lại của B6: `x-dead-letter-routing-key: expired`, queue `cmd.expired` bind `parking.dlx`, consumer `cmd.expired` chỉ chạy ở leader (EXPIRED + Socket.IO; `delivery_limit` → `cmd.dead`), 503 + `Retry-After` khi `QUEUE_FULL`, và test.
+
+## Bàn giao mục nhỏ 05/11
+
+Chỉ sửa file theo `.task-muc-nho.md`, không chạy shell/test/build/Docker, không commit/PR. Dấu `[x]` dưới đây xác nhận đã viết file, **không xác nhận chạy đạt**; không tick B4/B8 “thiết kế vào issue” vì chỉ có bản local, không tick các lượt đo B15.
+
+- [x] `aggregator-service/src/metrics.js`, `src/events.js`: thêm `hlc_drift_ms` và gọi tại `applyEvent`, trước khi bỏ tin cũ theo version. Đo `abs(HLC.l - Date.now())` theo `parking_id`, không lấy đồng hồ HLC đã gộp làm mốc; HLC sai/thiếu không đổi gauge, không lưu vào cache và không chặn xử lý slot. Tick riêng dòng HLC của B10.
+- [x] `aggregator-service/test/metrics.test.js`: kiểm gauge qua handler `/metrics`, HLC tương lai/quá khứ, tin cũ và HLC sai/thiếu; test viết trước phần triển khai, chưa chạy RED/GREEN theo giới hạn không shell.
+- [x] `tai-lieu/pd-14b-thiet-ke.md`, `tai-lieu/pd-16-thiet-ke.md`: thiết kế từ code hiện có. PD-14b ghi đúng CAS → chờ → promote, cửa sổ/timeout là cấu hình không phải số đo. PD-16 mô tả chặn ghi (không phải ghi đôi); ghi rõ script chưa chuyển `login_buckets`, drain cố định, cleanup cần người vận hành xác nhận mọi Aggregator đã đổi vòng. Không sửa thuật toán failover/phân mảnh trong phạm vi này.
+- [x] `tests/load/k6.js`: mặc định 240 VU đọc + 60 VU đặt, host/ngưỡng qua `__ENV`, đăng nhập demo như e2e. Lấy mã slot thật từ API (không dùng A01 cho seed SLOTS mới), key riêng cho đặt/huỷ; 202 thì poll `GET /api/commands/:id` tới kết quả cuối, 201 thì huỷ để quay vòng, 409 là tranh chấp hợp lệ. Summary JSON giữ p50/p95/p99, req/s, 503/504, raw metrics/thresholds; số thiếu là null, không giả bằng 0.
+- [x] `scripts/do-so-sanh.sh`, `tai-lieu/ket-qua-do-so-sanh.md`: wrapper `grafana/k6` ghi `<tên>.json` + `.log`, không ghi đè, giữ mã lỗi k6; tên chỉ là nhãn stack do người chạy dựng sẵn. Khung 4 cặp và TC80 để trống; có lệnh chạy lại/reset latency và quy ước mẫu số/đơn vị.
+
+**Review tĩnh độc lập:** không có lỗi chặn được xác nhận trong bốn mục và bàn giao; không xác minh runtime, không chạy shell/git/test/Docker.
+
+**Chưa kiểm:** unit Aggregator (đặc biệt `test/metrics.test.js`, `test/events.test.js`), unit parking-node, cú pháp Bash/k6, Docker mount/quyền ghi trên Windows và Linux, smoke 201/202/409 ở cả http/broker, tải đủ 300 VU, TC80 trên toxiproxy, bất biến sau tải và ảnh Grafana. Chưa có JSON/log/ảnh đo thực tế. Khi được chạy lệnh: chạy unit theo quy tắc chung; `bash -n scripts/do-so-sanh.sh`; smoke k6 với VU/thời lượng nhỏ trước, rồi lượt 300 VU theo tài liệu. Cần đối chiếu ngưỡng p95 với bản SLO mục 3.3 khi đo, không sửa ngưỡng theo kết quả sau chạy.
+

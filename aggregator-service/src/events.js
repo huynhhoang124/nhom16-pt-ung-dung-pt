@@ -1,5 +1,6 @@
 // Nhận sự kiện slot từ RabbitMQ và giữ cache trạng thái slot trong RAM (chỉ-đọc, nguồn gốc ở DB bãi).
 const hlc = require('./hlc');
+const { observeHlc } = require('./metrics');
 const { makeConnector } = require('./amqp-connect');
 
 const EXCHANGE = 'parking.events';
@@ -9,7 +10,8 @@ const QUEUE = 'aggregator.slot-updates';
 // tin có version <= bản đang giữ là tin trùng (relay gửi lại) hoặc tin cũ (đến sai thứ tự) -> bỏ.
 function applyEvent(cache, e) {
   // Gộp đồng hồ ngay khi nhận sự kiện, kể cả khi version cũ bị bỏ qua.
-  if (e.hlc) hlc.update(e.hlc);
+  const validHlc = observeHlc(e.hlc, e.parkingId);
+  if (validHlc) hlc.update(e.hlc);
 
   const k = `${e.parkingId}:${e.slot}`;
   const cur = cache.get(k);
@@ -21,7 +23,7 @@ function applyEvent(cache, e) {
     version: e.version,
   };
 
-  if (e.hlc) next.hlc = e.hlc;
+  if (validHlc) next.hlc = e.hlc;
 
   cache.set(k, next);
   return true;
