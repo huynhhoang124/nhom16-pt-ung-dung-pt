@@ -121,3 +121,74 @@ test('PD-10 nodes: gửi kèm X-Fencing-Token khi gọi node và tự động de
     global.fetch = originalFetch;
   }
 });
+
+test('PD-10 nodes: request của người dùng (không có job) không mang fencing token', async () => {
+  const reg = makeRegistry({ internalKey: 'dev', leader: { isLeader: () => true, getToken: () => 42, demote() {} } });
+  const nodeA = reg.add({ parking_id: 'A', name: 'Bãi A', api_url: 'http://mock-node-a:8001' });
+  const sent = [];
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async (_url, opts) => { sent.push(opts.headers); return { ok: true, status: 200, json: async () => ({}) }; };
+    await reg.call(nodeA, '/api/reservations', { method: 'POST', body: {} });
+    await reg.call(nodeA, '/api/slots', { job: 'reconcile' });
+    assert.equal(sent[0]['x-fencing-token'], undefined);
+    assert.equal(sent[0]['x-fencing-job'], undefined);
+    assert.equal(sent[1]['x-fencing-token'], '42');
+    assert.equal(sent[1]['x-fencing-job'], 'reconcile');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+// Client etcd giả: đủ cho tryCampaign (lease, giao dịch CAS, get) và simulatePause
+function fakeEtcd() {
+  let holder = null;   // lease đang giữ khoá election
+  let rev = 10;
+  const leases = [];
+  const client = {
+    lease() {
+      const l = { released: false, revoked: false, on() {},
+        grant: async () => leases.push(l), release() { this.released = true; }, revoke: async () => { l.revoked = true; if (holder === l) holder = null; } };
+      return l;
+    },
+    if() {
+      let lease = null;
+      const tx = {
+        then(op) { lease = op.lease; return tx; },
+        else() { return tx; },
+        commit: async () => {
+          if (holder) return { succeeded: false };
+          holder = leases.at(-1); rev++; return { succeeded: true, header: { revision: rev } };
+        },
+      };
+      return tx;
+    },
+    put() { return { value() { return { lease: (id) => ({ lease: id }) }; } }; },
+    get() { return { exec: async () => ({ kvs: [{ create_revision: String(rev) }] }) }; },
+    close() {},
+  };
+  return { client, expire: () => { holder = null; } };
+}
+
+test('PD-10 leader: hết thời gian simulatePause thì leader cũ tự thôi, không còn 2 leader', async () => {
+  const etcd = fakeEtcd();
+  const elector = makeLeaderElector({ etcdEndpoints: 'fake:2379', client: etcd.client, log: {} });
+  let stops = 0;
+  elector.onLeaderStop(() => { stops++; });
+  await elector.tryCampaign();
+  assert.equal(elector.isLeader(), true);
+  const token = elector.getToken();
+
+  const r = await elector.simulatePause(50);
+  assert.equal(r.ok, true);
+  // Trong lúc pause: vẫn tưởng mình là leader và giữ token cũ (để TC66 gửi lệnh token cũ)
+  assert.equal(elector.isLeader(), true);
+  assert.equal(elector.getToken(), token);
+
+  etcd.expire();   // lease hết hạn trên etcd, bản khác có thể lên leader
+  await new Promise((res) => setTimeout(res, 80));
+  assert.equal(elector.isLeader(), false, 'hết pause phải thôi làm leader');
+  assert.equal(elector.getToken(), null);
+  assert.equal(stops, 1, 'việc định kỳ phải được dừng');
+  await elector.stop();
+});
