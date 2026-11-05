@@ -57,14 +57,23 @@ function makeRegistry({
 
   function recordGetRequest(isAdditional = false) {
     resetHedgeWindow();
-    totalGetRequests++;
 
     if (isAdditional) {
       additionalRequests++;
+    } else {
+      totalGetRequests++;
+    }
 
-      if (additionalRequests / totalGetRequests > HEDGE_RATIO_LIMIT) {
-        hedgingDisabledUntil = Date.now() + HEDGE_DISABLE_MS;
-      }
+    if (
+      totalGetRequests > 0 &&
+      additionalRequests / totalGetRequests > HEDGE_RATIO_LIMIT
+    ) {
+      hedgingDisabledUntil = Date.now() + HEDGE_DISABLE_MS;
+      console.warn(
+        `[PD-20] Hedging disabled: additional ratio = ${
+          (additionalRequests / totalGetRequests * 100).toFixed(2)
+        }%`
+      );
     }
   }
 
@@ -252,6 +261,7 @@ function makeRegistry({
       let finished = false;
       let completed = 0;
       let secondStarted = false;
+      let secondSuppressed = false;
       let hedgeTimer;
 
       const finish = (error, response, winnerIndex = -1) => {
@@ -271,11 +281,19 @@ function makeRegistry({
         else resolve(response);
       };
 
-      const launch = (index) => {
+      const launch = (index, isHedge = false) => {
         if (finished) return;
 
         if (index === 1) {
+          // Chỉ chặn hedge theo timer, không chặn failover.
+          if (isHedge && Date.now() < hedgingDisabledUntil) {
+            secondStarted = true;
+            secondSuppressed = true;
+            return;
+          }
+
           secondStarted = true;
+          secondSuppressed = false;
           recordGetRequest(true);
         }
 
@@ -293,11 +311,13 @@ function makeRegistry({
           (error) => {
             completed++;
 
-            // Replica đầu lỗi trước 120 ms: gọi replica thứ hai ngay.
-            if (index === 0 && !secondStarted) {
+            // Replica đầu lỗi trước 120 ms hoặc hedge đã bị chặn:
+            // vẫn phải gọi replica thứ hai để failover.
+            if (index === 0 && (!secondStarted || secondSuppressed)) {
               clearTimeout(hedgeTimer);
-              launch(1);
-            } else if (completed === 2 || (index === 1 && !secondStarted)) {
+              secondSuppressed = false;
+              launch(1, false);
+            } else if (completed === 2) {
               finish(error);
             }
           },
@@ -307,7 +327,7 @@ function makeRegistry({
       launch(0);
 
       hedgeTimer = setTimeout(() => {
-        if (!finished && !secondStarted) launch(1);
+        if (!finished && !secondStarted) launch(1, true);
       }, HEDGE_MS);
     });
   }

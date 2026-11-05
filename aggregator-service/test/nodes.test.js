@@ -397,7 +397,7 @@ test('PD-20 hedged GET: vượt tỷ lệ request bổ sung 5% thì tạm ngừn
 
   let stats = reg.getHedgeStats();
 
-  assert.equal(stats.totalGetRequests, 19);
+  assert.equal(stats.totalGetRequests, 18);
   assert.equal(stats.additionalRequests, 1);
   assert.ok(stats.additionalRatio > 0.05);
   assert.equal(stats.hedgingDisabled, true);
@@ -421,4 +421,94 @@ test('PD-20 hedged GET: vượt tỷ lệ request bổ sung 5% thì tạm ngừn
   } finally {
     Date.now = originalNow;
   }
+});
+
+test('PD-20 hedged GET: chặn các hedge đang chờ khi tỷ lệ vượt 5%', async (t) => {
+  const servers = [];
+  let delayFirstReplica = false;
+  let secondHits = 0;
+
+  const firstServer = http.createServer((req, res) => {
+    const delay = delayFirstReplica ? 1000 : 0;
+
+    setTimeout(() => {
+      if (!res.destroyed) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ replica: 1 }));
+      }
+    }, delay);
+  });
+
+  const secondServer = http.createServer((req, res) => {
+    secondHits++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ replica: 2 }));
+  });
+
+  await Promise.all([
+    new Promise((resolve) => firstServer.listen(0, '127.0.0.1', resolve)),
+    new Promise((resolve) => secondServer.listen(0, '127.0.0.1', resolve)),
+  ]);
+
+  servers.push(firstServer, secondServer);
+
+  t.after(async () => {
+    await Promise.all(
+      servers.map((server) => new Promise((resolve) => server.close(resolve))),
+    );
+  });
+
+  const url1 = `http://127.0.0.1:${firstServer.address().port}`;
+  const url2 = `http://127.0.0.1:${secondServer.address().port}`;
+
+  const reg = makeRegistry({
+    internalKey: 'dev',
+    timeoutMs: 2000,
+    hedgeWindowMs: 60_000,
+    hedgeDisableMs: 60_000,
+  });
+
+  const n = reg.add({
+    parking_id: 'A',
+    name: 'Bãi A',
+    api_url: url1,
+  });
+
+  n.replicas = new Map([
+    ['replica-1', { url: url1 }],
+    ['replica-2', { url: url2 }],
+  ]);
+
+  // Tạo 15 GET request thông thường.
+  for (let i = 0; i < 15; i++) {
+    await reg.call(n, '/api/slots', {
+      method: 'GET',
+      retry: false,
+    });
+  }
+
+  delayFirstReplica = true;
+
+  // Khởi chạy 3 request hedging gần như đồng thời.
+  const responses = await Promise.all([
+    reg.hedgedGet(n, '/api/slots'),
+    reg.hedgedGet(n, '/api/slots'),
+    reg.hedgedGet(n, '/api/slots'),
+  ]);
+
+  const bodies = await Promise.all(responses.map((r) => r.json()));
+
+  assert.equal(responses.length, 3);
+  assert.equal(secondHits, 1, 'Chỉ hedge đầu tiên vượt ngưỡng được gửi');
+  assert.equal(
+    bodies.filter((body) => body.replica === 2).length,
+    1,
+    'Chỉ một request nhận kết quả từ replica thứ hai',
+  );
+
+  const stats = reg.getHedgeStats();
+
+  assert.equal(stats.additionalRequests, 1);
+  assert.ok(stats.additionalRatio > 0.05);
+  assert.equal(stats.hedgingDisabled, true);
 });
