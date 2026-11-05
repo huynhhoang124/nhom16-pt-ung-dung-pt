@@ -207,7 +207,7 @@ Nền: `feature/PD-14b-auto-failover-epoch` (Luận). Lấy `a613d05 c13fc62 512
 - [x] Bãi A, D: replica chết quá 3 s thì `ALTER SYSTEM RESET synchronous_standby_names` + `pg_reload_conf()` và ghi cảnh báo. Phải khớp với cách B3 đặt tham số.
 - [x] Kiểm tra:
   - `COORD=1 HA=1`: TC68 (failover ≤ 15 s), TC69, TC70 (ghi treo ≤ 3 s), TC65, TC66 đạt cùng một lượt.
-  - Đo `scripts/measure-failover.mjs`, ghi vào runbook.
+  - Đã đo `scripts/measure-failover.mjs` 05/11, ghi vào runbook: 10,05 s.
 - [ ] PR, merge.
 
 ### B9 – PD-21 Giới hạn đăng nhập phân tán (issue #39) – sau B4
