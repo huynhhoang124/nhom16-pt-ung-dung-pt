@@ -39,7 +39,8 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     const origin = req.get('origin');
     if (origin && corsOrigins.includes(origin)) {
       res.set({ 'access-control-allow-origin': origin, vary: 'Origin',
-        'access-control-allow-headers': 'authorization, content-type, x-request-id', 'access-control-expose-headers': 'x-request-id' });
+        'access-control-allow-headers': 'authorization, content-type, x-request-id, x-min-lsn',
+        'access-control-expose-headers': 'x-request-id, x-lsn' });
       if (req.method === 'OPTIONS') return res.status(204).end();
     }
     next();
@@ -93,6 +94,52 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
 
   const send = (res, r) => res.status(r.code).json(r.body);
 
+  // PD-15: kiểm tra X-Min-LSN trước khi dùng làm điều kiện đọc replica.
+  const MIN_LSN_RE = /^[0-9A-Fa-f]{1,8}\/[0-9A-Fa-f]{1,8}$/;
+
+  app.use('/api', (req, res, next) => {
+    const minLSN = req.get('x-min-lsn')?.trim();
+
+    if (minLSN && !MIN_LSN_RE.test(minLSN)) {
+      return res.status(400).json({ error: 'INVALID_MIN_LSN' });
+    }
+
+    next();
+  });
+
+  // PD-15: tạo readPool riêng cho từng request để không chia sẻ X-Min-LSN.
+  const readPoolFor = (req) => {
+    if (readPool === pool) return readPool;
+
+    const minLSN = req.get('x-min-lsn')?.trim() || undefined;
+
+    return {
+      query: (sql, params) =>
+        readPool.query(sql, params, { minLSN }),
+    };
+  };
+
+  // PD-15: lấy LSN sau khi transaction đã COMMIT.
+  const sendWithLsn = async (res, result) => {
+    if (result.code < 300) {
+      try {
+        const { rows } = await pool.query(
+          'SELECT pg_current_wal_lsn() AS lsn'
+        );
+
+        if (rows[0]?.lsn) {
+          res.set('X-LSN', rows[0].lsn);
+        }
+      } catch (error) {
+        // Không biến một thao tác đã COMMIT thành response lỗi
+        // chỉ vì không lấy được LSN.
+        console.error('[PD-15] Failed to fetch current WAL LSN:', error.message);
+      }
+    }
+
+    return send(res, result);
+  };
+
   // PD-09 / TC64: Giả lập lỗi đứt kết nối etcd (chỉ cho phép khi bật cờ test ENABLE_TEST_FAULTS=1 hoặc FAULT_INJECTION=1)
   app.post('/api/test/fault/etcd-partition', async (req, res) => {
     const enabled = process.env.ENABLE_TEST_FAULTS === '1' || process.env.FAULT_INJECTION === '1';
@@ -104,10 +151,12 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     res.json({ ok: true, durationMs: ms });
   });
 
-  app.get('/api/availability', async (_req, res) => res.json(await s.availability(readPool, parkingId)));
+  app.get('/api/availability', async (req, res) =>
+    res.json(await s.availability(readPoolFor(req), parkingId))
+  );
   const type = (req) => (['CAR', 'MOTO'].includes(req.query.type) ? req.query.type : undefined);
-  app.get('/api/slots', async (req, res) => res.json(await s.listSlots(readPool, false, type(req))));
-  app.get('/api/slots/available', async (req, res) => res.json(await s.listSlots(readPool, true, type(req))));
+  app.get('/api/slots', async (req, res) => res.json(await s.listSlots(readPoolFor(req), false, type(req))));
+  app.get('/api/slots/available', async (req, res) => res.json(await s.listSlots(readPoolFor(req), true, type(req))));
 
   app.post('/api/reservations', async (req, res) => {
     const { requestId, userId, slotCode } = req.body ?? {};
@@ -126,8 +175,15 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     }
     const out = await s.reserve(pool, parkingId,
       { requestId, userId, slotCode, licensePlate, startTime, durationMinutes }, reservationMinutes);
-    if (out.code < 300) out.body = { ...out.body, qrToken: tokenFor(qrSecret, parkingId, out.body) };
-    send(res, out);
+
+    if (out.code < 300) {
+      out.body = {
+        ...out.body,
+        qrToken: tokenFor(qrSecret, parkingId, out.body),
+      };
+    }
+
+    return sendWithLsn(res, out);
   });
 
   // NV-09: thêm / sửa / gỡ slot. Aggregator kiểm quyền (nhân viên bãi này hoặc quản trị).
@@ -155,19 +211,42 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     res.json(await s.slotSchedule(pool, req.params.code, req.query.date));
   });
 
-  app.get('/api/reservations', async (req, res) => res.json((await s.listReservations(pool, req.query.userId))
-    .map((r) => (r.status === 'ACTIVE' ? { ...r, qrToken: tokenFor(qrSecret, parkingId, r) } : r))));
+  app.get('/api/reservations', async (req, res) => {
+    const reservations = await s.listReservations(
+      readPoolFor(req),
+      req.query.userId,
+    );
+
+    res.json(
+      reservations.map((r) =>
+        r.status === 'ACTIVE'
+          ? { ...r, qrToken: tokenFor(qrSecret, parkingId, r) }
+          : r
+      )
+    );
+  });
 
   // Lịch sử gửi xe: ?plate=&userId=&from=&to= (ISO 8601)
   app.get('/api/sessions', async (req, res) => {
     const { plate, userId, from, to } = req.query;
     if ([from, to].some((d) => d && Number.isNaN(Date.parse(d)))) return res.status(400).json({ error: 'from/to must be ISO dates' });
-    res.json(await s.listSessions(readPool, { plate, userId, from, to }));
+    res.json(await s.listSessions(readPoolFor(req), { plate, userId, from, to }));
   });
 
   app.delete('/api/reservations/:id', async (req, res) => {
-    if (!UUID.test(req.params.id)) return res.status(404).json({ error: 'RESERVATION_NOT_ACTIVE' });
-    send(res, await s.endReservation(pool, parkingId, req.params.id, 'CANCELLED', req.query.userId));
+    if (!UUID.test(req.params.id)) {
+      return res.status(404).json({ error: 'RESERVATION_NOT_ACTIVE' });
+    }
+
+    const out = await s.endReservation(
+      pool,
+      parkingId,
+      req.params.id,
+      'CANCELLED',
+      req.query.userId,
+    );
+
+    return sendWithLsn(res, out);
   });
 
   // UX-02: ?from=&to= (ISO); mặc định 7 ngày gần nhất
@@ -175,7 +254,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     const to = req.query.to ? new Date(req.query.to) : new Date();
     const from = req.query.from ? new Date(req.query.from) : new Date(to - 7 * 86400_000);
     if (Number.isNaN(+from) || Number.isNaN(+to) || from >= to) return res.status(400).json({ error: 'INVALID_RANGE' });
-    res.json(await s.stats(readPool, from, to));
+    res.json(await s.stats(readPoolFor(req), from, to));
   });
 
   app.get('/api/sessions/:id/quote', async (req, res) => {
@@ -190,7 +269,14 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     if (!['ONLINE', 'CASH'].includes(method) || typeof paymentKey !== 'string' || !paymentKey || paymentKey.length > 128) {
       return res.status(400).json({ error: 'method (ONLINE|CASH) and paymentKey are required' });
     }
-    send(res, await s.pay(pool, { sessionId: req.params.id, method, paymentKey, userId }));
+    const out = await s.pay(pool, {
+      sessionId: req.params.id,
+      method,
+      paymentKey,
+      userId,
+    });
+
+    return sendWithLsn(res, out);
   });
 
   // Bảng giá của bãi (NV-03). PUT nhận mảng quy tắc, mỗi loại xe một quy tắc.
