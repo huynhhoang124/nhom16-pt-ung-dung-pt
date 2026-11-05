@@ -87,6 +87,56 @@ test('PD-09 dynamic discovery: phát hiện bãi mới qua applyPut và thu hồ
   disc.client.close();
 });
 
+test('PD-20 discovery: một bãi lưu được nhiều replica từ các etcd lease', () => {
+  const reg = makeRegistry({ internalKey: 'dev' });
+  const disc = startDiscovery({
+    etcdEndpoints: 'http://localhost:2379',
+    reg,
+  });
+
+  const keyA1 = '/nhom16/parking/nodes/A/parking-a-1';
+  const keyA2 = '/nhom16/parking/nodes/A/parking-a-2';
+
+  // Replica thứ nhất được đăng ký.
+  disc.applyPut(
+    keyA1,
+    JSON.stringify({ url: 'http://parking-a-1:8001', zone: 'bac', name: 'Bãi A' }),
+  );
+
+  const nodeA = reg.get('A');
+  assert.ok(nodeA);
+  assert.equal(nodeA.url, 'http://parking-a-1:8001');
+  assert.equal(nodeA.replicas.size, 1);
+
+  // Replica thứ hai đăng ký cùng parkingId.
+  disc.applyPut(
+    keyA2,
+    JSON.stringify({ url: 'http://parking-a-2:8001', zone: 'bac', name: 'Bãi A' }),
+  );
+
+  assert.equal(nodeA.replicas.size, 2);
+  assert.equal(nodeA.replicas.get(keyA1).url, 'http://parking-a-1:8001');
+  assert.equal(nodeA.replicas.get(keyA2).url, 'http://parking-a-2:8001');
+
+  // Thêm replica thứ hai không được ghi đè endpoint chính.
+  assert.equal(nodeA.url, 'http://parking-a-1:8001');
+
+  // Xóa lease của replica thứ nhất, chuyển endpoint chính sang replica thứ hai.
+  disc.applyDelete(keyA1);
+
+  assert.equal(nodeA.replicas.size, 1);
+  assert.equal(nodeA.url, 'http://parking-a-2:8001');
+  assert.equal(nodeA.hasLease, true);
+
+  // Xóa lease cuối cùng.
+  disc.applyDelete(keyA2);
+
+  assert.equal(nodeA.replicas.size, 0);
+  assert.equal(nodeA.hasLease, false);
+
+  disc.client.close();
+});
+
 test('PD-09 discovery: khởi tạo watch với startRevision(revision + 1) từ snapshot', async () => {
   const reg = makeRegistry({ internalKey: 'dev' });
   let watchedPrefix = null;

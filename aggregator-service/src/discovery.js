@@ -76,7 +76,6 @@ function startDiscovery({
         hasLease: true,
       });
     } else {
-      n.url = url;
       if (zone) n.zone = zone;
       if (data.name && (!n.name || data.name !== `Bãi ${parkingId}`)) {
         n.name = data.name;
@@ -84,8 +83,21 @@ function startDiscovery({
       reg.setLease(parkingId, true);
     }
 
-    // Lập tức kiểm tra HTTP để hoàn tất chuyển sang ONLINE trong <= 2s
-    reg.checkOne(n).catch((e) => log.error?.('[etcd-discovery] Lỗi health check node mới', { error: e.message }));
+    // Lưu riêng từng replica theo key lease etcd, không ghi đè địa chỉ cũ.
+    if (!(n.replicas instanceof Map)) n.replicas = new Map();
+    n.replicas.set(key, { hostname, url, zone });
+
+    // Replica đầu tiên tiếp tục là endpoint chính để tương thích luồng cũ.
+    const primary = n.replicas.values().next().value;
+    if (primary) {
+      if (n.url !== primary.url) n.target = undefined;
+      n.url = primary.url;
+    }
+
+    // Kiểm tra sức khỏe endpoint chính.
+    reg.checkOne(n).catch((e) =>
+      log.error?.('[etcd-discovery] Lỗi health check node mới', { error: e.message }),
+    );
   }
 
   function applyDelete(key) {
@@ -94,8 +106,18 @@ function startDiscovery({
     const { parkingId } = parsed;
 
     const set = activeLeaseKeys.get(parkingId);
-    if (set) {
-      set.delete(key);
+    if (set) set.delete(key);
+
+    const n = reg.get(parkingId);
+    if (n?.replicas instanceof Map) {
+      n.replicas.delete(key);
+
+      // Nếu replica chính bị xóa, chuyển sang endpoint còn lease.
+      const primary = n.replicas.values().next().value;
+      if (primary) {
+        if (n.url !== primary.url) n.target = undefined;
+        n.url = primary.url;
+      }
     }
 
     if (!set || set.size === 0) {

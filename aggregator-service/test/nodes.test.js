@@ -1,6 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { startNode, startStub, startFlaky, startAggregator } = require('./helpers');
+const http = require('node:http');
+const { makeRegistry } = require('../src/nodes');
 
 test('health check: OFFLINE chỉ sau 3 lần lỗi liên tiếp; sống lại thì ONLINE ngay, báo onChange', async (t) => {
   const stub = await startStub(0);
@@ -132,11 +134,116 @@ test('PT-01 X-Instance và nạp bãi do bản Aggregator khác thêm (dùng chu
   assert.equal(agg.reg.get('Z').status, 'OFFLINE');   // bãi mới: chờ health check
 });
 
-test('resolveUrl: tên -> IP (request thật không phải tra DNS); IP giữ nguyên; tra lỗi thì giữ tên', async () => {
+test('resolveUrl: tên -> IP; IP giữ nguyên; DNS lỗi thì giữ tên', async () => {
+  const dns = require('node:dns');
   const { resolveUrl } = require('../src/nodes');
-  assert.equal(await resolveUrl('http://localhost:8001'), 'http://127.0.0.1:8001');
-  assert.equal(await resolveUrl('http://10.0.0.5:8002'), 'http://10.0.0.5:8002');
-  assert.equal(await resolveUrl('http://khong-ton-tai.invalid:8003'), 'http://khong-ton-tai.invalid:8003');
+
+  const originalLookup = dns.promises.lookup;
+
+  try {
+    dns.promises.lookup = async (hostname) => {
+      if (hostname === 'localhost') {
+        return { address: '127.0.0.1', family: 4 };
+      }
+      throw new Error('DNS lookup failed');
+    };
+
+    assert.equal(
+      await resolveUrl('http://localhost:8001'),
+      'http://127.0.0.1:8001',
+    );
+
+    assert.equal(
+      await resolveUrl('http://10.0.0.5:8002'),
+      'http://10.0.0.5:8002',
+    );
+
+    assert.equal(
+      await resolveUrl('http://khong-ton-tai.invalid:8003'),
+      'http://khong-ton-tai.invalid:8003',
+    );
+  } finally {
+    dns.promises.lookup = originalLookup;
+  }
+});
+
+test('PD-20 hedged GET: gọi replica thứ hai sau 120ms và hủy request chậm', async (t) => {
+  let firstAborted = false;
+  let secondHits = 0;
+  let resolveFirstClosed;
+
+  const firstClosed = new Promise((resolve) => {
+    resolveFirstClosed = resolve;
+  });
+
+  const firstServer = http.createServer((req, res) => {
+    res.on('close', () => {
+      if (!res.writableEnded) {
+        firstAborted = true;
+        resolveFirstClosed();
+      }
+    });
+
+    setTimeout(() => {
+      if (!res.destroyed) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ replica: 1 }));
+      }
+    }, 1000);
+  });
+
+  const secondServer = http.createServer((req, res) => {
+    secondHits++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ replica: 2 }));
+  });
+
+  await Promise.all([
+    new Promise((resolve) => firstServer.listen(0, '127.0.0.1', resolve)),
+    new Promise((resolve) => secondServer.listen(0, '127.0.0.1', resolve)),
+  ]);
+
+  t.after(async () => {
+    await Promise.all([
+      new Promise((resolve) => firstServer.close(resolve)),
+      new Promise((resolve) => secondServer.close(resolve)),
+    ]);
+  });
+
+  const reg = makeRegistry({ internalKey: 'dev', timeoutMs: 2000 });
+
+  const n = reg.add({
+    parking_id: 'A',
+    name: 'Bãi A',
+    api_url: `http://127.0.0.1:${firstServer.address().port}`,
+  });
+
+  n.replicas = new Map([
+    ['replica-1', {
+      url: `http://127.0.0.1:${firstServer.address().port}`,
+    }],
+    ['replica-2', {
+      url: `http://127.0.0.1:${secondServer.address().port}`,
+    }],
+  ]);
+
+  const started = performance.now();
+  const response = await reg.hedgedGet(n, '/api/slots');
+  const elapsed = performance.now() - started;
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { replica: 2 });
+
+  assert.ok(elapsed >= 100, `Request dự phòng không được gửi quá sớm: ${elapsed}ms`);
+  assert.ok(elapsed < 1000, `Phải nhận kết quả từ replica thứ hai sớm: ${elapsed}ms`);
+
+  assert.equal(secondHits, 1, 'Replica thứ hai phải được gọi đúng một lần');
+  await Promise.race([
+    firstClosed,
+    new Promise((resolve) => setTimeout(resolve, 500)),
+  ]);
+
+  assert.equal(firstAborted, true, 'Request đến replica đầu tiên phải bị hủy');
 });
 
 test('PD-17 HLC truyền từ Aggregator sang Parking Node qua HTTP', async (t) => {
@@ -212,4 +319,106 @@ test('PD-17 HLC truyền từ Aggregator sang Parking Node qua HTTP', async (t) 
     sessionHlc,
     'HLC của CAR_ENTER phải trùng với HLC đã lưu trong session',
   );
+});
+
+test('PD-20 hedged GET: vượt tỷ lệ request bổ sung 5% thì tạm ngừng Hedging', async (t) => {
+  const servers = [];
+  let delayFirstReplica = false;
+  let secondHits = 0;
+
+  const firstServer = http.createServer((req, res) => {
+    const delay = delayFirstReplica ? 1000 : 0;
+
+    setTimeout(() => {
+      if (!res.destroyed) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ replica: 1 }));
+      }
+    }, delay);
+  });
+
+  const secondServer = http.createServer((req, res) => {
+    secondHits++;
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ replica: 2 }));
+  });
+
+  await Promise.all([
+    new Promise((resolve) => firstServer.listen(0, '127.0.0.1', resolve)),
+    new Promise((resolve) => secondServer.listen(0, '127.0.0.1', resolve)),
+  ]);
+
+  servers.push(firstServer, secondServer);
+
+  t.after(async () => {
+    await Promise.all(
+      servers.map((server) => new Promise((resolve) => server.close(resolve))),
+    );
+  });
+
+  const url1 = `http://127.0.0.1:${firstServer.address().port}`;
+  const url2 = `http://127.0.0.1:${secondServer.address().port}`;
+
+  const reg = makeRegistry({
+    internalKey: 'dev',
+    timeoutMs: 2000,
+    hedgeWindowMs: 60_000,
+    hedgeDisableMs: 60_000,
+  });
+
+  const n = reg.add({
+    parking_id: 'A',
+    name: 'Bãi A',
+    api_url: url1,
+  });
+
+  n.replicas = new Map([
+    ['replica-1', { url: url1 }],
+    ['replica-2', { url: url2 }],
+  ]);
+
+  // Tạo 17 GET request thông thường.
+  for (let i = 0; i < 17; i++) {
+    await reg.call(n, '/api/slots', {
+      method: 'GET',
+      retry: false,
+    });
+  }
+
+  delayFirstReplica = true;
+
+  // Request hedged tạo thêm một request đến replica thứ hai.
+  const originalNow = Date.now;
+  const response = await reg.hedgedGet(n, '/api/slots');
+
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { replica: 2 });
+  assert.equal(secondHits, 1);
+
+  let stats = reg.getHedgeStats();
+
+  assert.equal(stats.totalGetRequests, 19);
+  assert.equal(stats.additionalRequests, 1);
+  assert.ok(stats.additionalRatio > 0.05);
+  assert.equal(stats.hedgingDisabled, true);
+
+  // Trong thời gian tạm ngừng, chỉ gọi replica chính.
+  await reg.hedgedGet(n, '/api/slots');
+
+  stats = reg.getHedgeStats();
+
+  assert.equal(secondHits, 1);
+  assert.equal(stats.additionalRequests, 1);
+  assert.equal(stats.hedgingDisabled, true);
+
+  // Giả lập thời gian đã trôi qua 60 giây.
+  try {
+    Date.now = () => originalNow() + 60_001;
+
+    stats = reg.getHedgeStats();
+
+    assert.equal(stats.hedgingDisabled, false);
+  } finally {
+    Date.now = originalNow;
+  }
 });

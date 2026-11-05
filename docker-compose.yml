@@ -202,6 +202,7 @@ services:
       ETCD_ENDPOINTS: ${ETCD_ENDPOINTS:-}
       ZONE: ${ZONE:-bac}
       ENABLE_TEST_FAULTS: ${ENABLE_TEST_FAULTS:-0}
+      HEDGE_ENABLED: ${HEDGE_ENABLED:-true}
       NODES: >-
         [{"parkingId":"A","name":"Bãi A – PTIT Hà Đông","apiUrl":"http://parking-a:8001","address":"96A Trần Phú, Hà Đông","lat":20.9809,"lng":105.7875,"publicUrl":"http://localhost:8001","zone":"bac"},
          {"parkingId":"B","name":"Bãi B – Cầu Giấy","apiUrl":"http://parking-b:8002","address":"Cầu Giấy, Hà Nội","lat":21.0362,"lng":105.7906,"publicUrl":"http://localhost:8002","zone":"bac"},
