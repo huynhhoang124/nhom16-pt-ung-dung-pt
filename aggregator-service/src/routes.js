@@ -25,6 +25,33 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
   const { need } = auth;
   if (dlq) mountDlq(app, { dlq, need });
   if (broadcasts) mountBroadcasts(app, { need, broadcasts });
+
+  // PD-15: X-Min-LSN dạng JSON map dùng cho API đọc tổng hợp nhiều bãi.
+  const MIN_LSN_RE = /^[0-9A-Fa-f]{1,8}\/[0-9A-Fa-f]{1,8}$/;
+
+  const minLSNMapFromRequest = (req) => {
+    const raw = req.get('x-min-lsn');
+    if (!raw) return {};
+
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return null;
+    }
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return null;
+    }
+
+    for (const [parkingId, lsn] of Object.entries(parsed)) {
+      if (!parkingId || typeof lsn !== 'string' || !MIN_LSN_RE.test(lsn)) {
+        return null;
+      }
+    }
+
+    return parsed;
+  };
   // PD-11: timeout ghi đọc lại mỗi lần gọi (đổi qua etcd là áp dụng ngay cho đặt chỗ, saga, trả tiền)
   const reserveMs = () => (config ? config.get('reserveTimeoutMs', reserveTimeoutMs) : reserveTimeoutMs);
   if (!['http', 'broker'].includes(commandMode)) throw new Error('INVALID_COMMAND_MODE');
@@ -68,13 +95,38 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
 
   // Chuyển tiếp tới đúng node (định tuyến theo parking_id). Node OFFLINE: từ chối ngay, không xếp hàng ngầm.
   // Timeout khi GHI: không biết node đã làm hay chưa (bài toán hai tướng quân) -> 504, client retry cùng key.
-  async function forward(res, n, path, opts) {
+  // PD-15: chuyển X-Min-LSN xuống đúng node và trả X-LSN về client.
+  async function forward(req, res, n, path, opts = {}) {
     if (!n) return res.status(404).json({ error: 'PARKING_NOT_FOUND' });
-    if (n.status === 'OFFLINE') return res.status(503).json({ error: 'PARKING_OFFLINE', parkingId: n.id });
+
+    if (n.status === 'OFFLINE') {
+      return res.status(503).json({
+        error: 'PARKING_OFFLINE',
+        parkingId: n.id,
+      });
+    }
+
+    const minLSN = req.get('x-min-lsn')?.trim();
+
     let r;
-    try { r = await reg.call(n, path, opts); }
-    catch { return res.status(504).json({ error: 'TIMEOUT_UNKNOWN_RESULT', parkingId: n.id }); }
-    res.status(r.status).json(await r.json());
+    try {
+      r = await reg.call(n, path, {
+        ...opts,
+        ...(minLSN && { minLSN }),
+      });
+    } catch {
+      return res.status(504).json({
+        error: 'TIMEOUT_UNKNOWN_RESULT',
+        parkingId: n.id,
+      });
+    }
+
+    const lsn = r.headers?.get?.('x-lsn');
+    if (lsn) {
+      res.set('X-LSN', lsn);
+    }
+
+    return res.status(r.status).json(await r.json());
   }
 
   const info = (n) => ({ parkingId: n.id, name: n.name, address: n.address, lat: n.lat, lng: n.lng, publicUrl: n.publicUrl, zone: n.zone ?? null, status: n.status, lastSeen: n.lastSeen });
@@ -232,7 +284,7 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
     const { slotCode, licensePlate, startTime, durationMinutes } = req.body ?? {};
     if(commandMode==='broker')return broker(req,res,'reserve',{slotCode,licensePlate,...(startTime!==undefined&&{startTime}),...(durationMinutes!==undefined&&{durationMinutes})});
-    await forward(res, reg.get(req.params.id), '/api/reservations', {
+    await forward(req, res, reg.get(req.params.id), '/api/reservations', {
       method: 'POST', ms: reserveMs(), retry: true,   // an toàn vì requestId idempotent
       body: { requestId: `${req.user.sub}:${key}`, userId: req.user.sub, slotCode, licensePlate, startTime, durationMinutes },
     });
@@ -240,7 +292,7 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
 
   // NV-01: lịch đặt của một slot trong ngày (để chọn khung giờ trống).
   app.get('/api/parkings/:id/slots/:code/schedule', need(), async (req, res) => {
-    await forward(res, reg.get(req.params.id),
+    await forward(req, res, reg.get(req.params.id),
       `/api/slots/${encodeURIComponent(req.params.code)}/schedule?date=${encodeURIComponent(req.query.date ?? '')}`);
   });
 
@@ -269,13 +321,23 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
     const owner = req.user.role === 'USER' ? `?userId=${encodeURIComponent(req.user.sub)}` : '';
     if(commandMode==='broker')return broker(req,res,'cancel',{reservationId:req.params.rid},req.get('idempotency-key')??`cancel-${req.params.rid}`);
-    await forward(res, reg.get(req.params.id), `/api/reservations/${encodeURIComponent(req.params.rid)}${owner}`, { method: 'DELETE' });
+    await forward(req, res, reg.get(req.params.id), `/api/reservations/${encodeURIComponent(req.params.rid)}${owner}`, { method: 'DELETE' });
   });
 
   // Lịch sử đặt chỗ của tôi: dữ liệu nằm rải ở các bãi -> gom song song.
   app.get('/api/me/reservations', need('USER'), async (req, res) => {
+    const minLSNs = minLSNMapFromRequest(req);
+
+    if (minLSNs === null) {
+      return res.status(400).json({ error: 'INVALID_MIN_LSN' });
+    }
+
     const parts = await reg.gather(async (n) => ({
-      reservations: await reg.json(n, `/api/reservations?userId=${encodeURIComponent(req.user.sub)}`),
+      reservations: await reg.json(
+        n,
+        `/api/reservations?userId=${encodeURIComponent(req.user.sub)}`,
+        { minLSN: minLSNs[n.id] },
+      ),
     }));
     res.json({
       reservations: parts.flatMap((p) => (p.reservations ?? []).map((r) => ({ parkingId: p.parkingId, ...r }))),
@@ -287,7 +349,7 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
   app.post('/api/parkings/:id/slots/:code/:action', need('STAFF', 'ADMIN'), async (req, res) => {
     if (!ACTIONS.has(req.params.action)) return res.status(404).json({ error: 'UNKNOWN_ACTION' });
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
-    await forward(res, reg.get(req.params.id),
+    await forward(req, res, reg.get(req.params.id),
       `/api/slots/${encodeURIComponent(req.params.code)}/${req.params.action}`,
       { method: 'POST', body: { licensePlate: req.body?.licensePlate, cash: req.body?.cash === true } });
   });
@@ -295,7 +357,7 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
   // UX-04: cổng bãi quét QR qua Aggregator (node vẫn là bên kiểm chữ ký QR). Không tự retry: xe vào/ra không idempotent.
   app.post('/api/parkings/:id/gate/scan', need('STAFF', 'ADMIN'), async (req, res) => {
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
-    await forward(res, reg.get(req.params.id), '/api/gate/scan', {
+    await forward(req, res, reg.get(req.params.id), '/api/gate/scan', {
       method: 'POST', body: { token: req.body?.token, action: req.body?.action } });
   });
 
@@ -306,21 +368,29 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
   };
   const slotPath = (req) => `/api/slots${req.params.code ? `/${encodeURIComponent(req.params.code)}` : ''}`;
   app.post('/api/parkings/:id/slots', need('STAFF', 'ADMIN'), async (req, res) => {
-    if (ownParking(req, res)) await forward(res, reg.get(req.params.id), slotPath(req), { method: 'POST', body: req.body });
+    if (ownParking(req, res)) await forward(req, res, reg.get(req.params.id), slotPath(req), { method: 'POST', body: req.body });
   });
   app.patch('/api/parkings/:id/slots/:code', need('STAFF', 'ADMIN'), async (req, res) => {
-    if (ownParking(req, res)) await forward(res, reg.get(req.params.id), slotPath(req), { method: 'PATCH', body: req.body });
+    if (ownParking(req, res)) await forward(req, res, reg.get(req.params.id), slotPath(req), { method: 'PATCH', body: req.body });
   });
   app.delete('/api/parkings/:id/slots/:code', need('STAFF', 'ADMIN'), async (req, res) => {
-    if (ownParking(req, res)) await forward(res, reg.get(req.params.id), slotPath(req), { method: 'DELETE' });
+    if (ownParking(req, res)) await forward(req, res, reg.get(req.params.id), slotPath(req), { method: 'DELETE' });
   });
 
   app.get('/api/parkings/:id/reservations', need('STAFF', 'ADMIN'), async (req, res) => {
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
-    await forward(res, reg.get(req.params.id), '/api/reservations');
+    await forward(req, res, reg.get(req.params.id), '/api/reservations');
   });
 
-  mountSessions(app, { reg, need, forward, reserveTimeoutMs: reserveMs, commandMode, broker });
+  mountSessions(app, {
+    reg,
+    need,
+    forward,
+    reserveTimeoutMs: reserveMs,
+    commandMode,
+    broker,
+    minLSNMapFromRequest,
+  });
 
   // Quản trị: trạng thái các node; thêm bãi mới không cần sửa code (tính mở rộng).
   app.get('/api/admin/nodes', need('ADMIN'), (_req, res) =>

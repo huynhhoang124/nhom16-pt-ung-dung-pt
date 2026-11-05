@@ -15,9 +15,23 @@ function sessionHlcKey(session) {
   return `${String(ms).padStart(13, '0')}-0000`;
 }
 
-function mountSessions(app, { reg, need, forward, reserveTimeoutMs, commandMode, broker }) {
-  const gatherSessions = async (query) => {
-    const parts = await reg.gather(async (n) => ({ sessions: await reg.json(n, `/api/sessions?${query}`) }));
+function mountSessions(app, {
+  reg,
+  need,
+  forward,
+  reserveTimeoutMs,
+  commandMode,
+  broker,
+  minLSNMapFromRequest,
+}) {
+  const gatherSessions = async (query, minLSNs = {}) => {
+    const parts = await reg.gather(async (n) => ({
+      sessions: await reg.json(
+        n,
+        `/api/sessions?${query}`,
+        { minLSN: minLSNs[n.id] },
+      ),
+    }));
     return {
       sessions: parts
       .flatMap((p) => (p.sessions ?? []).map((x) => ({
@@ -38,30 +52,48 @@ function mountSessions(app, { reg, need, forward, reserveTimeoutMs, commandMode,
   // Tra biển số trên toàn hệ thống (nhân viên, quản trị).
   app.get('/api/sessions/search', need('STAFF', 'ADMIN'), async (req, res) => {
     const plate = String(req.query.plate ?? '').trim();
-    if (plate.replace(/[^a-z0-9]/gi, '').length < 3) return res.status(400).json({ error: 'PLATE_TOO_SHORT' });
-    res.json(await gatherSessions(`plate=${enc(plate)}`));
+
+    if (plate.replace(/[^a-z0-9]/gi, '').length < 3) {
+      return res.status(400).json({ error: 'PLATE_TOO_SHORT' });
+    }
+
+    const minLSNs = minLSNMapFromRequest(req);
+    if (minLSNs === null) {
+      return res.status(400).json({ error: 'INVALID_MIN_LSN' });
+    }
+
+    return res.json(await gatherSessions(`plate=${enc(plate)}`, minLSNs));
   });
 
   // Lịch sử gửi xe của tôi (các phiên vào bằng đặt chỗ của tài khoản này).
-  app.get('/api/me/sessions', need('USER'), async (req, res) =>
-    res.json(await gatherSessions(`userId=${enc(req.user.sub)}`)));
+  app.get('/api/me/sessions', need('USER'), async (req, res) => {
+    const minLSNs = minLSNMapFromRequest(req);
+
+    if (minLSNs === null) {
+      return res.status(400).json({ error: 'INVALID_MIN_LSN' });
+    }
+
+    return res.json(
+      await gatherSessions(`userId=${enc(req.user.sub)}`, minLSNs)
+    );
+  });
 
   // Phiên gần đây của một bãi.
   app.get('/api/parkings/:id/sessions', need('STAFF', 'ADMIN'), async (req, res) => {
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
-    await forward(res, reg.get(req.params.id), '/api/sessions');
+    await forward(req, res, reg.get(req.params.id), '/api/sessions');
   });
 
   // Phí tạm tính của một phiên đang gửi (NV-03).
   app.get('/api/parkings/:id/sessions/:sid/quote', need(), (req, res) =>
-    forward(res, reg.get(req.params.id), `/api/sessions/${enc(req.params.sid)}/quote`));
+    forward(req, res, reg.get(req.params.id), `/api/sessions/${enc(req.params.sid)}/quote`));
 
   // NV-04: người dùng trả tiền phiên của mình. Idempotency-Key bắt buộc; timeout -> 504, bấm lại cùng key an toàn.
   app.post('/api/me/sessions/:id/:sid/pay', need('USER'), async (req, res) => {
     const key = req.get('idempotency-key');
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
     if(commandMode==='broker')return broker(req,res,'pay',{sessionId:req.params.sid,method:'ONLINE'},key);
-    await forward(res, reg.get(req.params.id), `/api/sessions/${enc(req.params.sid)}/pay`, {
+    await forward(req, res, reg.get(req.params.id), `/api/sessions/${enc(req.params.sid)}/pay`, {
       method: 'POST', ms: reserveTimeoutMs(), retry: true,
       body: { method: 'ONLINE', paymentKey: `${req.user.sub}:${key}`, userId: req.user.sub },
     });
@@ -88,10 +120,10 @@ function mountSessions(app, { reg, need, forward, reserveTimeoutMs, commandMode,
   });
 
   // Bảng giá: ai cũng xem được; nhân viên bãi đó hoặc quản trị được sửa.
-  app.get('/api/parkings/:id/pricing', (req, res) => forward(res, reg.get(req.params.id), '/api/pricing'));
+  app.get('/api/parkings/:id/pricing', (req, res) => forward(req, res, reg.get(req.params.id), '/api/pricing'));
   app.put('/api/parkings/:id/pricing', need('STAFF', 'ADMIN'), async (req, res) => {
     if (req.user.role === 'STAFF' && req.user.parkingId !== req.params.id) return res.status(403).json({ error: 'FORBIDDEN' });
-    await forward(res, reg.get(req.params.id), '/api/pricing', { method: 'PUT', body: req.body });
+    await forward(req, res, reg.get(req.params.id), '/api/pricing', { method: 'PUT', body: req.body });
   });
 }
 
