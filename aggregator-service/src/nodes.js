@@ -25,8 +25,58 @@ async function resolveUrl(url) {
   return u.href.replace(/\/$/, '');
 }
 
-function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config, leader, zone = 'bac' }) {
+function makeRegistry({
+  internalKey,
+  timeoutMs = 2000,
+  failThreshold = 3,
+  config,
+  leader,
+  zone = 'bac',
+  hedgeWindowMs = 60_000,
+  hedgeDisableMs = 60_000,
+}) {
   const nodes = new Map();
+
+  // PD-20: thống kê request và kiểm soát tỷ lệ hedged request.
+  const HEDGE_RATIO_LIMIT = 0.05;
+  const HEDGE_WINDOW_MS = hedgeWindowMs;
+  const HEDGE_DISABLE_MS = hedgeDisableMs;
+
+  let hedgeWindowStart = Date.now();
+  let totalGetRequests = 0;
+  let additionalRequests = 0;
+  let hedgingDisabledUntil = 0;
+
+  function resetHedgeWindow() {
+    if (Date.now() - hedgeWindowStart >= HEDGE_WINDOW_MS) {
+      hedgeWindowStart = Date.now();
+      totalGetRequests = 0;
+      additionalRequests = 0;
+    }
+  }
+
+  function recordGetRequest(isAdditional = false) {
+    resetHedgeWindow();
+
+    if (isAdditional) {
+      additionalRequests++;
+    } else {
+      totalGetRequests++;
+    }
+
+    if (
+      totalGetRequests > 0 &&
+      additionalRequests / totalGetRequests > HEDGE_RATIO_LIMIT
+    ) {
+      hedgingDisabledUntil = Date.now() + HEDGE_DISABLE_MS;
+      console.warn(
+        `[PD-20] Hedging disabled: additional ratio = ${
+          (additionalRequests / totalGetRequests * 100).toFixed(2)
+        }%`
+      );
+    }
+  }
+
   // PD-12: bãi cùng vùng với Aggregator đứng trước (gọi trước, không qua đường liên vùng), sau đó theo mã bãi.
   const ordered = () => [...nodes.values()].sort((a, b) =>
     ((a.zone ?? zone) !== zone) - ((b.zone ?? zone) !== zone) || a.id.localeCompare(b.id));
@@ -93,7 +143,15 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   // gắn vào thì mọi lệnh ghi phải xếp hàng trên dòng `fencing` ở node và người dùng có thể nhận 409.
   // fencingToken: việc của leader (khôi phục saga) truyền token lúc lên leader, để vẫn gửi token đó sau khi mất quyền
   // và node từ chối khi đã thấy token mới hơn; không truyền thì lấy token hiện tại.
-  const raw = (n, path, { method = 'GET', body, ms, job, fencingToken } = {}) => {
+  const raw = (n, path, {
+    method = 'GET',
+    body,
+    ms,
+    job,
+    fencingToken,
+    signal,
+    baseUrl,
+  } = {}) => {
     const effectiveMs = ms ?? getTimeout();
     const token = job ? (fencingToken ?? leader?.getToken?.()) : null;
     const fencingHeaders = token ? {
@@ -101,9 +159,13 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
       'x-fencing-job': job,
     } : {};
 
-    return fetch((n.target ?? n.url) + path, {
+    const timeoutSignal = AbortSignal.timeout(effectiveMs);
+    const requestSignal = signal
+      ? AbortSignal.any([signal, timeoutSignal])
+      : timeoutSignal;
+
+    return fetch((baseUrl ?? n.target ?? n.url) + path, {
       method,
-      // gửi tiếp mã truy vết sang node (GS-03) và fencing token (PD-10)
       headers: {
         'content-type': 'application/json',
         'x-internal-key': internalKey,
@@ -112,7 +174,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
         ...(method !== 'GET' && { 'x-hlc': hlc.now() }),
       },
       body: body && JSON.stringify(body),
-      signal: AbortSignal.timeout(effectiveMs),
+      signal: requestSignal,
     });
   };
 
@@ -129,6 +191,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   async function call(n, path, { method = 'GET', body, ms, retry = method === 'GET', job, fencingToken } = {}) {
     const effectiveMs = ms ?? getTimeout();
     const deadline = Date.now() + effectiveMs;
+    if (method === 'GET') recordGetRequest();
     for (let attempt = 0; ; attempt++) {
       let res;
       try {
@@ -155,6 +218,112 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
     }
   }
 
+  // PD-20: Hedged GET - gửi request dự phòng sau 120 ms nếu replica đầu chưa phản hồi.
+  const HEDGE_MS = 120;
+  const HEDGE_ENABLED = process.env.HEDGE_ENABLED !== 'false';
+
+  async function hedgedGet(n, path, { ms, ...opts } = {}) {
+    if (!HEDGE_ENABLED) {
+      return call(n, path, { ...opts, method: 'GET', ms, retry: false });
+    }
+    const replicas = n.replicas instanceof Map
+      ? [...n.replicas.values()].slice(0, 2)
+      : [];
+
+    // Không đủ hai replica thì dùng cơ chế GET thông thường.
+    if (replicas.length < 2) {
+      return call(n, path, { ...opts, method: 'GET', ms });
+    }
+
+    // Tạm ngừng Hedging khi tỷ lệ request bổ sung vượt 5%.
+    if (Date.now() < hedgingDisabledUntil) {
+      return call(n, path, { ...opts, method: 'GET', ms, retry: false });
+    }
+
+    recordGetRequest();
+    
+    const effectiveMs = ms ?? getTimeout();
+
+    const firstEndpoint = await resolveUrl(replicas[0].url);
+    const secondEndpointPromise = resolveUrl(replicas[1].url);
+
+    const controllers = [new AbortController(), new AbortController()];
+
+    return new Promise((resolve, reject) => {
+      let finished = false;
+      let completed = 0;
+      let secondStarted = false;
+      let secondSuppressed = false;
+      let hedgeTimer;
+
+      const finish = (error, response, winnerIndex = -1) => {
+        if (finished) return;
+
+        finished = true;
+        clearTimeout(hedgeTimer);
+
+        // Chỉ hủy request thua cuộc, giữ request thắng để đọc response body.
+        controllers.forEach((controller, index) => {
+          if (index !== winnerIndex && !controller.signal.aborted) {
+            controller.abort();
+          }
+        });
+
+        if (error) reject(error);
+        else resolve(response);
+      };
+
+      const launch = (index, isHedge = false) => {
+        if (finished) return;
+
+        if (index === 1) {
+          // Chỉ chặn hedge theo timer, không chặn failover.
+          if (isHedge && Date.now() < hedgingDisabledUntil) {
+            secondStarted = true;
+            secondSuppressed = true;
+            return;
+          }
+
+          secondStarted = true;
+          secondSuppressed = false;
+          recordGetRequest(true);
+        }
+
+        (index === 0
+          ? Promise.resolve(firstEndpoint)
+          : secondEndpointPromise
+        ).then((baseUrl) => raw(n, path, {
+          ...opts,
+          method: 'GET',
+          ms: effectiveMs,
+          signal: controllers[index].signal,
+          baseUrl,
+        })).then(
+          (response) => finish(null, response, index),
+          (error) => {
+            completed++;
+
+            // Replica đầu lỗi trước 120 ms hoặc hedge đã bị chặn:
+            // vẫn phải gọi replica thứ hai để failover.
+            if (index === 0 && (!secondStarted || secondSuppressed)) {
+              clearTimeout(hedgeTimer);
+              secondSuppressed = false;
+              launch(1, false);
+            } else if (completed === 2) {
+              finish(error);
+            }
+          },
+        );
+      };
+
+      launch(0);
+
+      hedgeTimer = setTimeout(() => {
+        if (!finished && !secondStarted) launch(1, true);
+      }, HEDGE_MS);
+    });
+  }
+
   const json = async (n, path, opts) => {
     const r = await call(n, path, opts);
     if (!r.ok) throw new Error(`${n.id} ${path} -> ${r.status}`);
@@ -162,14 +331,36 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   };
 
   async function checkOne(n) {
-    n.target = await resolveUrl(n.url);
-    const ok = await raw(n, '/health').then((r) => r.ok).catch(() => false);
-    if (ok) {
+    const replicas = n.replicas instanceof Map
+      ? [...n.replicas.values()]
+      : [];
+
+    const endpoints = replicas.length
+      ? replicas.map((replica) => replica.url)
+      : [n.url];
+
+    const checks = endpoints.map(async (url) => {
+      const baseUrl = await resolveUrl(url);
+      const response = await raw(n, '/health', {
+        baseUrl,
+        ms: getTimeout(),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Health check failed: ${response.status}`);
+      }
+
+      return true;
+    });
+
+    try {
+      await Promise.any(checks);
       n.fails = 0;
       n.lastSeen = new Date().toISOString();
-    } else {
+    } catch {
       n.fails++;
     }
+
     setStatus(n, computeStatus(n));
   }
 
@@ -197,6 +388,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
     all: () => [...nodes.values()],
     ordered,
     call,
+    hedgedGet,
     json,
     check,
     checkOne,
@@ -205,6 +397,17 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
     setLease,
     computeStatus,
     onChange: null,
+    getHedgeStats: () => {
+      resetHedgeWindow();
+      return {
+        totalGetRequests,
+        additionalRequests,
+        additionalRatio: totalGetRequests
+          ? additionalRequests / totalGetRequests
+          : 0,
+        hedgingDisabled: Date.now() < hedgingDisabledUntil,
+      };
+    },
   };
   return api;
 }

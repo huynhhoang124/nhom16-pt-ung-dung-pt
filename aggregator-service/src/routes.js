@@ -174,8 +174,17 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
   const localAvailability = async () => Promise.all(reg.ordered()
     .filter((n) => (n.zone ?? zone) === zone).map(async (n) => {
       if (n.status === 'OFFLINE') return { parkingId: n.id, status: 'OFFLINE' };
-      try { return { parkingId: n.id, status: n.status, ...(await reg.json(n, '/api/availability')) }; }
-      catch { return { parkingId: n.id, status: 'OFFLINE' }; }
+      try {
+        const response = await reg.hedgedGet(n, '/api/availability');
+        if (!response.ok) throw new Error(`${n.id} availability -> ${response.status}`);
+        return {
+          parkingId: n.id,
+          status: n.status,
+          ...(await response.json()),
+        };
+      } catch {
+        return { parkingId: n.id, status: 'OFFLINE' };
+      }
     }));
   const availability = async (scope) => {
     const local = localAvailability();
@@ -215,15 +224,47 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
     res.json(req.query.scope === 'zone' ? { parkings: all, failed: result.failed } : all);
   });
 
-  // Chi tiết bãi. Bãi OFFLINE: trả bản cache cuối cùng, gắn stale=true (chấp nhận cũ để vẫn sẵn sàng).
+  // Chi tiết bãi: hỗ trợ ETag để giảm dữ liệu truyền tải khi slot không thay đổi.
   app.get('/api/parkings/:id', async (req, res) => {
     const n = reg.get(req.params.id);
     if (!n) return res.status(404).json({ error: 'PARKING_NOT_FOUND' });
-    if (n.status !== 'OFFLINE') {
-      try { return res.json({ ...info(n), stale: false, slots: await reg.json(n, '/api/slots') }); }
-      catch { /* rơi xuống bản cache */ }
+
+    // ETag được tính bằng tổng version của các slot trong events cache.
+    const cachedSlots = slotsFromCache(cache, n.id);
+    const versionSum = cachedSlots.reduce((sum, slot) => sum + (Number(slot.version) || 0), 0);
+    const etag = `"${versionSum}"`;
+
+    res.set('ETag', etag);
+
+    const ifNoneMatch = req.get('If-None-Match');
+    if (ifNoneMatch && ifNoneMatch.split(',').some((tag) => {
+      const value = tag.trim().replace(/^W\//, '');
+      return value === etag || value === '*';
+    })) {
+      return res.status(304).end();
     }
-    res.json({ ...info(n), status: n.status, stale: true, slots: slotsFromCache(cache, n.id) });
+
+    if (n.status !== 'OFFLINE') {
+      try {
+        const response = await reg.hedgedGet(n, '/api/slots');
+        if (!response.ok) throw new Error(`Node trả về ${response.status}`);
+
+        return res.json({
+          ...info(n),
+          stale: false,
+          slots: await response.json(),
+        });
+      } catch {
+        // Rơi xuống bản cache nếu node lỗi.
+      }
+    }
+
+    return res.json({
+      ...info(n),
+      status: n.status,
+      stale: true,
+      slots: cachedSlots,
+    });
   });
 
   // Nghiệp vụ 2: đặt chỗ. Idempotency-Key bắt buộc; ghép với userId để key của người này không đụng người khác.
