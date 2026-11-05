@@ -162,16 +162,16 @@ async function main() {
   const onChange = (n, prev) => {
     log.info(`Bãi ${n.id}: ${prev} -> ${n.status}`);
     io.emit('NODE_STATUS', { parkingId: n.id, status: n.status });
-    // PD-10: Chỉ Leader mới chạy đối soát (reconcile)
-    if (n.status === 'ONLINE' && leader.isLeader()) {
+  };
+  const reconcileOnline = () => Promise.all(reg.all()
+    .filter((n) => n.status === 'ONLINE')
+    .map((n) =>
       reconcile(reg, cache, n, push)
         .then((k) => log.info(`Đối soát bãi ${n.id}: cập nhật ${k} slot`))
         .catch((e) => {
           if (e.message?.includes('STALE_LEADER')) leader.demote();
           log.error(`Đối soát bãi ${n.id} lỗi`, { error: e.message });
-        });
-    }
-  };
+        })));
   const check = () => {
     const p = hasEtcd
       ? Promise.resolve()
@@ -179,6 +179,7 @@ async function main() {
           .then(({ rows }) => reg.sync(rows).forEach((id) => log.info(`Nạp bãi mới ${id} (do bản Aggregator khác thêm)`)));
     return p
       .then(() => reg.check(onChange))
+      .then(reconcileOnline)
       .catch((e) => log.error('health check lỗi', { error: e.message }));
   };
 
