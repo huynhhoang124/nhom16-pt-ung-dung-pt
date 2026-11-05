@@ -1,5 +1,6 @@
 import L from 'leaflet';
-import { CircleMarker, MapContainer, Marker, Popup, TileLayer } from 'react-leaflet';
+import { useEffect } from 'react';
+import { CircleMarker, MapContainer, Marker, Popup, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import { Icon, NodeBadge } from './ui.jsx';
 
@@ -15,12 +16,41 @@ function pin(p) {
   return L.divIcon({ className: '', iconSize: null, html: `<div class="${cls}"><b>${label}</b></div>` });
 }
 
+// Thu phóng cho vừa mọi bãi (và vị trí người dùng nếu có) — không để bãi nào nằm ngoài khung.
+// Chỉ chạy khi tập điểm đổi (thêm/bớt bãi, lấy được vị trí), không giật khung mỗi lần số chỗ trống cập nhật.
+function FitAll({ points }) {
+  const map = useMap();
+  const key = points.map((p) => p.join(',')).join(';');
+  useEffect(() => {
+    const fit = () => {
+      if (points.length === 1) map.setView(points[0], 15, { animate: false });
+      else if (points.length > 1) map.fitBounds(points, { padding: [48, 48], maxZoom: 15, animate: false });
+    };
+    fit();
+    // Khung bản đồ đổi kích thước (tạo lúc đang ẩn, xoay điện thoại, đổi cỡ cửa sổ): Leaflet không tự biết ->
+    // vẽ lại ô nền và thu phóng lại cho vừa các bãi.
+    let last = '';
+    const ro = new ResizeObserver(([e]) => {
+      const size = `${Math.round(e.contentRect.width)}x${Math.round(e.contentRect.height)}`;
+      if (size === last || !e.contentRect.width) return;
+      last = size;
+      map.invalidateSize();
+      fit();
+    });
+    ro.observe(map.getContainer());
+    return () => ro.disconnect();
+  }, [key, map]);
+  return null;
+}
+
 export default function ParkingMap({ items, me, onOpen }) {
+  const points = [...items.filter((p) => p.lat != null).map((p) => [p.lat, p.lng]), ...(me ? [me] : [])];
   const center = me ?? (items.find((p) => p.lat != null) ? [items.find((p) => p.lat != null).lat, items.find((p) => p.lat != null).lng] : HANOI);
   return (
     <div style={{ position: 'relative' }}>
       <MapContainer center={center} zoom={12} className="map" scrollWheelZoom>
         <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+        <FitAll points={points} />
         {me && <CircleMarker center={me} radius={7} pathOptions={{ color: '#416180', fillOpacity: 0.9 }}><Popup>Vị trí của bạn</Popup></CircleMarker>}
         {items.filter((p) => p.lat != null).map((p) => (
           <Marker key={p.parkingId} position={[p.lat, p.lng]} icon={pin(p)} title={p.name}>

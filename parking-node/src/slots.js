@@ -90,6 +90,13 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     const now = (await c.query('SELECT now() AS now')).rows[0].now;
     const start = startTime && new Date(startTime) > now ? new Date(startTime) : now;
     const instant = start - now <= minutes * 60_000;
+    // Một biển số không giữ hai chỗ trùng giờ trong cùng bãi (bấm nhầm / giữ chỗ hộ). Biển số đã chuẩn hoá ở app.js.
+    const dup = (await c.query(
+      `SELECT s.slot_code FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
+       WHERE r.status IN ('ACTIVE','PENDING_SAGA') AND r.license_plate = $1
+         AND r.start_time < $2::timestamptz + make_interval(mins => $3) AND r.end_time > $2::timestamptz
+       LIMIT 1`, [licensePlate, start, durationMinutes])).rows[0];
+    if (dup) throw new Abort(409, { error: 'PLATE_ALREADY_BOOKED', slotCode: dup.slot_code });
     let slot;
     if (instant) {
       // compare-and-swap nguyên tử: chỉ một request thấy 1 dòng bị ảnh hưởng

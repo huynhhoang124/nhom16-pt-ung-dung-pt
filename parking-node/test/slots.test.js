@@ -86,6 +86,17 @@ const inHours = async (pool, h) => (await one(pool, `SELECT now() + make_interva
 const book = (pool, id, startTime, durationMinutes = 120, slot = 'A01') =>
   s.reserve(pool, P, { ...req(id, slot), startTime, durationMinutes });
 
+test('một biển số không giữ hai chỗ trùng giờ: 409 PLATE_ALREADY_BOOKED kèm ô đang giữ; khác giờ thì được', async () => {
+  const pool = await makePool();
+  const plate = (id, slot, extra = {}) => ({ ...req(id, slot), licensePlate: '30A12345', ...extra });
+  assert.equal((await s.reserve(pool, P, plate('p1', 'A01'))).code, 201);
+  const dup = await s.reserve(pool, P, plate('p2', 'A02'));
+  assert.deepEqual([dup.code, dup.body.error, dup.body.slotCode], [409, 'PLATE_ALREADY_BOOKED', 'A01']);
+  assert.equal((await s.listSlots(pool)).find((x) => x.slotCode === 'A02').status, 'AVAILABLE');   // không giữ nhầm A02
+  const later = new Date(Date.now() + 6 * 3600_000).toISOString();     // sau khi lượt đầu (2 giờ) đã kết thúc
+  assert.equal((await s.reserve(pool, P, plate('p3', 'A02', { startTime: later }))).code, 201);
+});
+
 test('TC20 đặt trước: hai khung giờ chồng nhau trên cùng slot -> cái sau 409 TIME_CONFLICT; slot vẫn AVAILABLE', async () => {
   const pool = await makePool();
   const t = await inHours(pool, 5);

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, centralDown, formatPlate, knownNode, message, newKey, nodeApi, rememberNodes, STATUS_LABEL, useLive } from '../api.js';
+import { api, centralDown, estimateFee, formatPlate, knownNode, message, newKey, nodeApi, rememberNodes, STATUS_LABEL, useLive, vehicles } from '../api.js';
 import { TYPE_LABEL } from './Dashboard.jsx';
 import Pricing from './Pricing.jsx';
 import { commandRequest } from '../api.js';
@@ -22,6 +22,17 @@ const fmt = (iso) => {
 };
 
 const normPlate = (v) => String(v ?? '').toUpperCase().replace(/[^0-9A-Z]/g, '');
+// Giá trị cho <input type="datetime-local"> theo giờ máy người dùng: "YYYY-MM-DDTHH:mm".
+const toLocalInput = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+// Chọn nhanh giờ đến: [nhãn, giá trị datetime-local] ('' = đặt ngay).
+function quickTimes() {
+  const now = new Date();
+  const at = (days, h) => { const d = new Date(now); d.setDate(d.getDate() + days); d.setHours(h, 0, 0, 0); return d; };
+  const list = [['Ngay bây giờ', ''], ['+30 phút', toLocalInput(new Date(now.getTime() + 30 * 60000))], ['+1 giờ', toLocalInput(new Date(now.getTime() + 3600000))]];
+  if (now.getHours() < 17) list.push(['Tối nay 18:00', toLocalInput(at(0, 18))]);
+  list.push(['Sáng mai 8:00', toLocalInput(at(1, 8))]);
+  return list;
+}
 // Thời gian đã gửi: "45 phút" / "2 giờ 05 phút".
 const since = (iso) => {
   const m = Math.max(0, Math.floor((Date.now() - new Date(iso)) / 60000));
@@ -43,6 +54,12 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
   const [busy, setBusy] = useState(false);            // đang chờ bãi trả lời lượt đặt
   const [loadedAt, setLoadedAt] = useState(null);     // giờ tải dữ liệu bãi gần nhất
   const [booked, setBooked] = useState(null);         // lượt vừa đặt thành công (hiện thẻ xác nhận)
+  const [customWhen, setCustomWhen] = useState(false); // đang tự chọn ngày giờ (ô datetime) thay vì chọn nhanh
+  const [pickLabel, setPickLabel] = useState('Ngay bây giờ');
+  const [rules, setRules] = useState(null);           // bảng giá của bãi -> phí ước tính khi đặt
+  const [myCars, setMyCars] = useState(() => vehicles.list());
+  useEffect(() => { if (user.role === 'USER') api(`/api/parkings/${parkingId}/pricing`).then((r) => r.ok && setRules(r.data)); }, [parkingId, user.role]);
+  const changeWhen = (v) => { setWhen(v); setPending((pd) => pd && { ...pd, key: newKey(), unknown: false }); };
   const [acting, setActing] = useState(false);        // nhân viên đang gửi xe vào/ra: khoá nút, chống bấm đúp
   const [occupant, setOccupant] = useState(null);     // phiên gửi của ô đang có xe: biển số, giờ vào, phí tạm tính
   const [charge, setCharge] = useState(null);         // bước thu tiền mặt khi xe ra mà chưa trả: { slotCode, fee, breakdown, received }
@@ -83,7 +100,7 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
     setBooked(null);
     setCharge(null);
     setSelected(slot.slotCode);
-    if (user.role === 'USER' && slot.status !== 'MAINTENANCE') setPending({ slotCode: slot.slotCode, key: newKey(), unknown: false });
+    if (user.role === 'USER' && slot.status !== 'MAINTENANCE') { setPending({ slotCode: slot.slotCode, key: newKey(), unknown: false }); if (!plate && myCars[0]) setPlate(myCars[0]); }
     else setPending(null);
     // Màn hẹp: panel nằm dưới sơ đồ -> cuộn tới để người dùng thấy ngay form.
     setTimeout(() => {   // chờ React vẽ panel của ô mới chọn
@@ -114,6 +131,7 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
     setBusy(false);
     if (r.ok) {
       setNote(null);
+      vehicles.remember(plate); setMyCars(vehicles.list());
       setBooked({ slotCode: pending.slotCode, plate, start: r.data.start_time, end: r.data.end_time, expire: r.data.expire_time });
       setPending(null);
     } else if (r.status === 504 || r.status === 0) {
@@ -121,7 +139,7 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
       setNote({ kind: 'error', text: message(r.status ? r.data : { error: 'TIMEOUT_UNKNOWN_RESULT' }) });
     } else {
       // Bãi đã từ chối: giữ form để sửa và gửi lại (key mới vì là yêu cầu mới).
-      setNote({ kind: 'error', text: message(r.data), field: ['INVALID_PLATE', 'PLATE_ALREADY_INSIDE'].includes(r.data?.error) ? 'plate' : null });
+      setNote({ kind: 'error', text: message(r.data), field: ['INVALID_PLATE', 'PLATE_ALREADY_INSIDE', 'PLATE_ALREADY_BOOKED'].includes(r.data?.error) ? 'plate' : null });
       setPending({ ...pending, key: newKey(), unknown: false });
     }
     load();
@@ -387,21 +405,54 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
                 {pending && (
                   <form onSubmit={reserve} className="stack" style={{ gap: 'var(--space-3)' }}>
                     <label className="field">Biển số
-                      <input placeholder="vd 30A-123.45" value={plate} required autoComplete="off"
+                      <input placeholder="vd 30A-123.45" value={plate} required autoComplete="off" list="my-vehicles"
                         aria-invalid={note?.field === 'plate' ? 'true' : undefined}
                         onChange={(e) => { setPlate(e.target.value); if (note?.field === 'plate') setNote(null); }} />
+                      <datalist id="my-vehicles">{myCars.map((v) => <option key={v} value={v} />)}</datalist>
                       {note?.field === 'plate' && <span className="error">{note.text}</span>}
                     </label>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 120px', gap: 'var(--space-2)' }}>
-                      <label className="field">Giờ đến
-                        <input type="datetime-local" value={when} onChange={(e) => { setWhen(e.target.value); setPending({ ...pending, key: newKey(), unknown: false }); }} />
-                      </label>
-                      <label className="field">Thời lượng
-                        <select value={duration} onChange={(e) => { setDuration(Number(e.target.value)); setPending({ ...pending, key: newKey(), unknown: false }); }}>
-                          {[60, 120, 180, 240, 480, 720, 1440].map((m) => <option key={m} value={m}>{m / 60} giờ</option>)}
-                        </select>
-                      </label>
+                    {myCars.length > 0 && (
+                      <div className="quick" role="group" aria-label="Xe của tôi">
+                        <span className="muted small">Xe của tôi:</span>
+                        {myCars.map((v) => (
+                          <button type="button" key={v} className={normPlate(plate) === normPlate(v) ? 'chip on' : 'chip'} aria-pressed={normPlate(plate) === normPlate(v)}
+                            onClick={() => { setPlate(v); if (note?.field === 'plate') setNote(null); }}>{v}</button>
+                        ))}
+                      </div>
+                    )}
+                    <div className="field">Giờ đến
+                      <div className="quick" role="group" aria-label="Chọn nhanh giờ đến">
+                        {quickTimes().map(([label, value]) => (
+                          <button type="button" key={label} className={pickLabel === label && !customWhen ? 'chip on' : 'chip'} aria-pressed={pickLabel === label && !customWhen}
+                            onClick={() => { setCustomWhen(false); setPickLabel(label); changeWhen(value); }}>{label}</button>
+                        ))}
+                        <button type="button" className={customWhen ? 'chip on' : 'chip'} aria-pressed={customWhen} onClick={() => { setCustomWhen(true); setPickLabel(''); }}>Giờ khác…</button>
+                      </div>
+                      {customWhen && (
+                        <input type="datetime-local" value={when} min={toLocalInput(new Date())} max={toLocalInput(new Date(Date.now() + 7 * 86400e3))}
+                          aria-label="Chọn ngày giờ đến" onChange={(e) => changeWhen(e.target.value)} />
+                      )}
                     </div>
+                    <label className="field">Thời lượng gửi
+                      <select value={duration} onChange={(e) => { setDuration(Number(e.target.value)); setPending({ ...pending, key: newKey(), unknown: false }); }}>
+                        {[60, 120, 180, 240, 480, 720, 1440].map((m) => <option key={m} value={m}>{m / 60} giờ</option>)}
+                      </select>
+                    </label>
+                    {(() => {
+                      const start = when ? new Date(when) : new Date();
+                      const end = new Date(start.getTime() + duration * 60000);
+                      const hold = new Date(start.getTime() + 15 * 60000);
+                      const rule = rules?.find((r) => r.vehicleType === slot.type);
+                      const est = rule ? estimateFee(rule, duration, start) : null;
+                      return (
+                        <dl className="summary">
+                          <dt>Đến</dt><dd>{when ? fmt(start.toISOString()) : 'Ngay bây giờ'}</dd>
+                          <dt>Rời trước</dt><dd>{fmt(end.toISOString())}</dd>
+                          <dt>Giữ chỗ tới</dt><dd>{fmt(hold.toISOString())} <span className="muted small">· đến muộn hơn sẽ mất chỗ</span></dd>
+                          {est != null && <><dt>Phí ước tính</dt><dd><b>{est.toLocaleString('vi-VN')} đ</b> <span className="muted small">· trả khi ra, tính theo giờ thực gửi</span></dd></>}
+                        </dl>
+                      );
+                    })()}
                     {slot.status !== 'AVAILABLE' && !when && <p className="muted small" style={{ margin: 0 }}>Ô đang bận: chọn giờ đến khác để đặt trước.</p>}
                     {busy ? (
                       <div className="cmd pending" role="status">

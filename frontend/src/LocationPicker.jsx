@@ -51,6 +51,12 @@ function ClickToPick({ onPick }) {
 function FlyTo({ target }) {
   const map = useMap();
   useEffect(() => { if (target) map.flyTo(target, Math.max(map.getZoom(), 16), { duration: 0.6 }); }, [target, map]);
+  // Bản đồ nằm trong hộp sửa / form có thể đổi cỡ sau khi tạo -> vẽ lại ô nền.
+  useEffect(() => {
+    const ro = new ResizeObserver(() => map.invalidateSize());
+    ro.observe(map.getContainer());
+    return () => ro.disconnect();
+  }, [map]);
   return null;
 }
 

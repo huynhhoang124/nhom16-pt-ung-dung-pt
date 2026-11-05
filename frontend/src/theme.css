@@ -287,3 +287,20 @@ tr.clickable { cursor: pointer; }
 .pick-pin span { position: absolute; inset: 0; background: #d71f2f; border: 3px solid #fff; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); box-shadow: 0 4px 10px rgb(0 0 0 / .35); }
 .pick-pin span::after { content: ""; position: absolute; inset: 8px; background: #fff; border-radius: 50%; }
 @container app (max-width: 900px) { .node-form { grid-template-columns: 1fr; } }
+
+/* Đợt 2 phía người dùng: chọn nhanh, tóm tắt đặt chỗ, vé, mật khẩu */
+.quick { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 4px; }
+.quick .chip { cursor: pointer; font-weight: 600; min-height: 34px; }
+.quick .chip.on { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+.summary { display: grid; grid-template-columns: auto 1fr; gap: 4px var(--space-3); margin: 0; padding: var(--space-3); font-size: var(--fs-sm);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md, 0); }
+.summary dt { color: var(--muted); } .summary dd { margin: 0; }
+.ticket-lot { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: var(--fs-sm); }
+.ticket-lot .i { color: var(--primary); align-self: center; }
+.ticket-lot a { margin-left: auto; }
+.qr-card.upcoming { border-style: dashed; }
+.history-block { border: 1px solid var(--line); border-radius: var(--r-md, 0); padding: var(--space-3) var(--space-4); background: var(--card); }
+.history-block summary { cursor: pointer; font-weight: 600; }
+.pw { display: flex; gap: var(--space-2); }
+.pw input { flex: 1; min-width: 0; }
+.pw-toggle { white-space: nowrap; }
