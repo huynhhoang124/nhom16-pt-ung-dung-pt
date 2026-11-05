@@ -311,7 +311,10 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
             {p.address && `${p.address} · `}{p.direct ? 'đọc thẳng từ bãi' : loadedAt && `dữ liệu lúc ${clock(loadedAt)}`}
           </p>
         </div>
-        <NodeBadge status={p.status} />
+        <div className="legend" style={{ alignItems: 'center' }}>
+          {user.role === 'ADMIN' && <span className="st info" title="Quản trị thao tác được ở mọi bãi như nhân viên của bãi đó"><Icon name="lock" />Đang thao tác với quyền quản trị</span>}
+          <NodeBadge status={p.status} />
+        </div>
       </div>
       {p.direct && (
         <div className="banner bad"><Icon name="wifi-off" />

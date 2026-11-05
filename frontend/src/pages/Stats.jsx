@@ -12,6 +12,11 @@ export default function Stats() {
   const [range, setRange] = useState(() => ({ from: dateInput(new Date(Date.now() - 6 * 86400_000)), to: dateInput(new Date()) }));
   const [data, setData] = useState(null);
   const [error, setError] = useState('');
+  const [lot, setLot] = useState('');          // '' = gộp mọi bãi; mã bãi = xem riêng bãi đó
+  const [names, setNames] = useState({});      // mã bãi -> tên (bảng "Theo bãi" hiện tên, không chỉ mã)
+  useEffect(() => { api('/api/parkings').then((r) => r.ok && setNames(Object.fromEntries(r.data.map((p) => [p.parkingId, p.name])))); }, []);
+  const preset = (days) => setRange({ from: dateInput(new Date(Date.now() - (days - 1) * 86400_000)), to: dateInput(new Date()) });
+  const isPreset = (days) => range.to === dateInput(new Date()) && range.from === dateInput(new Date(Date.now() - (days - 1) * 86400_000));
 
   const load = useCallback(async () => {
     // khoảng [00:00 ngày "từ", 00:00 sau ngày "đến") theo giờ máy người xem
@@ -24,15 +29,30 @@ export default function Stats() {
   useEffect(() => { load(); }, [load]);
   useLive(['SLOT_UPDATED', 'NODE_STATUS'], load, 2000);
 
-  const t = data?.total;
+  const multi = (data?.parkings.length ?? 0) + (data?.unavailable.length ?? 0) > 1;   // quản trị: nhiều bãi
+  const picked = lot && data?.parkings.find((p) => p.parkingId === lot);
+  const t = picked || data?.total;
   const peak = t ? Math.max(...t.byHour, 1) : 1;
   return (
     <>
       <div className="page-head">
-        <h2>Thống kê</h2>
-        <div className="inline" style={{ marginTop: 0 }}>
+        <h2>Thống kê{picked ? ` · ${names[lot] ?? `Bãi ${lot}`}` : ''}</h2>
+        <div className="inline" style={{ marginTop: 0, alignItems: 'flex-end' }}>
+          <div className="seg" role="group" aria-label="Khoảng thời gian nhanh">
+            {[[1, 'Hôm nay'], [7, '7 ngày'], [30, '30 ngày']].map(([d, l]) => (
+              <button key={d} className={isPreset(d) ? 'tab active' : 'tab'} aria-pressed={isPreset(d)} onClick={() => preset(d)}>{l}</button>
+            ))}
+          </div>
           <label className="field">Từ <input type="date" value={range.from} max={range.to} onChange={(e) => setRange({ ...range, from: e.target.value })} /></label>
           <label className="field">Đến <input type="date" value={range.to} min={range.from} onChange={(e) => setRange({ ...range, to: e.target.value })} /></label>
+          {multi && (
+            <label className="field">Bãi
+              <select value={lot} onChange={(e) => setLot(e.target.value)}>
+                <option value="">Tất cả bãi</option>
+                {data.parkings.map((p) => <option key={p.parkingId} value={p.parkingId}>{names[p.parkingId] ?? `Bãi ${p.parkingId}`}</option>)}
+              </select>
+            </label>
+          )}
         </div>
       </div>
       {error && <div className="banner bad"><Icon name="x" /><div>{error}</div></div>}
@@ -73,18 +93,18 @@ export default function Stats() {
             ))}
           </div>
 
-          {data.parkings.length + data.unavailable.length > 1 && <>
+          {multi && !picked && <>
           <h3 style={{ marginTop: 'var(--space-6)' }}>Theo bãi</h3>
           <div className="scroll"><table>
             <thead><tr><th>Bãi</th><th className="tnum">Lượt xe</th><th className="tnum">Doanh thu</th><th className="tnum">TG gửi TB</th><th className="tnum">Lấp đầy</th></tr></thead>
             <tbody>
               {data.parkings.map((p) => (
-                <tr key={p.parkingId}>
-                  <td>{p.parkingId}</td><td className="tnum">{p.sessions}</td><td className="tnum">{money(p.revenue)}</td><td className="tnum">{dur(p.avgMinutes)}</td>
+                <tr key={p.parkingId} className="clickable" onClick={() => setLot(p.parkingId)} title="Bấm để xem riêng bãi này">
+                  <td><button className="link" onClick={(e) => { e.stopPropagation(); setLot(p.parkingId); }}><b className="mono">{p.parkingId}</b> · {names[p.parkingId] ?? ""}</button></td><td className="tnum">{p.sessions}</td><td className="tnum">{money(p.revenue)}</td><td className="tnum">{dur(p.avgMinutes)}</td>
                   <td className="tnum">{p.occupied}/{p.total}</td>
                 </tr>
               ))}
-              {data.unavailable.map((id) => <tr key={id}><td>{id}</td><td colSpan="4" className="muted">Mất kết nối, không có số liệu</td></tr>)}
+              {data.unavailable.map((id) => <tr key={id}><td><b className="mono">{id}</b> · {names[id] ?? ""}</td><td colSpan="4" className="muted">Mất kết nối, không có số liệu</td></tr>)}
             </tbody>
           </table></div>
           </>}

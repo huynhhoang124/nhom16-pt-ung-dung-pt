@@ -94,7 +94,7 @@ export default function App() {
         {view.page === 'parking' && <ParkingDetail key={`${view.parkingId}:${view.slot ?? ''}`} parkingId={view.parkingId} initialSlot={view.slot} user={user} onBack={() => go('dashboard')}
           onMine={user.role === 'USER' ? () => go('mine') : undefined} />}
         {view.page === 'mine' && <MyReservations />}
-        {view.page === 'admin' && <Admin />}
+        {view.page === 'admin' && <Admin onOpenLot={(parkingId) => setView({ page: 'parking', parkingId })} />}
         {view.page === 'account' && <Account user={user} />}
         {view.page === 'stats' && <Stats />}
         {view.page === 'gate' && <Gate parkingId={user.parkingId} />}

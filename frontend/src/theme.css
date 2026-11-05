@@ -257,3 +257,33 @@ button.block { width: 100%; }
 /* Danh sách lượt đặt trong panel ô / hộp xác nhận */
 .res-list { list-style: none; margin: var(--space-1) 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
 .res-list li { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+
+/* Quản trị: form bãi, hành động trong bảng, hộp sửa rộng */
+.node-form { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: var(--space-3) var(--space-4); align-items: start; }
+.node-form .field .hint, .node-form .field .error { font-weight: 500; }
+.node-form-actions { grid-column: 1 / -1; display: flex; justify-content: flex-end; gap: var(--space-2); }
+.row-actions { display: flex; gap: var(--space-3); justify-content: flex-end; white-space: nowrap; }
+.dialog.wide { width: min(720px, 100%); max-height: calc(100vh - 2 * var(--space-4)); overflow: auto; }
+tr.clickable { cursor: pointer; }
+
+/* Form bãi: hai phần (thông tin / vị trí), bản đồ chọn vị trí */
+.node-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr); }
+.node-section { border: 0; margin: 0; padding: 0; min-width: 0; display: flex; flex-direction: column; gap: var(--space-3); }
+.node-section legend { font-family: var(--font-head); font-weight: 700; font-size: var(--fs-md); padding: 0; margin-bottom: var(--space-2); }
+.url-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-2); align-items: start; }
+.url-row > button { margin-top: 22px; }
+.manual-coords summary { cursor: pointer; font-size: var(--fs-sm); color: var(--muted); font-weight: 600; }
+.manual-coords .coords { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-2); margin-top: var(--space-2); }
+.picker { display: flex; flex-direction: column; gap: var(--space-2); }
+.picker-bar { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.picker-search { display: flex; gap: var(--space-2); flex: 1 1 260px; min-width: 0; }
+.picker-search input { flex: 1; min-width: 0; }
+.picker-results { list-style: none; margin: 0; padding: var(--space-2); border: 1px solid var(--line); border-radius: var(--r-sm, 0); background: var(--card); max-height: 180px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
+.picker-results .link { text-align: left; white-space: normal; font-weight: 500; }
+.picker-map { position: relative; }
+.picker-leaflet.map { height: 300px; cursor: crosshair; }
+.picker-hint { position: absolute; left: var(--space-2); bottom: var(--space-2); z-index: 500; display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; font-size: var(--fs-xs); font-weight: 600; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius-pill); box-shadow: var(--shadow-1); }
+.pick-pin { width: 30px; height: 30px; transform: translate(-50%, -100%); position: absolute; }
+.pick-pin span { position: absolute; inset: 0; background: #d71f2f; border: 3px solid #fff; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); box-shadow: 0 4px 10px rgb(0 0 0 / .35); }
+.pick-pin span::after { content: ""; position: absolute; inset: 8px; background: #fff; border-radius: 50%; }
+@container app (max-width: 900px) { .node-form { grid-template-columns: 1fr; } }

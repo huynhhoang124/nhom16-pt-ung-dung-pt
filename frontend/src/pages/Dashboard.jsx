@@ -54,8 +54,11 @@ export default function Dashboard({ onOpen, hero = false }) {
   // Có vị trí: bãi còn chỗ và đang chạy lên trước, rồi gần trước.
   if (me) shown = [...shown].sort((a, b) => ((b.status !== 'OFFLINE' && b.available > 0) - (a.status !== 'OFFLINE' && a.available > 0))
     || (a.distance ?? Infinity) - (b.distance ?? Infinity));
+  // Nhân viên / quản trị: bãi mất kết nối lên đầu để thấy ngay việc cần xử lý.
+  if (!hero && !me) shown = [...shown].sort((a, b) => (b.status === 'OFFLINE') - (a.status === 'OFFLINE'));
   const online = shown.filter((p) => p.status !== 'OFFLINE');
   const free = online.reduce((s, p) => s + p.available, 0);
+  const cap = online.reduce((s, p) => s + (p.total ?? 0), 0);
 
   return (
     <>
@@ -80,7 +83,9 @@ export default function Dashboard({ onOpen, hero = false }) {
           <div>
             <h2>Tổng quan các bãi</h2>
             <p className="muted" style={{ margin: 0 }}>
-              {online.length}/{items.length} bãi đang hoạt động · <b className="mono">{free}</b> chỗ trống{type && ` cho ${TYPE_LABEL[type].toLowerCase()}`}
+              {online.length}/{items.length} bãi đang hoạt động · <b className="mono">{free}</b>/{cap} chỗ trống{type && ` cho ${TYPE_LABEL[type].toLowerCase()}`}
+              {cap > 0 && <> · lấp đầy <b className="mono">{Math.round((100 * (cap - free)) / cap)}%</b></>}
+              {items.length > online.length && <> · <span className="error">{items.length - online.length} bãi mất kết nối</span></>}
             </p>
           </div>
         </div>
@@ -96,8 +101,6 @@ export default function Dashboard({ onOpen, hero = false }) {
           <button className={view === 'list' ? 'tab active' : 'tab'} aria-pressed={view === 'list'} onClick={() => setView('list')}>Danh sách</button>
           <button className={view === 'map' ? 'tab active' : 'tab'} aria-pressed={view === 'map'} onClick={() => setView('map')}>Bản đồ</button>
         </div>
-        {!hero && <button className="link" onClick={locate}><Icon name="pin" /> Tìm bãi gần tôi</button>}
-        {!hero && geoNote && <span className="muted small">{geoNote}</span>}
       </div>
       {view === 'map' && (
         <Suspense fallback={<span className="skeleton map" />}>

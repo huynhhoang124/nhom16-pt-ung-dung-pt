@@ -317,20 +317,73 @@ function makeApp({ pool, reg, cache, auth, commands, commandFlow, commandMode = 
   app.get('/api/admin/nodes', need('ADMIN'), (_req, res) =>
     res.json(reg.all().map((n) => ({ ...info(n), url: n.url, fails: n.fails }))));
 
+  // Mã lỗi (không phải câu tiếng Anh) để giao diện báo đúng ô nhập bằng tiếng Việt.
+  const coord = (v, max) => v == null || v === '' ? null : (Number.isFinite(Number(v)) && Math.abs(Number(v)) <= max ? Number(v) : NaN);
+  const nodeFieldError = ({ name, apiUrl, lat, lng }, partial = false) => {
+    if (Number.isNaN(coord(lat, 90)) || Number.isNaN(coord(lng, 180))) return 'INVALID_COORDS';
+    if ((!partial || name !== undefined) && !String(name ?? '').trim()) return 'INVALID_NAME';
+    if ((!partial || apiUrl !== undefined) && !/^https?:\/\/[^\s/]+/.test(apiUrl ?? '')) return 'INVALID_API_URL';
+    return null;
+  };
   app.post('/api/admin/nodes', need('ADMIN'), async (req, res) => {
     const { parkingId, name, apiUrl, address, lat, lng } = req.body ?? {};
-    const coord = (v, max) => v == null || v === '' ? null : (Number.isFinite(Number(v)) && Math.abs(Number(v)) <= max ? Number(v) : NaN);
     const [la, ln] = [coord(lat, 90), coord(lng, 180)];
-    if (Number.isNaN(la) || Number.isNaN(ln)) return res.status(400).json({ error: 'lat/lng must be valid coordinates' });
-    if (!/^[A-Z0-9]{1,8}$/.test(parkingId ?? '') || !name || !/^https?:\/\//.test(apiUrl ?? '')) {
-      return res.status(400).json({ error: 'parkingId (A-Z0-9), name, apiUrl (http...) are required' });
-    }
+    if (!/^[A-Z0-9]{1,8}$/.test(parkingId ?? '')) return res.status(400).json({ error: 'INVALID_PARKING_ID' });
+    const bad = nodeFieldError(req.body ?? {});
+    if (bad) return res.status(400).json({ error: bad });
     if (reg.get(parkingId)) return res.status(409).json({ error: 'PARKING_EXISTS' });
     const row = (await pool.query(
       `INSERT INTO parking_nodes(parking_id, name, api_url, address, lat, lng) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
       [parkingId, name, apiUrl, address ?? null, la, ln])).rows[0];
     reg.add(row);
     res.status(201).json(info(reg.get(parkingId)));
+  });
+
+  // Thử kết nối tới máy chủ bãi TRƯỚC khi lưu: gọi /health, trả thời gian phản hồi và mã bãi máy chủ tự báo
+  // (phát hiện URL trỏ nhầm sang bãi khác). Chỉ quản trị; chỉ http(s); quá 3 s coi như không kết nối được.
+  app.post('/api/admin/nodes/check', need('ADMIN'), async (req, res) => {
+    const apiUrl = String(req.body?.apiUrl ?? '').trim().replace(/\/+$/, '');
+    if (!/^https?:\/\/[^\s/]+/.test(apiUrl)) return res.status(400).json({ error: 'INVALID_API_URL' });
+    const started = Date.now();
+    try {
+      // Không tra DNS trước (resolveUrl không có timeout): AbortSignal giới hạn cả tra tên lẫn kết nối trong 3 s.
+      const r = await fetch(`${apiUrl}/health`, { signal: AbortSignal.timeout(3000) });
+      const body = await r.json().catch(() => ({}));
+      res.json({ ok: r.ok && body.status === 'UP', status: r.status, ms: Date.now() - started, parkingId: body.parkingId ?? null,
+        registered: body.parkingId ? !!reg.get(body.parkingId) : false });
+    } catch (e) {
+      res.json({ ok: false, status: 0, ms: Date.now() - started, error: e.name === 'TimeoutError' ? 'TIMEOUT' : 'UNREACHABLE' });
+    }
+  });
+
+  // Sửa thông tin bãi (tên, địa chỉ, toạ độ, địa chỉ API) — vd sửa URL gõ nhầm khi thêm bãi.
+  app.patch('/api/admin/nodes/:id', need('ADMIN'), async (req, res) => {
+    const n = reg.get(req.params.id);
+    if (!n) return res.status(404).json({ error: 'PARKING_NOT_FOUND' });
+    const body = req.body ?? {};
+    const bad = nodeFieldError(body, true);
+    if (bad) return res.status(400).json({ error: bad });
+    const set = { name: body.name?.trim(), api_url: body.apiUrl, address: body.address,
+      lat: body.lat === undefined ? undefined : coord(body.lat, 90), lng: body.lng === undefined ? undefined : coord(body.lng, 180) };
+    const cols = Object.entries(set).filter(([, v]) => v !== undefined);
+    if (!cols.length) return res.json({ ...info(n), url: n.url, fails: n.fails });
+    const row = (await pool.query(
+      `UPDATE parking_nodes SET ${cols.map(([k], i) => `${k}=$${i + 2}`).join(', ')} WHERE parking_id=$1 RETURNING *`,
+      [n.id, ...cols.map(([, v]) => v)])).rows[0];
+    if (row) reg.add(row);
+    else reg.add({ parking_id: n.id, ...Object.fromEntries(cols) });   // bãi khai báo qua môi trường/etcd, chưa có dòng DB
+    if (set.api_url) await reg.checkOne(reg.get(n.id)).catch(() => {});   // URL mới: kiểm tra ngay để trả trạng thái thật
+    res.json({ ...info(reg.get(n.id)), url: reg.get(n.id).url, fails: reg.get(n.id).fails });
+  });
+
+  // Gỡ bãi: CHỈ khi đang mất kết nối (thêm nhầm / đã ngừng chạy). Bãi đang hoạt động không gỡ được để tránh mất dữ liệu đang phục vụ.
+  app.delete('/api/admin/nodes/:id', need('ADMIN'), async (req, res) => {
+    const n = reg.get(req.params.id);
+    if (!n) return res.status(404).json({ error: 'PARKING_NOT_FOUND' });
+    if (n.status !== 'OFFLINE') return res.status(409).json({ error: 'PARKING_ONLINE' });
+    await pool.query('DELETE FROM parking_nodes WHERE parking_id=$1', [n.id]);
+    reg.nodes.delete(n.id);
+    res.json({ ok: true });
   });
 
   app.use((err, _req, res, _next) => {
