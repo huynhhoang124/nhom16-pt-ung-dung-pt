@@ -346,3 +346,14 @@ Không ghi nhận metric Node A–F đạt 6/6 khi chưa có bằng chứng th�
 docker compose cp scripts/do-tre-ban-sao-pd14a.mjs parking-a:/app/do-tre.mjs
 docker compose exec parking-a node /app/do-tre.mjs A 20
 ```
+
+## Số đo 05/11/2026
+
+Chạy `node scripts/measure-failover.mjs` một lần, stack `coord,ha` + `docker-compose.shard.yml`, không có tải. Stack có chạy `failover-manager`, nên số này chưa tách riêng được thao tác tay với failover tự động.
+
+| Giai đoạn | Thời gian |
+|---|---|
+| Tắt `db-a` đến khi bãi A `OFFLINE` | 2,00 s |
+| `pg_promote` và cập nhật `.env` | 1,15 s |
+| Chạy `parking-a` đến khi `ONLINE` | 6,90 s |
+| **Tổng** | **10,05 s** |

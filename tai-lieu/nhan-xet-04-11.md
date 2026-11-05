@@ -15,15 +15,14 @@ Kết quả e2e và phần test Huynh sửa thêm: xem PR #84.
 
 ## Loan – #64 PD-05: chưa merge
 
-Commit mới `263db2c` chưa sửa được lỗi chặn.
+Commit mới `263db2c` và `b2a8a02` chưa sửa được lỗi chặn; xung đột với `dev` đã hết.
 
 1. **Lỗi chặn: TC60 PD-05 chạy trên mọi stack.** `tests/tc60.pd05.test.mjs` khai báo test chỉ có `{ timeout: 240000 }`, không có `skip`.
    - `tests/e2e.test.mjs` gọi `registerTc60Pd05Tests`, nên test này cũng chạy trên stack không bật `pd13`.
    - Lỗi đã gặp: `Expected exactly one running container for rabbitmq-2; found 0` trên `scale`, `rabbitmq must be healthy` trên `http` và `hashard`.
    - `compose('up', '-d', '--wait', 'parking-a-2')` ở `263db2c` không giải quyết việc này. Stack không có `pd13` thì không có cụm RabbitMQ và node dự phòng.
    - Sửa: thêm `skip: !process.env.PD13` vào khai báo test, rồi chạy với `PD13=1` trên cấu hình `ha,pd13`.
-2. **Xung đột `tests/e2e.test.mjs`** sau khi #55 vào `dev`. Rebase lên `dev` và giữ phần của cả hai bên.
-3. CI của PR bỏ qua job `e2e`, nên CI xanh chưa chứng minh được lỗi này đã hết. Sau khi sửa, chạy `tests/e2e.test.mjs` trên stack thường, phải bỏ qua TC60 PD-05 và không có lỗi.
+2. CI của PR bỏ qua job `e2e`, nên CI xanh chưa chứng minh được lỗi này đã hết. Sau khi sửa, chạy `tests/e2e.test.mjs` trên stack thường, phải bỏ qua TC60 PD-05 và không có lỗi.
 
 ## Hùng – #80 PD-08, #81 PD-04
 
