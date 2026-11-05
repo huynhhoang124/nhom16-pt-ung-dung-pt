@@ -4,26 +4,157 @@ import { makeCommandClient } from './command-client.js';
 
 const KEY = 'parking.session';
 
+// PD-15: lưu LSN riêng theo từng parking vì mỗi bãi có PostgreSQL riêng.
+const MIN_LSN_KEY = 'parking.minLsns';
+
+function readMinLSNs() {
+  try {
+    const value = JSON.parse(localStorage.getItem(MIN_LSN_KEY) ?? '{}');
+
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function parseLSN(lsn) {
+  if (typeof lsn !== 'string') return null;
+
+  const match = lsn.match(
+    /^([0-9A-Fa-f]{1,8})\/([0-9A-Fa-f]{1,8})$/,
+  );
+
+  if (!match) return null;
+
+  return [
+    Number.parseInt(match[1], 16),
+    Number.parseInt(match[2], 16),
+  ];
+}
+
+function rememberMinLSN(parkingId, lsn) {
+  if (!parkingId) return;
+
+  const next = parseLSN(lsn);
+  if (!next) return;
+
+  try {
+    const values = readMinLSNs();
+    const current = parseLSN(values[parkingId]);
+
+    // Không để response cũ ghi đè LSN mới hơn.
+    if (
+      current &&
+      (
+        next[0] < current[0] ||
+        (next[0] === current[0] && next[1] <= current[1])
+      )
+    ) {
+      return;
+    }
+
+    values[parkingId] = lsn;
+    localStorage.setItem(MIN_LSN_KEY, JSON.stringify(values));
+  } catch {
+    // Không làm hỏng thao tác API nếu localStorage không khả dụng.
+  }
+}
+
+function parkingIdFromPath(path) {
+  const pathname = String(path).split('?')[0].split('#')[0];
+
+  // /api/parkings/:parkingId/...
+  const parkingMatch = pathname.match(/^\/api\/parkings\/([^/]+)/);
+  if (parkingMatch) return decodeURIComponent(parkingMatch[1]);
+
+  // /api/me/sessions/:parkingId/:sessionId/pay
+  const paymentMatch = pathname.match(
+    /^\/api\/me\/sessions\/([^/]+)\/[^/]+\/pay$/,
+  );
+
+  return paymentMatch ? decodeURIComponent(paymentMatch[1]) : null;
+}
+
+function isAggregatedReadPath(path) {
+  const pathname = String(path).split('?')[0].split('#')[0];
+
+  return [
+    '/api/me/reservations',
+    '/api/me/sessions',
+    '/api/sessions/search',
+  ].includes(pathname);
+}
+
 export const session = {
   get() { try { return JSON.parse(localStorage.getItem(KEY)); } catch { return null; } },
   set(v) { try { v ? localStorage.setItem(KEY, JSON.stringify(v)) : localStorage.removeItem(KEY); } catch { /* bỏ qua */ } },
 };
 
 // keepSession: lỗi 401 từ node (không phải Aggregator) không được làm đăng xuất người dùng.
-export async function api(path, { method = 'GET', body, headers = {}, keepSession = false } = {}) {
+export async function api(path, {
+  method = 'GET',
+  body,
+  headers = {},
+  keepSession = false,
+  parkingId: explicitParkingId,
+} = {}) {
   const s = session.get();
+  const parkingId = explicitParkingId ?? parkingIdFromPath(path);
+  const requestHeaders = { ...headers };
+
+  // Không ghi đè X-Min-LSN nếu caller đã truyền rõ ràng.
+  const hasMinLSN = Object.keys(requestHeaders)
+    .some((key) => key.toLowerCase() === 'x-min-lsn');
+
+  if (String(method).toUpperCase() === 'GET' && !hasMinLSN) {
+    const minLSNs = readMinLSNs();
+
+    if (parkingId && minLSNs[parkingId]) {
+      // API của một bãi: gửi LSN dạng PostgreSQL thông thường.
+      requestHeaders['x-min-lsn'] = minLSNs[parkingId];
+    } else if (
+      isAggregatedReadPath(path) &&
+      Object.keys(minLSNs).length > 0
+    ) {
+      // API tổng hợp: gửi map LSN riêng theo từng bãi.
+      requestHeaders['x-min-lsn'] = JSON.stringify(minLSNs);
+    }
+  }
+
   let r;
+
   try {
     r = await fetch(path, {
       method,
-      headers: { 'content-type': 'application/json', ...(s ? { authorization: `Bearer ${s.token}` } : {}), ...headers },
+      headers: {
+        'content-type': 'application/json',
+        ...(s ? { authorization: `Bearer ${s.token}` } : {}),
+        ...requestHeaders,
+      },
       body: body && JSON.stringify(body),
     });
   } catch {
     return { ok: false, status: 0, data: { error: 'NETWORK' } };
   }
+
+  // PD-15: chỉ cập nhật LSN khi request thành công và server có trả header.
+  if (r.ok && parkingId) {
+    const lsn = r.headers.get('x-lsn');
+
+    if (lsn) {
+      rememberMinLSN(parkingId, lsn);
+    }
+  }
+
   const data = await r.json().catch(() => ({}));
-  if (r.status === 401 && s && !keepSession) { session.set(null); location.reload(); }
+
+  if (r.status === 401 && s && !keepSession) {
+    session.set(null);
+    location.reload();
+  }
+
   return { ok: r.ok, status: r.status, data };
 }
 
@@ -43,7 +174,11 @@ export function knownNode(parkingId) {
 export async function nodeApi(parkingId, path, opts = {}) {
   const n = knownNode(parkingId);
   if (!n) return { ok: false, status: 0, data: { error: 'NETWORK' } };
-  return api(n.url + path, { ...opts, keepSession: true });
+  return api(n.url + path, {
+    ...opts,
+    parkingId,
+    keepSession: true,
+  });
 }
 // Aggregator không trả lời (sập / proxy báo lỗi) — khác với bãi trả lỗi nghiệp vụ.
 export const centralDown = (r) => r.status === 0 || r.status === 500 || r.status === 502 || r.status === 503 && !r.data?.parkingId;
