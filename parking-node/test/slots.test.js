@@ -218,7 +218,7 @@ test('TC17 vào bằng đặt chỗ rồi ra: đúng 1 phiên, lấy biển số
   assert.equal((await s.listSessions(pool, { plate: '30a r1' })).length, 1);
   assert.equal((await s.listSessions(pool, { userId: 'u1' })).length, 1);
   assert.equal((await s.listSessions(pool, { userId: 'u2' })).length, 0);
-  
+
   const sessions = await s.listSessions(pool, { userId: 'u1' });
   assert.equal(sessions.length, 1);
   assert.match(sessions[0].hlc, /^\d{13}-\d{4}$/);
