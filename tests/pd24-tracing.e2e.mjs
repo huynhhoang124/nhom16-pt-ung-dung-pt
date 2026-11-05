@@ -88,7 +88,8 @@ function eventsFollowOutbox(spans) {
   const producers = new Set(spans.filter((span) =>
     span.serviceName === 'parking-node' && span.operationName === 'outbox.publish').map((span) => span.spanID));
   const consumers = spans.filter((span) => span.serviceName === 'aggregator' && span.operationName === 'event.process');
-  return consumers.length > 0 && consumers.every((span) => span.references?.some((ref) =>
+  // Cùng trace có thể có sự kiện được đối soát lại, không qua outbox; chỉ cần có một chuỗi outbox -> event.
+  return consumers.some((span) => span.references?.some((ref) =>
     ref.refType === 'CHILD_OF' && ref.traceID === span.traceID && producers.has(ref.spanID)));
 }
 
