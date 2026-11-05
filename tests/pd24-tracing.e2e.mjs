@@ -162,6 +162,12 @@ try {
   }
   await createSlot('A', slotCode, internalKey);
 
+  // CI vừa dựng stack: chờ Aggregator thấy bãi A ONLINE, không thì đặt chỗ bị 503 PARKING_OFFLINE.
+  await until('parking A ONLINE', async () => {
+    const list = await request(`${base}/api/parkings`);
+    return list.status === 200 && list.body.some((node) => node.parkingId === 'A' && node.status === 'ONLINE');
+  });
+
   const booking = await request(`${base}/api/parkings/A/reservations`, {
     method: 'POST',
     token: user.body.token,
