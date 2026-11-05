@@ -1,7 +1,10 @@
+const hlc = require('./hlc');
 const { randomUUID } = require('node:crypto');
 const amqp = require('amqplib');
 const { makeConnector } = require('./amqp-connect');
 const { signature } = require('./command-signature');
+const { context, propagation, ROOT_CONTEXT, SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
+const commandTracer = trace.getTracer('aggregator/commands');
 
 const EXCHANGE = 'parking.commands';
 const ATTEMPT_HEADER = 'x-command-publish-id';
@@ -15,7 +18,7 @@ function routingKey(parkingId, type) {
   return `cmd.${parkingId}.${type}`;
 }
 
-function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey = process.env.INTERNAL_KEY } = {}) {
+function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey = process.env.INTERNAL_KEY, config } = {}) {
   const connectAny = makeConnector(url, connect);
   let current;
   let opening;
@@ -77,17 +80,66 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
   }
 
   async function send(parkingId, type, body, opts = {}) {
-    const key = routingKey(parkingId, type);
+    const traceparent = opts.traceparent ?? opts.headers?.traceparent;
+    const parent = traceparent ? propagation.extract(ROOT_CONTEXT, { traceparent }) : context.active();
+    return commandTracer.startActiveSpan('command.publish', {
+      kind: SpanKind.PRODUCER,
+      attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': EXCHANGE, 'parking.id': parkingId },
+    }, parent, async (span) => {
+      const carrier = {};
+      propagation.inject(context.active(), carrier);
+      try { return await sendConfirmed(parkingId, type, body, { ...opts, traceparent: carrier.traceparent ?? traceparent }); }
+      catch (error) { span.recordException(error); span.setStatus({ code: SpanStatusCode.ERROR, message: error.message }); throw error; }
+      finally { span.end(); }
+    });
+  }
+
+  async function sendConfirmed(parkingId, type, body, opts) {
+    const key = opts.admin ? `${routingKey(parkingId, type)}.admin` : routingKey(parkingId, type);
     const messageId = opts.messageId ?? randomUUID();
     const correlationId = opts.correlationId ?? messageId;
     if (![messageId, correlationId].every((s) => typeof s === 'string' && s.length > 0 && Buffer.byteLength(s) <= 255)) {
       throw failure('INVALID_COMMAND', 400);
     }
     const headers = { ...opts.headers };
-    const envelope = { type, parkingId, schemaVersion: opts.schemaVersion ?? headers.schemaVersion ?? 1, payload: body };
-    for (const field of ['causationId', 'fencingToken', 'hlc', 'traceparent', 'actor']) {
-      const value = opts[field] ?? headers[field];
-      if (value !== undefined) envelope[field] = headers[field] = value;
+
+    // Nếu có HLC cha, cập nhật đồng hồ local trước khi gửi lệnh tiếp theo.
+    const parentHlc = opts.hlc ?? headers.hlc;
+    if (parentHlc !== undefined) {
+      hlc.update(parentHlc);
+    }
+
+    // Mỗi lệnh do Aggregator phát ra phải có HLC riêng.
+    const outgoingHlc = hlc.now();
+
+    const envelope = {
+      type,
+      parkingId,
+      schemaVersion: opts.schemaVersion ?? headers.schemaVersion ?? 1,
+      payload: body,
+    };
+
+    // Giữ thời điểm phát hành và hạn xử lý của command từ dev.
+    for (const field of ['issuedAt', 'deadlineAt', 'targets']) {
+      if (opts[field] !== undefined) {
+        envelope[field] = opts[field];
+      }
+    }
+
+    for (const field of [
+      'causationId',
+      'fencingToken',
+      'hlc',
+      'traceparent',
+      'actor',
+    ]) {
+      const value = field === 'hlc'
+        ? outgoingHlc
+        : opts[field] ?? headers[field];
+
+      if (value !== undefined) {
+        envelope[field] = headers[field] = value;
+      }
     }
     headers.schemaVersion = envelope.schemaVersion;
     // Unique per attempt, even when concurrent retries share the same business messageId.
@@ -98,7 +150,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       mandatory: true, persistent: true, contentType: 'application/json',
       messageId, correlationId, type, headers,
       ...(opts.replyTo !== undefined && { replyTo: opts.replyTo }),
-      ...(opts.expiration !== undefined && { expiration: String(opts.expiration) }),
+      expiration: String(opts.expiration ?? config?.get('commandTtlMs', 10000) ?? 10000),
     };
     // Only trusted server code supplies signingKey/actor; HTTP never accepts a client actor.
     if (signingKey) properties.headers['x-command-signature'] = signature(signingKey, JSON.parse(content), properties);
@@ -120,6 +172,12 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
       const publishTimer = setTimeout(() => discard(state, new Error('Publisher confirm timeout')), timeoutMs);
       state.pending.set(attempt, { finish });
       if (state.dead) return finish(failure('BROKER_UNAVAILABLE', 503));
+      if (opts.deadlineAt !== undefined) {
+        const remaining=opts.deadlineAt-Date.now();
+        if (!Number.isSafeInteger(remaining)||remaining<=0) return finish(failure('COMMAND_DEADLINE_BEFORE_SEND',410));
+        properties.expiration=String(Math.min(Number(properties.expiration), remaining));
+      }
+      if (signingKey) headers['x-command-signature']=signature(signingKey,envelope,properties);
       try {
         // RabbitMQ sends basic.return BEFORE the confirm for an unroutable mandatory message.
         // Individual confirm callbacks avoid waitForConfirms() mixing concurrent sends.
@@ -127,7 +185,7 @@ function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 })
           if (e) {
             // amqplib uses this exact error for a broker basic.nack. Channel-close errors
             // do not establish whether the broker accepted the message.
-            finish(failure(e.message === 'message nacked' ? 'PUBLISH_NACKED' : 'PUBLISH_UNKNOWN_RESULT', e.message === 'message nacked' ? 503 : 504, e));
+            finish(failure(e.message === 'message nacked' ? 'QUEUE_FULL' : 'PUBLISH_UNKNOWN_RESULT', e.message === 'message nacked' ? 503 : 504, e));
           } else finish();
         });
       } catch (e) { discard(state, e); }

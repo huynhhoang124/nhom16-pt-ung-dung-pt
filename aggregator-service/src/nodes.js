@@ -7,7 +7,7 @@
 // Circuit breaker (PT-04): lỗi của request thật cũng cộng vào `fails`. Đủ ngưỡng thì "mở mạch" (OFFLINE) ngay,
 // request sau bị từ chối tức thì thay vì chờ timeout. Health check định kỳ là phép thử "nửa mở":
 // thành công thì "đóng mạch" (ONLINE) và đối soát.
-
+const hlc = require('./hlc');
 const dns = require('node:dns');
 const { requestId } = require('./log');
 
@@ -25,8 +25,11 @@ async function resolveUrl(url) {
   return u.href.replace(/\/$/, '');
 }
 
-function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config, leader }) {
+function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config, leader, zone = 'bac' }) {
   const nodes = new Map();
+  // PD-12: bãi cùng vùng với Aggregator đứng trước (gọi trước, không qua đường liên vùng), sau đó theo mã bãi.
+  const ordered = () => [...nodes.values()].sort((a, b) =>
+    ((a.zone ?? zone) !== zone) - ((b.zone ?? zone) !== zone) || a.id.localeCompare(b.id));
 
   const getTimeout = () => (config ? config.get('timeoutMs', timeoutMs) : (typeof timeoutMs === 'function' ? timeoutMs() : timeoutMs));
   const getThreshold = () => (config ? config.get('failThreshold', failThreshold) : (typeof failThreshold === 'function' ? failThreshold() : failThreshold));
@@ -86,14 +89,16 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   };
 
   // Timeout dùng AbortSignal.timeout: bộ đếm của runtime, không phụ thuộc giờ hệ thống bị chỉnh.
+  // job: chỉ việc của leader (đối soát, khôi phục saga) mới mang fencing token. Request của người dùng không gắn:
+  // gắn vào thì mọi lệnh ghi phải xếp hàng trên dòng `fencing` ở node và người dùng có thể nhận 409.
   // fencingToken: việc của leader (khôi phục saga) truyền token lúc lên leader, để vẫn gửi token đó sau khi mất quyền
   // và node từ chối khi đã thấy token mới hơn; không truyền thì lấy token hiện tại.
   const raw = (n, path, { method = 'GET', body, ms, job, fencingToken } = {}) => {
     const effectiveMs = ms ?? getTimeout();
-    const token = fencingToken ?? leader?.getToken?.();
+    const token = job ? (fencingToken ?? leader?.getToken?.()) : null;
     const fencingHeaders = token ? {
       'x-fencing-token': String(token),
-      'x-fencing-job': job || 'reconcile',
+      'x-fencing-job': job,
     } : {};
 
     return fetch((n.target ?? n.url) + path, {
@@ -104,6 +109,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
         'x-internal-key': internalKey,
         ...(requestId() && { 'x-request-id': requestId() }),
         ...fencingHeaders,
+        ...(method !== 'GET' && { 'x-hlc': hlc.now() }),
       },
       body: body && JSON.stringify(body),
       signal: AbortSignal.timeout(effectiveMs),
@@ -174,7 +180,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
   };
 
   // Scatter–gather: gọi song song, bãi lỗi/chậm thì bỏ qua và gắn nhãn, vẫn trả phần còn lại.
-  const gather = (fn) => Promise.all([...nodes.values()].map(async (n) => {
+  const gather = (fn) => Promise.all(ordered().map(async (n) => {
     if (n.status === 'OFFLINE') return { parkingId: n.id, status: 'OFFLINE' };
     try { return { parkingId: n.id, status: n.status, ...(await fn(n)) }; }
     catch { return { parkingId: n.id, status: 'OFFLINE' }; }
@@ -189,6 +195,7 @@ function makeRegistry({ internalKey, timeoutMs = 2000, failThreshold = 3, config
     sync,
     get: (id) => nodes.get(id),
     all: () => [...nodes.values()],
+    ordered,
     call,
     json,
     check,

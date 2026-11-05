@@ -24,7 +24,7 @@ async function until(fn, ms = 2000) {
 }
 
 test('signed envelope: property authority, identity, metadata and producer/consumer canonical contract', () => {
-  const m = message('signed', 'reserve', {}, { causationId: 'cause', traceparent: 'trace', hlc: '123.4', fencingToken: 42 });
+  const m = message('signed', 'reserve', {}, { causationId: 'cause', traceparent: 'trace', hlc: '1000000000000-0004', fencingToken: 42 });
   const e = decodeCommand(m, 'A', KEY);
   assert.equal(e.messageId, 'u42:signed'); assert.equal(e.correlationId, 'corr-signed'); assert.equal(e.fencingToken, 42);
   assert.equal(signature(KEY, JSON.parse(m.content), m.properties), m.properties.headers['x-command-signature']);
@@ -41,6 +41,14 @@ test('signed envelope: property authority, identity, metadata and producer/consu
   assert.throws(() => decodeCommand(message('x', 'reserve', {}, { schemaVersion: 2 }), 'A', KEY), InvalidCommand);
   assert.throws(() => decodeCommand(message('x', 'reserve', {}, { messageId: 'body-not-authoritative' }), 'A', KEY), InvalidCommand);
   assert.throws(() => decodeCommand(message('x'), 'B', KEY), InvalidCommand);
+  assert.throws(
+    () => decodeCommand(
+      message('bad-hlc', 'reserve', {}, { hlc: '123.4' }),
+      'A',
+      KEY,
+    ),
+    InvalidCommand,
+  );
 });
 
 test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, replies and retention', async (t) => {
@@ -48,8 +56,16 @@ test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, re
   const processCommand = makeCommandProcessor({ pool, parkingId: 'A', internalKey: KEY });
   let original;
   await t.test('same command returns exact saved status/body and creates a reply for each delivery', async () => {
-    const metadata = { causationId: 'saga:1', traceparent: 'trace', hlc: '123.1', fencingToken: 42 };
+    const metadata = { causationId: 'saga:1', traceparent: 'trace', hlc: '1000000000000-0001', fencingToken: 42 };
     original = await processCommand(message('one', 'reserve', undefined, metadata));
+    const event = await one(
+      pool,
+      'SELECT hlc, payload FROM parking_events ORDER BY id DESC LIMIT 1',
+    );
+
+    assert.match(event.hlc, /^\d{13}-\d{4}$/);
+    assert.equal(event.payload.hlc, event.hlc);
+    assert.ok(event.hlc > metadata.hlc);
     const second = await processCommand(message('one', 'reserve', undefined, metadata));
     assert.equal(original.code, 201); assert.equal(second.code, 201); assert.equal(second.duplicate, true);
     assert.deepEqual(second.body, original.body);
@@ -57,7 +73,12 @@ test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, re
     assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM parking_events')).n, 1);
     const replies = (await pool.query('SELECT payload, properties FROM command_reply_outbox ORDER BY id')).rows;
     assert.equal(replies.length, 2); assert.deepEqual(replies[0].payload.result, replies[1].payload.result);
-    for (const r of replies) { assert.equal(r.properties.correlationId, 'corr-one'); assert.equal(r.properties.headers.hlc, '123.1'); assert.equal(r.payload.fencingToken, 42); }
+    for (const r of replies) {
+      assert.equal(r.properties.correlationId, 'corr-one');
+      assert.match(r.properties.headers.hlc, /^\d{13}-\d{4}$/);
+      assert.ok(r.properties.headers.hlc > metadata.hlc);
+      assert.equal(r.payload.hlc, r.properties.headers.hlc);
+      assert.equal(r.payload.fencingToken, 42); }
   });
   await t.test('same key with changed payload/type is rejected without changing the original inbox', async () => {
     const changed = await processCommand(message('one', 'reserve', { slotCode: 'A02', licensePlate: '30A-123.45' }));
@@ -121,6 +142,7 @@ test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, re
     const relay = makeReplyRelay(pool, async () => false);
     assert.equal(await relay(), 0);
     assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, before);
+    await pool.query('UPDATE command_reply_outbox SET next_attempt_at=now() WHERE published_at IS NULL');
     const sent = [];
     assert.equal(await makeReplyRelay(pool, async (...args) => { sent.push(args); return true; })(), before);
     assert.equal(sent[0][0], 'test.replies');
@@ -142,7 +164,8 @@ function fakeBroker() {
     conn.closed = false;
     conn.close = async () => { if (!conn.closed) { conn.closed = true; conn.emit('close'); ch.emit('close'); } };
     conn.createChannel = conn.createConfirmChannel = async () => ch;
-    ch.checkQueue = async (q) => { ch.queue = q; };
+    // Mặc định chưa có hàng đợi admin (như bãi D–F): consumer phải bỏ qua, vẫn chạy hàng thường
+    ch.checkQueue = async (q) => { if (q.endsWith('.admin')) throw new Error('NOT_FOUND'); ch.queue = q; };
     ch.assertExchange = async () => {};
     ch.prefetch = async (n) => { ch.prefetchValue = n; };
     ch.consume = async (_q, cb, opts) => { ch.deliver = cb; ch.opts = opts; return { consumerTag: 'one' }; };
@@ -166,7 +189,7 @@ test('consumer serializes handlers despite prefetch 20, ack follows commit hook,
   });
   await until(() => b.connections[0]?.ch.deliver);
   const ch = b.connections[0].ch;
-  assert.equal(ch.prefetchValue, 20); assert.equal(ch.opts.noAck, false); assert.equal(ch.queue, 'cmd.A');
+  assert.equal(ch.prefetchValue, 16); assert.equal(ch.opts.noAck, false); assert.equal(ch.queue, 'cmd.A');
   ch.deliver({ id: 1 }); ch.deliver({ id: 2 }); await tick();
   assert.deepEqual(order, ['begin1']); assert.equal(ch.acks.length, 0);
   const stopped = consumer.stop(); await tick(); assert.equal(ch.cancelled, true);
@@ -200,4 +223,37 @@ test('reply publisher: mandatory return/nack/disconnect keep outbox pending; con
   const lost = p.publish('agg.1', {}, { headers: {} }); await tick(); await b.connections[0].close(); assert.equal(await lost, false);
   const retry = p.publish('agg.1', {}, { headers: {} }); await tick(); b.connections[1].ch.sent[0][4](null); assert.equal(await retry, true);
   assert.equal(b.connections.length, 2); await p.close();
+});
+
+test('PD-06 thiếu hàng đợi admin: ghi log một lần, consumer hàng thường vẫn nhận lệnh', async () => {
+  const b = fakeBroker(); const infos = [];
+  const consumer = startCommandConsumer({ url: 'amqp://test', parkingId: 'D', connect: b.connect,
+    log: { error() {}, info: (msg) => infos.push(msg) }, processCommand: async (m) => m, afterCommit() {} });
+  await until(() => b.connections[0]?.ch.deliver);
+  const ch = b.connections[0].ch;
+  assert.equal(ch.queue, 'cmd.D');
+  ch.deliver({ id: 1 }); await tick();
+  assert.equal(ch.acks.length, 1);
+  assert.equal(b.connections[0].closed, false);
+  assert.equal(infos.filter((m) => m.includes('quản trị')).length, 1);
+  await consumer.stop();
+});
+
+test('PD-06 lệnh đã prefetch nhưng quá deadlineAt: không áp dụng, trả 410 và lưu vào inbox', async (t) => {
+  const pool = await makePool('A', 5); t.after(() => pool.db.close());
+  let clock = Date.now();
+  const run = makeCommandProcessor({ pool, parkingId: 'A', internalKey: KEY, now: () => clock });
+  const fresh = await run(message('fresh', 'reserve', undefined, { deadlineAt: clock + 10_000 }));
+  assert.equal(fresh.code, 201);
+  // tin thứ hai đã được giao (prefetch) nhưng chờ tin trước xử lý xong mới tới lượt, lúc đó đã quá hạn
+  const late = message('late', 'reserve', { slotCode: 'A02', licensePlate: '30A-123.45' }, { deadlineAt: clock + 1000 });
+  clock += 5000;
+  const out = await run(late);
+  assert.equal(out.code, 410);
+  assert.deepEqual(out.body, { error: 'COMMAND_EXPIRED' });
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM reservations')).n, 1);
+  assert.equal((await run(late)).code, 410);   // gửi lại cùng messageId: trả lại kết quả đã lưu
+  const replies = (await pool.query("SELECT payload FROM command_reply_outbox WHERE command_id LIKE '%:late'")).rows;
+  assert.equal(replies.length, 2);
+  assert.equal(replies[0].payload.statusCode, 410);
 });

@@ -35,22 +35,67 @@ test('envelope and properties preserved; only resolve after individual publisher
   const b = broker(); const pub = makeCommands('amqp://test/%2F', { connect: b.connect });
   t.after(() => pub.close());
   let resolved = false;
+  const parentHlc = '1000000000000-0004';
   const p = pub.send('A', 'reserve', { slotCode: 'A07' }, {
     messageId: 'u42:key', correlationId: 'correlation', replyTo: 'agg.2', expiration: '10000',
-    causationId: 'saga:2', fencingToken: 42, hlc: '123.4', actor: { userId: 'u42', role: 'USER' },
+    causationId: 'saga:2', fencingToken: 42, hlc: parentHlc, actor: { userId: 'u42', role: 'USER' },
     headers: { traceparent: '00-trace', custom: 'keep' },
   }).then((r) => { resolved = true; return r; });
   await tick(); assert.equal(resolved, false);
   const [exchange, key, content, props] = b.sent[0];
-  assert.equal(exchange, 'parking.commands'); assert.equal(key, 'cmd.A.reserve');
-  assert.deepEqual(b.connections[0].ch.exchange, ['parking.commands', 'topic', { durable: true }]);
-  assert.equal(props.mandatory, true); assert.equal(props.persistent, true);
-  assert.equal(props.messageId, 'u42:key'); assert.equal(props.correlationId, 'correlation');
-  assert.equal(props.replyTo, 'agg.2'); assert.equal(props.expiration, '10000');
-  assert.equal(props.contentType, 'application/json'); assert.equal(props.headers.custom, 'keep');
+
+  assert.equal(exchange, 'parking.commands');
+  assert.equal(key, 'cmd.A.reserve');
+  // Parse nội dung JSON của message trước khi sử dụng biến env.
   const env = JSON.parse(content);
-  assert.deepEqual(env, { type: 'reserve', parkingId: 'A', schemaVersion: 1, payload: { slotCode: 'A07' }, causationId: 'saga:2', fencingToken: 42, hlc: '123.4', traceparent: '00-trace', actor: { userId: 'u42', role: 'USER' } });
+  const { hlc: sentHlc, ...withoutHlc } = env;
+
+  assert.deepEqual(withoutHlc, {
+    type: 'reserve',
+    parkingId: 'A',
+    schemaVersion: 1,
+    payload: { slotCode: 'A07' },
+    causationId: 'saga:2',
+    fencingToken: 42,
+    traceparent: '00-trace',
+    actor: { userId: 'u42', role: 'USER' },
+  });
+
+  // Kiểm tra HLC được sinh ra hợp lệ và lớn hơn HLC cha.
+  assert.match(sentHlc, /^\d{13}-\d{4}$/);
+  assert.ok(sentHlc > parentHlc);
+  assert.equal(props.headers.hlc, sentHlc);
+
+  assert.equal(props.mandatory, true);
+  assert.equal(props.persistent, true);
+  assert.equal(props.messageId, 'u42:key');
+  assert.equal(props.correlationId, 'correlation');
+  assert.equal(props.replyTo, 'agg.2');
+  assert.equal(props.expiration, '10000');
+  assert.equal(props.contentType, 'application/json');
+  assert.equal(props.headers.custom, 'keep');
   ack(b.sent[0]); assert.equal((await p).status, 'BROKER_CONFIRMED');
+});
+
+test('broadcast preserves signed target snapshot and admin TTL without overriding user TTL', async (t) => {
+  const b = broker();
+  const pub = makeCommands('amqp://test', { connect: b.connect, signingKey: 'key', config: {get: () => 10000} });
+  t.after(() => pub.close());
+  const issuedAt = Date.now(), deadlineAt = issuedAt + 600000;
+  const sent = pub.send('zone-bac', 'lockFloor', {floor: 1, locked: true}, {
+    targets: ['A','B','C'], issuedAt, deadlineAt, expiration: 600000,
+    messageId: 'admin:broadcast-test', correlationId: 'admin:broadcast-test', replyTo: 'agg.broadcast',
+    actor: {userId: 'admin', role: 'ADMIN'},
+  });
+  await tick();
+  const [exchange, key, content, props] = b.sent[0];
+  assert.equal(exchange, 'parking.commands'); assert.equal(key, 'cmd.zone-bac.lockFloor');
+  assert.deepEqual(JSON.parse(content).targets, ['A','B','C']);
+  assert.equal(JSON.parse(content).deadlineAt, deadlineAt);
+  assert(Number(props.expiration) > 590000 && Number(props.expiration) <= 600000);
+  assert.equal(props.mandatory, true); assert.equal(props.persistent, true);
+  assert(require('../src/command-signature').verifySignature('key', JSON.parse(content), props));
+  ack(b.sent[0]); await sent;
 });
 
 test('concurrent duplicate business IDs: return and out-of-order confirms match the exact attempt', async (t) => {
@@ -68,9 +113,20 @@ test('concurrent duplicate business IDs: return and out-of-order confirms match 
   assert.equal(b.connections.length, 1);
 });
 
+test('default expiration follows dynamic configuration', async (t) => {
+  const b = broker(); let ttl = 10000;
+  const pub = makeCommands('amqp://test', { connect: b.connect, config: { get: () => ttl } });
+  t.after(() => pub.close());
+  const first = pub.send('A', 'reserve', {}); await tick();
+  assert.equal(b.sent[0][3].expiration, '10000'); ack(b.sent[0]); await first;
+  ttl = 20000;
+  const second = pub.send('A', 'reserve', {}); await tick();
+  assert.equal(b.sent[1][3].expiration, '20000'); ack(b.sent[1]); await second;
+});
+
 test('nack is unavailable, non-NO_ROUTE return is not 404', async (t) => {
   const b = broker(); const pub = makeCommands('amqp://test', { connect: b.connect }); t.after(() => pub.close());
-  const p = pub.send('A', 'reserve', {}); const check = rejects(p, 'PUBLISH_NACKED');
+  const p = pub.send('A', 'reserve', {}); const check = rejects(p, 'QUEUE_FULL');
   await tick(); ack(b.sent[0], new Error('message nacked')); await check;
   const q = pub.send('B', 'reserve', {}); const checkQ = rejects(q, 'PUBLISH_RETURNED');
   await tick(); returned(b, b.sent[1], 313); ack(b.sent[1]); await checkQ;

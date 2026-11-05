@@ -1,5 +1,8 @@
 // Nhận sự kiện slot từ RabbitMQ và giữ cache trạng thái slot trong RAM (chỉ-đọc, nguồn gốc ở DB bãi).
+const hlc = require('./hlc');
+const { observeHlc } = require('./metrics');
 const { makeConnector } = require('./amqp-connect');
+const { context, propagation, ROOT_CONTEXT } = require('@opentelemetry/api');
 
 const EXCHANGE = 'parking.events';
 const QUEUE = 'aggregator.slot-updates';
@@ -7,10 +10,23 @@ const QUEUE = 'aggregator.slot-updates';
 // Mỗi slot chỉ có MỘT người ghi (node của bãi đó) nên version tăng một chiều:
 // tin có version <= bản đang giữ là tin trùng (relay gửi lại) hoặc tin cũ (đến sai thứ tự) -> bỏ.
 function applyEvent(cache, e) {
+  // Gộp đồng hồ ngay khi nhận sự kiện, kể cả khi version cũ bị bỏ qua.
+  const validHlc = observeHlc(e.hlc, e.parkingId);
+  if (validHlc) hlc.update(e.hlc);
+
   const k = `${e.parkingId}:${e.slot}`;
   const cur = cache.get(k);
+
   if (cur && e.version <= cur.version) return false;
-  cache.set(k, { status: e.status, version: e.version });
+
+  const next = {
+    status: e.status,
+    version: e.version,
+  };
+
+  if (validHlc) next.hlc = e.hlc;
+
+  cache.set(k, next);
   return true;
 }
 
@@ -18,7 +34,7 @@ function applyEvent(cache, e) {
 // Phép gộp này giao hoán, kết hợp, idempotent => chạy bao nhiêu lần, theo thứ tự nào cũng ra cùng kết quả.
 async function reconcile(reg, cache, n, onApplied) {
   let applied = 0;
-  for (const s of await reg.json(n, '/api/slots')) {
+  for (const s of await reg.json(n, '/api/slots', { job: 'reconcile' })) {   // PD-10: việc của leader, mang fencing token
     const e = { event: 'SLOT_UPDATED', type: 'RECONCILE', parkingId: n.id, slot: s.slotCode, status: s.status, version: s.version };
     if (applyEvent(cache, e)) { applied++; onApplied?.(e); }
   }
@@ -48,7 +64,10 @@ function startConsumer(url, onEvent, log = console, { exchange = EXCHANGE, queue
       await ch.prefetch(50);
       await ch.consume(queue, (m) => {
         if (!m) return;
-        try { onEvent(JSON.parse(m.content.toString())); }
+        try {
+          const parent = propagation.extract(ROOT_CONTEXT, m.properties?.headers ?? {});
+          context.with(parent, () => onEvent(JSON.parse(m.content.toString()), parent));
+        }
         catch (e) { log.error('Bỏ tin lỗi', { error: e.message }); }
         ch.ack(m);
       });

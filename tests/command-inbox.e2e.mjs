@@ -10,10 +10,12 @@ const { makeCommands } = require('../aggregator-service/src/commands');
 
 // No full HTTP request/reply assertions until PD-03 implements that contract.
 export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot }) {
-  const options = { timeout: 120000 };
+  const options = { timeout: 540000 }; // 180 s chờ RabbitMQ + 90 s chờ consumer, còn lại cho thân test
   const url = process.env.PD02_AMQP_URL ?? 'amqp://parking:parking@localhost/%2F';
   async function setup(t) {
-    const conn = await amqp.connect(url);
+    // TC49 vừa khởi động lại rabbitmq: chờ cổng mở lại thay vì lỗi ECONNREFUSED ngay.
+    let conn;
+    await until('RabbitMQ nhận kết nối', async () => { conn = await amqp.connect(url).catch(() => null); return conn; }, 180000);
     const ch = await conn.createChannel();
     await ch.assertExchange('parking.replies', 'direct', { durable: true });
     const { queue } = await ch.assertQueue('', { exclusive: true });
@@ -23,6 +25,10 @@ export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, 
     await ch.consume(queue, (m) => { if (m) { responses.push({ ...JSON.parse(m.content), properties: m.properties }); ch.ack(m); } });
     const commands = makeCommands(url, { signingKey: KEY });
     t.after(async () => { await commands.close(); await conn.close(); });
+    // Earlier chaos tests restart RabbitMQ. HTTP readiness does not imply that the
+    // command consumer has finished its capped reconnect backoff; user TTL is 10s.
+    await until('parking A command consumer ready before dedup/crash test', async () =>
+      (await ch.checkQueue('cmd.A')).consumerCount > 0, 90000);
     const token = await login('user1');
     const actor = { userId: JSON.parse(Buffer.from(token.split('.')[1], 'base64url')).sub, role: 'USER' };
     return { commands, replyTo, responses, actor };
@@ -33,8 +39,9 @@ export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, 
 
   test('PD-02 PostgreSQL: 10 concurrent DB clients deduplicate and preserve transaction invariants', options, () => {
     const container = compose('ps -q parking-a');
-    execFileSync('docker', ['cp', path.join(ROOT, 'parking-node/test/commands-pg.test.js'), `${container}:/app/commands-pg.test.js`]);
-    const output = compose('exec -T -e PD02_SOURCE_ROOT=/app/src -e PD02_REAL_DATABASE_URL=postgres://postgres:dev@db-a/parking parking-a node --test /app/commands-pg.test.js');
+    compose('exec -T parking-a mkdir -p /app/test');
+    execFileSync('docker', ['cp', path.join(ROOT, 'parking-node/test/commands-pg.test.js'), `${container}:/app/test/commands-pg.test.js`]);
+    const output = compose('exec -T -e PD02_REAL_DATABASE_URL=postgres://postgres:dev@db-a/parking parking-a node --test /app/test/commands-pg.test.js');
     assert.match(output, /pass 1/);
   });
 
@@ -85,7 +92,8 @@ export function registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, 
     assert.equal(sh(`docker inspect -f "{{.State.ExitCode}}" ${originalContainer}`), '0', 'normal shutdown must close consumer/jobs cleanly');
     compose(`run -d --no-deps --name ${container} -e NODE_ENV=test -e COMMAND_TEST_CRASH_MESSAGE_ID=${messageId} parking-a`);
     launched = true;
-    await commands.send('A', 'reserve', { slotCode, licensePlate: '30A-665.53' }, { messageId, replyTo, actor });
+    // TTL dài: bị dồn tải, node khởi động lại quá 10 s thì tin hết hạn sang cmd.expired, không được giao lại.
+    await commands.send('A', 'reserve', { slotCode, licensePlate: '30A-665.53' }, { messageId, replyTo, actor, expiration: 120000 });
     await until('exit 86 after committed command', () => sh(`docker inspect -f "{{.State.Status}}:{{.State.ExitCode}}" ${container}`) === 'exited:86');
     assert.equal(sql('db-a', `SELECT count(*) FROM reservations WHERE request_id='${messageId}'`), '1');
     assert.equal(sql('db-a', `SELECT status_code FROM inbox_messages WHERE message_id='${messageId}'`), '201');

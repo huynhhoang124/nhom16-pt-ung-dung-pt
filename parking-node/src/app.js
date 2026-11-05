@@ -1,3 +1,4 @@
+const hlc = require('./hlc');
 const express = require('express');
 const s = require('./slots');
 const { checkFencing, withFencing, parseToken } = require('./fencing');
@@ -8,6 +9,7 @@ const { mountGate, tokenFor } = require('./gate');
 const { log, withRequestId } = require('./log');
 const { verifyRS256 } = require('./jwt');
 const { mountMetrics } = require('./metrics');
+const { mountReplayClaim } = require('./replay-claim');
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -24,6 +26,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
   app.use(withRequestId);
   mountMetrics(app, { pool, parkingId, extra: metricsExtra });   // GET /metrics (không cần khoá, chỉ số đo)
   app.use(express.json({ limit: '10kb' }));
+  mountReplayClaim(app, { pool, internalKey });
 
   // /health không cần khoá: Aggregator dùng làm failure detector. Kiểm tra cả DB.
   app.get('/health', async (_req, res) => {
@@ -53,7 +56,24 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     if (!ownStaff || !allowed) return res.status(403).json({ error: 'FORBIDDEN' });
     next();
   });
+  // PD-17: chỉ nhận HLC từ request nội bộ đã xác thực.
+  app.use('/api', (req, res, next) => {
+    if (!internalKey || req.get('x-internal-key') !== internalKey) {
+      return next();
+    }
 
+    const incomingHlc = req.get('x-hlc');
+    if (incomingHlc === undefined) {
+      return next();
+    }
+
+    try {
+      hlc.update(incomingHlc);
+      return next();
+    } catch {
+      return res.status(400).json({ error: 'INVALID_HLC' });
+    }
+  });
   // PD-10: fencing token chống leader cũ (split-brain). Chỉ tin header khi có khoá nội bộ (Aggregator gửi):
   // nhân viên có JWT không được tự đặt token, nếu không gửi token rất lớn là chặn được leader thật.
   // Lệnh ghi: token được kiểm trong CÙNG giao dịch với lệnh ghi (tx ở slots.js gọi fenceIn).
@@ -205,7 +225,8 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
 
   app.use((err, _req, res, _next) => {
     log.error('lỗi xử lý request', { error: err.message, stack: err.stack });
-    res.status(500).json({ error: 'INTERNAL_ERROR' });
+    const status = (typeof err.status === 'number' && err.status >= 400 && err.status < 600) ? err.status : 500;
+    res.status(status).json({ error: err.code || 'INTERNAL_ERROR', message: err.message });
   });
   return app;
 }

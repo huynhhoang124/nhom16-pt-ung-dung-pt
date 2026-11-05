@@ -1,5 +1,9 @@
 # PD-02 – Inbox xử lý lệnh tại parking node
 
+Cập nhật sửa lỗi ngày 03/11/2026: [relay phản hồi và reconnect backoff](pd-02-fix-replies-reconnect.md).
+Các ghi chú bên dưới về PD-03 chưa có là phạm vi lịch sử của PR inbox ban đầu;
+bản sửa này dùng dev đã có PD-03, không thay phần PD-03 của Huynh.
+
 Theo Issue #19, kế hoạch giai đoạn 2 bản 1.4 mục 5.2/5.4/5.5 và tài liệu phân công của Vũ Văn Hùng. PD-01 đã merge vào dev tại `0f8eae8356192543eb42323786c522ef33fc7ec9`. Issue #19 chưa có bình luận duyệt thiết kế; người dùng đã xác nhận trong chat: **“Không cần chờ Huynh duyệt thiết kế nữa hãy làm tiếp nvu này”**. Đây là miễn điều kiện duyệt từ người dùng, không phải bằng chứng Huynh đã duyệt. Không đăng bình luận Issue thay người dùng.
 
 Nhánh `hung-pd-02-command-inbox` từ origin/dev trong worktree riêng. Ref `hung` có sẵn cả local/origin nên Git không cho tạo `hung/pd-02-command-inbox`; dùng cách đặt tên có dấu gạch ngang như PD-01. Không lấy thay đổi chưa commit từ checkout khác.
@@ -44,13 +48,13 @@ Các HTTP wrapper `reserve/endReservation/pay` vẫn mở transaction riêng khi
 
 Consumer manual ack, prefetch **20**, nhưng dùng một chuỗi promise tuần tự trong mỗi connection. SAC chỉ chọn consumer, không được coi là bảo đảm callback async hoàn tất tuần tự. Unique key Postgres vẫn là cơ chế chống duplicate giữa nhiều client/tiến trình: INSERT thua chờ transaction thắng, rồi SELECT đọc kết quả ở isolation READ COMMITTED mặc định. CAS/version, row lock và ràng buộc EXCLUDE/UNIQUE cũ vẫn giữ cho HTTP, timer nền và các lệnh tranh cùng slot.
 
-Reconnect chỉ có một loop, đợi handler của connection cũ kết thúc trước khi tạo consumer mới. Tin đã prefetch nhưng chưa chạy được giữ unacked để broker giao lại. Lỗi tạm đóng connection rồi backoff 5 giây; không nack requeue liên tục. Hook `retryOrDead` cho PD-08 chỉ cho ack nguồn khi hook trả true sau chuyển tiếp được xác nhận. Khi chưa có PD-08, tin sai envelope/chữ ký được reject không requeue, đi vào DLX bền vững `cmd.expired` theo policy PD-01. Tin lỗi tạm giao lại quá delivery-limit cũng có thể vào đây; chưa có xử lý/phân loại EXPIRED/dead trong PR này.
+Reconnect chỉ có một loop, đợi handler của connection cũ kết thúc trước khi tạo consumer mới. Tin đã prefetch nhưng chưa chạy được giữ unacked để broker giao lại. Lỗi tạm đóng connection rồi backoff 5–10–20–40–60 giây, tối đa 60 giây; reset khi queue/channel/consumer khởi tạo xong. Shutdown hủy timer và không nối lại. Không nack requeue liên tục. Hook `retryOrDead` cho PD-08 chỉ cho ack nguồn khi hook trả true sau chuyển tiếp được xác nhận. Khi chưa có PD-08, tin sai envelope/chữ ký được reject không requeue, đi vào DLX bền vững `cmd.expired` theo policy PD-01. Tin lỗi tạm giao lại quá delivery-limit cũng có thể vào đây; chưa có xử lý/phân loại EXPIRED/dead trong PR này.
 
 ## Outbox phản hồi và vòng đời
 
 Không ép phản hồi vào parking_events vì bảng đó yêu cầu slot_code. Relay riêng gửi `command_reply_outbox` qua exchange direct durable `parking.replies`, routing key=replyTo. Body gồm commandId, commandType, parkingId, actor, statusCode, result và metadata; properties gồm messageId phản hồi riêng, correlationId gốc và header causation/trace/HLC/fencing.
 
-Publish mandatory/persistent và confirm từng tin, dùng chung connection/channel. Return/nack/disconnect/timeout giữ `published_at` NULL; chỉ cập nhật sau confirm và không có return. Relay chạy mỗi 500 ms, không chạy chồng trong một tiến trình; có thể phát lại phản hồi nếu chết sau confirm trước cập nhật DB. PD-03 cần ghép/loại trùng phản hồi theo commandId/correlationId; đây không phải exactly-once delivery. Khi replyTo chưa có đích nhận, row vẫn nằm trong outbox; relay giữ thứ tự và dừng ở row chưa gửi được, nên cần tạo đúng reply binding trước khi sử dụng broker cho nghiệp vụ.
+Publish mandatory/persistent và confirm từng tin, dùng chung connection/channel. Return/nack/disconnect/timeout giữ `published_at` NULL; chỉ cập nhật sau confirm và không có return. Relay chạy mỗi 500 ms, không chạy chồng trong một tiến trình; có thể phát lại phản hồi nếu chết sau confirm trước cập nhật DB. PD-03 cần ghép/loại trùng phản hồi theo commandId/correlationId; đây không phải exactly-once delivery. Khi replyTo chưa có đích nhận, row giữ trong outbox với attempts/last_error/last_attempt_at/next_attempt_at, thử lại sau 30 giây và tiếp tục row sau. Nack, disconnect, timeout hoặc DB lỗi dừng lượt hiện tại; không ghi nhận gửi thành công. Chi tiết truy vết và xử lý lại trong runbook sửa lỗi.
 
 `parking.replies` chỉ được runtime khai báo; chưa tạo queue phản hồi Aggregator, bảng commands, HTTP wait/poll hoặc Socket.IO kết quả của PD-03. Queue phản hồi trong test là exclusive, tự dọn khi đóng connection. Relay sự kiện cũ được giữ; chỉ bổ sung close cho lifecycle, không làm batching/SKIP LOCKED của PD-18.
 
@@ -82,7 +86,7 @@ Build parking-a một lần để dùng chung image cho A/B/C, tránh ba target 
 
 TC52 broker dùng 10 publish đồng thời cùng messageId, kiểm một reservation/inbox/event và 10 phản hồi giống nhau. Test PostgreSQL riêng chạy 10 transaction client thật để không chỉ dựa vào consumer tuần tự; có thêm race khác ID cùng slot, lỗi SQL/savepoint và rollback outbox. TC53 dừng parking-a, chạy worker container tạm dùng cùng DB và hook một lần, chờ exit 86, restart **cùng container**, kiểm giao lại tạo phản hồi mới nhưng không thêm reservation/event. Finally dọn container test, khôi phục parking-a, cancel đặt chỗ thử và dọn đúng inbox/outbox test; không xóa volume.
 
-Test `commands-pg.test.js` bỏ qua trong unit thông thường; e2e copy test vào container và chạy với PD02_REAL_DATABASE_URL, PD02_SOURCE_ROOT để dùng PostgreSQL thật. Chỉ chạy trên stack test cô lập. CI e2e được bổ sung npm ci ở aggregator-service vì harness broker dùng publisher/amqplib của service đó.
+Test `commands-pg.test.js` bỏ qua trong unit thông thường; e2e copy test vào /app/test trong container và chạy với PD02_REAL_DATABASE_URL để dùng PostgreSQL thật; test import trực tiếp ../src trong cùng image. Chỉ chạy trên stack test cô lập. CI e2e được bổ sung npm ci ở aggregator-service vì harness broker dùng publisher/amqplib của service đó.
 
 **TC52 cấp HTTP qua broker chưa kiểm chứng**: PD-03 chưa triển khai request–reply/Idempotency-Key cho đường đó. Scaffold `tests/command-inbox-http.test.mjs` được import vào e2e nhưng skip rõ lý do; chỉ bật `PD03_HTTP_COMMANDS=1` khi PD-03 có mặt và đối chiếu lại hợp đồng `GET /api/commands/:id`/result. Scaffold kiểm cả command lookup nên không thể lấy idempotency HTTP cũ làm bằng chứng broker. Các test idempotency HTTP hiện có tiếp tục kiểm đường HTTP cũ. Không làm PD-08/10/17/18 hoặc TTL/back-pressure/tracing.
 

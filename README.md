@@ -1,5 +1,9 @@
 # Nhóm 16 – Bãi đỗ xe thông minh liên kết nhiều bãi
 
+PD-03: [API request–reply, cấu hình và runbook](tai-lieu/pd-03-request-reply.md).
+
+PD-08: [retry 2s/10s, DLQ, trang đẩy lại và kiểm thử trực tiếp trên dev](tai-lieu/pd-08-retry-dlq.md).
+
 **Môn:** Hệ thống / Ứng dụng phân tán – PTIT
 
 **Thành viên:** Vũ Văn Hùng, Hoàng Văn Huynh, Nguyễn Văn Luân, Trịnh Kim Loan, Đỗ Huyền Trang, Phạm Sỹ Hiệp
@@ -15,8 +19,9 @@ docker compose up -d --build
 - Web: http://localhost:3000. Tự đăng ký tài khoản người dùng, hoặc dùng tài khoản demo (mật khẩu `123456`): `user1`, `user2`, `staff-a`/`staff-b`/`staff-c` (nhân viên từng bãi), `admin`.
 - RabbitMQ: http://localhost:15672 (parking / parking) · Aggregator: :8000 · Parking A/B/C: :8001/:8002/:8003
 - Thêm bãi D để demo mở rộng: `docker compose --profile extra up -d`, rồi đăng ký trên trang Quản trị với `http://parking-d:8004`.
+- Mở rộng PD-12 thành 6 bãi ở 2 vùng: `node scripts/gen-lots.mjs`, rồi `docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord up -d --build`. A–C thuộc vùng Bắc; D–F thuộc vùng Nam, đăng ký lease qua cụm etcd và đi qua Toxiproxy với độ trễ 40 ± 10 ms. Kiểm tra: `$env:SCALE='1'; $env:COORD='1'; node --test tests/e2e.test.mjs` (PowerShell). Không dùng `--wait`: service `region-latency` chạy xong thì thoát nên `--wait` báo lỗi. Aggregator đặt `ZONE` thì gọi bãi cùng vùng trước.
 - Giả lập barrier gọi thẳng bãi: `node scripts/barrier.mjs A A05 enter 30A-123.45` (đọc khoá từ `.env`)
-- Sinh dữ liệu mẫu trang Thống kê: `node scripts/du-lieu-mau.mjs [số_lượt]` (mặc định 150 lượt xe vào/ra ngẫu nhiên trên cả 3 bãi)
+- Sinh dữ liệu mẫu trang Thống kê: `node scripts/du-lieu-mau.mjs [số_lượt]` (mặc định 150 lượt xe vào/ra ngẫu nhiên trên 3 bãi; đặt `SCALE=1` để chạy trên cả 6)
 - Chịu lỗi nâng cao: bỏ dấu `#` ở 2 dòng `A_READ_DATABASE_URL` và `RABBITMQ_URL` trong `.env` (xem `.env.example`), rồi `docker compose --profile ha up -d` thêm bản sao DB bãi A, aggregator-2 và 2 nút RabbitMQ (cụm 3 nút, quorum queue). Thử `docker compose stop aggregator` hoặc `docker compose stop rabbitmq`: hệ thống vẫn chạy
 - Nâng cấp RabbitMQ: giữ volume, đối chiếu tham số queue trước khi nạp definitions; xem [PD-01: topology, kiểm thử và chuyển đổi bảo toàn dữ liệu](tai-lieu/pd-01-command-topology.md).
 - Mạng xấu: `docker compose -f docker-compose.yml -f docker-compose.chaos.yml --profile chaos up -d`, rồi `node scripts/net.mjs B latency 3500` / `down` / `loss 30` / `reset`
@@ -94,3 +99,7 @@ Endpoint bổ sung `POST /api/admin/parkings/:id/commands` (ADMIN) dùng broker 
 Node nhận lệnh đã được server ký từ `cmd.<PARKING_ID>`, ghi inbox + nghiệp vụ + outbox phản hồi trong cùng transaction rồi mới ack. Tin giao lại dùng kết quả cũ; key dùng cho nội dung khác trả 422. `INTERNAL_KEY` phải nhất quán giữa Aggregator và node. Dọn inbox quá 7 ngày mỗi 30 giây; không bảo đảm dedup vô hạn.
 
 API nghiệp vụ cũ tiếp tục dùng HTTP. PD-02 chưa có HTTP request–reply/tra cứu kết quả của PD-03. Xem [thiết kế, schema, nâng cấp bảo toàn dữ liệu và TC52/TC53 broker](tai-lieu/pd-02-command-inbox.md). Chạy `node --test --test-name-pattern='PD-02' tests/e2e.test.mjs` trên stack Docker test cô lập; test khôi phục service và không xóa volume.
+
+## PD-04 – Phát lệnh quản trị A–F
+
+Đăng nhập `admin`, mở **Quản trị** để đổi bảng giá, khóa/mở tầng hoặc cấm/bỏ cấm biển số tại A–F. Một publish qua broker; kết quả từng bãi được lưu bền vững và tự cập nhật khi phản hồi muộn. Chạy trực tiếp trên stack dev, không cần candidate, patch hay source ngoài. Xem [API, topology, cách chạy và bằng chứng giao diện/DB thật](tai-lieu/pd-04-broadcast-abc.md). Phần nối PD-03 và TC61 sáu bãi do Huynh tiếp nhận.

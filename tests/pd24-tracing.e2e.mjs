@@ -1,0 +1,251 @@
+// TRACING=1 COMMAND_MODE=broker node --test tests/pd24-tracing.e2e.mjs
+// Stack: docker compose -f docker-compose.yml -f docker-compose.tracing.yml --profile obs up -d --build
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { randomBytes, randomUUID } from 'node:crypto';
+import { createRequire } from 'node:module';
+
+try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* .env is optional in CI */ }
+
+const require = createRequire(new URL('../frontend/package.json', import.meta.url));
+const base = process.env.BASE ?? 'http://localhost:8000';
+const jaeger = process.env.JAEGER ?? 'http://localhost:16686';
+const nodes = {
+  A: process.env.PARKING_A ?? 'http://localhost:8001',
+  B: process.env.PARKING_B ?? 'http://localhost:8002',
+  C: process.env.PARKING_C ?? 'http://localhost:8003',
+};
+const internalKey = process.env.INTERNAL_KEY;
+const password = process.env.DEMO_PASSWORD ?? '123456';
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function request(url, { token, method = 'GET', body, headers = {} } = {}) {
+  const response = await fetch(url, {
+    method,
+    headers: {
+      ...(token && { authorization: `Bearer ${token}` }),
+      ...(body && { 'content-type': 'application/json' }),
+      ...headers,
+    },
+    ...(body && { body: JSON.stringify(body) }),
+  });
+  return { status: response.status, body: await response.json().catch(() => null) };
+}
+
+async function until(label, fn, timeoutMs = 45_000) {
+  const deadline = Date.now() + timeoutMs;
+  let lastError;
+  while (Date.now() < deadline) {
+    try {
+      const value = await fn();
+      if (value) return value;
+    } catch (error) {
+      lastError = error;
+    }
+    await wait(250);
+  }
+  throw new Error(`Timed out waiting for ${label}`, { cause: lastError });
+}
+
+function socketEvent(socket, name, predicate, timeoutMs = 30_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      socket.off(name, onEvent);
+      reject(new Error(`Timed out waiting for Socket.IO ${name}`));
+    }, timeoutMs);
+    const onEvent = (value) => {
+      if (!predicate(value)) return;
+      clearTimeout(timer);
+      socket.off(name, onEvent);
+      resolve(value);
+    };
+    socket.on(name, onEvent);
+  });
+}
+
+function spanTags(span) {
+  return Object.fromEntries((span.tags ?? []).map(({ key, value }) => [
+    key,
+    typeof value === 'object'
+      ? value?.stringValue ?? value?.intValue ?? value?.boolValue ?? value?.floatValue ?? value?.value
+      : value,
+  ]));
+}
+
+async function loadTrace(traceId) {
+  // Tra thẳng theo trace ID: tìm theo service chỉ lấy N trace mới nhất, trace /health có thể đẩy trace cần tìm ra ngoài.
+  const response = await fetch(`${jaeger}/api/traces/${traceId}`);
+  if (!response.ok) return null;
+  const body = await response.json();
+  return body.data?.filter((trace) => trace.traceID === traceId).flatMap((trace) => trace.spans.map((span) => ({
+    ...span,
+    serviceName: trace.processes?.[span.processID]?.serviceName,
+    attributes: spanTags(span),
+  }))) ?? null;
+}
+
+function eventsFollowOutbox(spans) {
+  const producers = new Set(spans.filter((span) =>
+    span.serviceName === 'parking-node' && span.operationName === 'outbox.publish').map((span) => span.spanID));
+  const consumers = spans.filter((span) => span.serviceName === 'aggregator' && span.operationName === 'event.process');
+  // Cùng trace có thể có sự kiện được đối soát lại, không qua outbox; chỉ cần có một chuỗi outbox -> event.
+  return consumers.some((span) => span.references?.some((ref) =>
+    ref.refType === 'CHILD_OF' && ref.traceID === span.traceID && producers.has(ref.spanID)));
+}
+
+const bookingTraceId = randomBytes(16).toString('hex');
+const bookingRequestId = `pd24-${randomUUID()}`;
+const slotCode = `T${randomBytes(4).toString('hex').toUpperCase()}`;
+const idempotencyKey = randomUUID();
+const createdSlots = [];
+let reservationId;
+let socket;
+let adminTokenForCleanup;
+
+function newTraceparent(traceId) {
+  return `00-${traceId}-${randomBytes(8).toString('hex')}-01`;
+}
+
+function newPlate() {
+  return `30A-${String(Math.floor(Math.random() * 1000)).padStart(3, '0')}.${String(Math.floor(Math.random() * 100)).padStart(2, '0')}`;
+}
+
+async function createSlot(parkingId, code, key) {
+  const result = await request(`${nodes[parkingId]}/api/slots`, {
+    method: 'POST',
+    headers: { 'x-internal-key': key },
+    body: { slotCode: code, floor: 1, type: 'CAR' },
+  });
+  assert.ok([200, 201].includes(result.status), `Slot creation failed: ${JSON.stringify(result.body)}`);
+  createdSlots.push({ parkingId, code });
+}
+
+async function requireJaegerTrace(traceId, predicate, label) {
+  const spans = await until(`${label} in Jaeger`, async () => {
+    const found = await loadTrace(traceId);
+    return found?.length && predicate(found) ? found : null;
+  });
+  return spans;
+}
+
+test('TC77: broker reservation keeps one HTTP → command → DB → reply → COMMAND_RESULT trace', {
+  skip: !process.env.TRACING, timeout: 120_000,
+}, async () => {
+try {
+  const { io } = require('socket.io-client');
+  assert.equal(process.env.COMMAND_MODE, 'broker', 'Run against the tracing overlay in broker mode');
+  assert.ok(internalKey, 'Set INTERNAL_KEY to the value used by the compose stack');
+  const healthy = await until('Aggregator command pipeline', async () => {
+    const r = await request(`${base}/health`);
+    return r.status === 200 && r.body?.status === 'UP' && r.body?.commandsReady !== false;
+  });
+  assert.ok(healthy);
+
+  const user = await request(`${base}/api/auth/login`, {
+    method: 'POST',
+    body: { username: 'user1', password },
+  });
+  assert.equal(user.status, 200, 'Demo USER login must succeed');
+  const admin = await request(`${base}/api/auth/login`, {
+    method: 'POST',
+    body: { username: 'admin', password },
+  });
+  assert.equal(admin.status, 200, 'Demo ADMIN login must succeed');
+  adminTokenForCleanup = admin.body.token;
+
+  socket = io(base, { transports: ['websocket'], auth: { token: user.body.token }, reconnection: false });
+  await until('Socket.IO connection', () => socket.connected);
+  const commandResult = socketEvent(socket, 'COMMAND_RESULT', (event) => event.commandId === `${user.body.user.id}:${idempotencyKey}`);
+  commandResult.catch(() => {});
+
+  if (Object.values(nodes).some((url) => !/^https?:\/\//.test(url)) || !internalKey) {
+    throw new Error('Parking Node URLs and INTERNAL_KEY are required');
+  }
+  await createSlot('A', slotCode, internalKey);
+
+  // CI vừa dựng stack: chờ Aggregator thấy bãi A ONLINE, không thì đặt chỗ bị 503 PARKING_OFFLINE.
+  await until('parking A ONLINE', async () => {
+    const list = await request(`${base}/api/parkings`);
+    return list.status === 200 && list.body.some((node) => node.parkingId === 'A' && node.status === 'ONLINE');
+  });
+
+  const booking = await request(`${base}/api/parkings/A/reservations`, {
+    method: 'POST',
+    token: user.body.token,
+    headers: {
+      'idempotency-key': idempotencyKey,
+      traceparent: newTraceparent(bookingTraceId),
+      'x-request-id': bookingRequestId,
+    },
+    body: { slotCode, licensePlate: newPlate() },
+  });
+  assert.ok([201, 202].includes(booking.status), `Booking failed: ${JSON.stringify(booking.body)}`);
+  if (booking.status === 202) assert.ok(booking.body.commandId, 'Broker booking response must include commandId');
+  const terminal = await commandResult;
+  assert.equal(terminal.status, 'DONE');
+  assert.equal(terminal.statusCode, 201);
+  reservationId = terminal.result?.id;
+  assert.ok(reservationId, 'Completed command must include the reservation id');
+
+  const spans = await requireJaegerTrace(bookingTraceId,
+    (found) => ['socket.emit', 'command.publish', 'outbox.publish', 'command.receive', 'event.process', 'command.reply.publish', 'command.reply.receive'].every((name) =>
+      found.some((span) => span.operationName === name))
+      && found.some((span) => span.operationName.toLowerCase().includes('reservations'))
+      && found.some((span) => span.serviceName === 'parking-node'
+        && Object.keys(span.attributes).some((key) => key.startsWith('db.')))
+      && found.some((span) => span.operationName === 'socket.emit'
+        && span.attributes['socket.io.event'] === 'COMMAND_RESULT')
+      && eventsFollowOutbox(found), 'TC77 spans and outbox → event parent links');
+  const has = (label, predicate) => {
+    assert.ok(spans.some(predicate), `TC77 missing ${label}; trace: ${jaeger}/trace/${bookingTraceId}`);
+  };
+
+  has('Aggregator HTTP booking span', (span) =>
+    span.serviceName === 'aggregator' && span.operationName.toLowerCase().includes('reservations'));
+  has('command AMQP publish span', (span) =>
+    span.serviceName === 'aggregator' && span.operationName === 'command.publish'
+      && span.attributes['messaging.destination.name'] === 'parking.commands');
+  has('Parking Node command AMQP receive span', (span) =>
+    span.serviceName === 'parking-node'
+      && (span.operationName.toLowerCase().includes('consume') || String(span.attributes['messaging.destination.name'] ?? '').includes('cmd.A')));
+  has('Parking Node PostgreSQL span', (span) =>
+    span.serviceName === 'parking-node' && Object.keys(span.attributes).some((key) => key.startsWith('db.')));
+  has('outbox publish span', (span) =>
+    span.serviceName === 'parking-node' && span.operationName === 'outbox.publish');
+  has('Aggregator event consumer span', (span) =>
+    span.serviceName === 'aggregator' && span.operationName === 'event.process');
+  assert.ok(eventsFollowOutbox(spans), `TC77 event.process must be a child of outbox.publish; trace: ${jaeger}/trace/${bookingTraceId}`);
+  has('Node reply publish span', (span) =>
+    span.serviceName === 'parking-node' && span.operationName === 'command.reply.publish');
+  has('Aggregator reply consume span', (span) =>
+    span.serviceName === 'aggregator' && span.operationName === 'command.reply.receive');
+  has('Socket.IO COMMAND_RESULT emit span', (span) =>
+    span.serviceName === 'aggregator' && span.operationName === 'socket.emit'
+      && span.attributes['socket.io.event'] === 'COMMAND_RESULT');
+
+  console.log(JSON.stringify({
+    test: 'TC77',
+    traceId: bookingTraceId,
+    jaeger: `${jaeger}/trace/${bookingTraceId}`,
+    requestId: bookingRequestId,
+    spans: spans.map(({ serviceName, operationName }) => ({ serviceName, operationName })),
+  }, null, 2));
+
+} finally {
+  socket?.disconnect();
+  if (reservationId) {
+    await request(`${nodes.A}/api/reservations/${encodeURIComponent(reservationId)}`, {
+      method: 'DELETE',
+      headers: { 'x-internal-key': internalKey },
+    });
+  }
+  if (adminTokenForCleanup) {
+    for (const { parkingId, code } of createdSlots) {
+      await request(`${base}/api/parkings/${parkingId}/slots/${encodeURIComponent(code)}`, {
+        method: 'DELETE',
+        token: adminTokenForCleanup,
+      });
+    }
+  }
+}
+});

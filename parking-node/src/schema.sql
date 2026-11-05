@@ -22,6 +22,11 @@ CREATE TABLE IF NOT EXISTS command_reply_outbox (
   published_at TIMESTAMPTZ
 );
 CREATE INDEX IF NOT EXISTS ix_command_replies_unpublished ON command_reply_outbox(id) WHERE published_at IS NULL;
+-- PD-02 repair: retain failed replies for retry and inspection; never mark failures published.
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS last_attempt_at TIMESTAMPTZ;
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS last_error TEXT;
+ALTER TABLE command_reply_outbox ADD COLUMN IF NOT EXISTS next_attempt_at TIMESTAMPTZ;
 
 CREATE EXTENSION IF NOT EXISTS btree_gist;   -- cho ràng buộc EXCLUDE (slot_id WITH =, khoảng thời gian WITH &&)
 
@@ -46,14 +51,20 @@ CREATE TABLE IF NOT EXISTS reservations (
   end_time      TIMESTAMPTZ NOT NULL,                 -- hết khung giờ đã đặt (NV-01)
   expire_time   TIMESTAMPTZ NOT NULL,                 -- quá giờ này chưa đến = no-show
   status        VARCHAR(12) NOT NULL DEFAULT 'ACTIVE'
-                CHECK (status IN ('ACTIVE','USED','DONE','CANCELLED','EXPIRED')),
+                CHECK (status IN ('PENDING_SAGA','ACTIVE','USED','DONE','CANCELLED','EXPIRED')),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   CHECK (end_time > start_time),
   -- Lưới đỡ ở tầng DB: trên cùng một slot, các lượt đặt còn hiệu lực không được chồng giờ.
   -- Thay cho "mỗi slot 1 reservation ACTIVE" của bản cơ bản. DB cũ cần docker compose down -v.
   CONSTRAINT ex_no_overlap EXCLUDE USING gist
-    (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('ACTIVE','USED'))
+    (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('PENDING_SAGA','ACTIVE','USED'))
 );
+ALTER TABLE reservations DROP CONSTRAINT IF EXISTS reservations_status_check;
+ALTER TABLE reservations ADD CONSTRAINT reservations_status_check
+  CHECK (status IN ('PENDING_SAGA','ACTIVE','USED','DONE','CANCELLED','EXPIRED'));
+ALTER TABLE reservations DROP CONSTRAINT IF EXISTS ex_no_overlap;
+ALTER TABLE reservations ADD CONSTRAINT ex_no_overlap EXCLUDE USING gist
+  (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('PENDING_SAGA','ACTIVE','USED'));
 
 -- Vừa là lịch sử sự kiện, vừa là OUTBOX: ghi cùng giao dịch với dữ liệu, relay gửi lên broker sau
 ALTER TABLE reservations ADD COLUMN IF NOT EXISTS warned_at TIMESTAMPTZ;   -- NV-08: đã báo sắp hết giờ giữ chỗ
@@ -64,9 +75,14 @@ CREATE TABLE IF NOT EXISTS parking_events (
   slot_code     VARCHAR(10) NOT NULL,
   license_plate VARCHAR(20),
   payload       JSONB NOT NULL,
+  traceparent   VARCHAR(55),
   created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   published_at  TIMESTAMPTZ
 );
+-- PD-17: bổ sung HLC cho các sự kiện mới; dữ liệu lịch sử cũ giữ nguyên.
+ALTER TABLE parking_events
+  ADD COLUMN IF NOT EXISTS hlc VARCHAR(18);
+ALTER TABLE parking_events ADD COLUMN IF NOT EXISTS traceparent VARCHAR(55);
 CREATE INDEX IF NOT EXISTS ix_events_unpublished ON parking_events(id) WHERE published_at IS NULL;
 -- PD-18: báo relay ngay khi có sự kiện mới trong outbox.
 CREATE OR REPLACE FUNCTION notify_parking_event_outbox()
@@ -93,12 +109,16 @@ CREATE TABLE IF NOT EXISTS parking_sessions (
   reservation_id UUID REFERENCES reservations(id),
   user_id        VARCHAR(64),                         -- có khi xe vào bằng đặt chỗ
   entered_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  hlc            VARCHAR(18),
   exited_at      TIMESTAMPTZ,
   fee            INT,                                 -- VND, tính khi xe ra
   paid_at        TIMESTAMPTZ,
   payment_method VARCHAR(8),                          -- ONLINE | CASH
   payment_key    VARCHAR(128) UNIQUE                  -- Idempotency-Key của lần thanh toán
 );
+-- PD-17: lưu HLC của sự kiện xe vào ngay trong phiên gửi xe.
+ALTER TABLE parking_sessions
+  ADD COLUMN IF NOT EXISTS hlc VARCHAR(18);
 -- Mỗi slot tối đa 1 phiên đang mở; mỗi biển số tối đa 1 phiên đang mở TRONG BÃI NÀY
 -- (chặn trên toàn hệ thống cần phối hợp nhiều bãi -> chọn sẵn sàng, phát hiện bằng tra cứu gom).
 CREATE UNIQUE INDEX IF NOT EXISTS ux_open_session_slot  ON parking_sessions(slot_id)       WHERE exited_at IS NULL;
@@ -120,4 +140,11 @@ CREATE TABLE IF NOT EXISTS fencing (
   job       TEXT PRIMARY KEY,
   max_token BIGINT NOT NULL
 );
+
+-- PD-14b: Bảng db_epoch chống zombie primary ghi đè sau failover
+CREATE TABLE IF NOT EXISTS db_epoch (
+  epoch BIGINT NOT NULL
+);
+INSERT INTO db_epoch (epoch) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM db_epoch);
+
 

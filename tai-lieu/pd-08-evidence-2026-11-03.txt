@@ -1,0 +1,122 @@
+PD-08 verification, 2026-11-03 Asia/Bangkok
+Base origin/dev 4155051814f4df61e4df75dcb27f7b1e32553c5b
+PD-02 prerequisite #79 / d889cb7 -> cherry-picked 5ebb1df, separate commit.
+Selective PD-08 source: hung-pd-08-retry-dlq / 4535c85 (Vu Van Hung).
+
+Final unit: parking-node host AND Docker Linux/Node 22: 110 pass / 1 opt-in skip each; Aggregator 90 pass / 3 opt-in skip; notification 2 pass.
+Frontend 3 tests pass, build pass (110 modules).
+Topology Management 15683: vhost /, 2 exchanges, 16 quorum queues, 16 bindings, 2 policies, permissions verified.
+
+Clean project pd08-dev-20261103: inspected labels of 11 containers and 5 owned volumes before down -v; rebuilt/restarted with empty volumes.
+Only existing service entrypoints and local repo imports; no external source loader or apply-patch step.
+
+GUI NOT VERIFIED: IAB webview did not attach; Windows computer-use ended because browser URL could not be determined for policy enforcement. UI automation stopped, owned UI fixture restored; API/build results do not substitute a GUI pass. PR remains draft.
+
+Stdout below retains test results; only trailing whitespace and line endings normalized. No server logs, JWTs, HMACs, .env or private keys are included.
+
+
+Actual normal service entrypoints (TC57 / TC58 API / deadline)
+ Container pd08-dev-20261103-parking-a-1 Recreate
+ Container pd08-dev-20261103-parking-a-1 Recreated
+ Container pd08-dev-20261103-parking-a-1 Starting
+ Container pd08-dev-20261103-parking-a-1 Started
+TC57 live retry intervals ms: 2025 10359 ; command TTL=60000
+▶ PD08 real service entrypoints: TC57, TC58 and immutable retry deadline
+  ✔ TC57: live index retries after 2s and 10s; same ID/context, one effect, no cross-parking route (14297.5678ms)
+ Container pd08-dev-20261103-parking-a-1 Recreate
+ Container pd08-dev-20261103-parking-a-1 Recreated
+ Container pd08-dev-20261103-parking-a-1 Starting
+ Container pd08-dev-20261103-parking-a-1 Started
+  ✔ TC58: actual DLQ worker persists schema failure; ADMIN edits/replays; inbox records one effect (1099.5139ms)
+ Container pd08-dev-20261103-parking-a-1 Recreate
+ Container pd08-dev-20261103-parking-a-1 Recreated
+ Container pd08-dev-20261103-parking-a-1 Starting
+ Container pd08-dev-20261103-parking-a-1 Started
+  ✔ retry keeps the short original deadline; no effect after the 2s delay (4703.6467ms)
+✔ PD08 real service entrypoints: TC57, TC58 and immutable retry deadline (24209.2749ms)
+ℹ tests 4
+ℹ suites 0
+ℹ pass 4
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 24613.7923
+
+
+Supplemental broker/PostgreSQL coverage
+TC57 retry intervals ms: 2054 10018
+▶ PD08 broker + PostgreSQL integration using the merged local inbox
+  ✔ TC57: two transient errors, 2s + 10s, third delivery one committed effect (12197.9564ms)
+  ✔ TC58 backend: invalid schema -> durable DLQ -> ADMIN edit/replay -> one reservation (602.5577ms)
+  ✔ edited replay cannot bypass an existing inbox result under the original ID (201.8811ms)
+  ✔ retry exhaustion reaches durable DLQ after two delays; business 409 never retries (12275.5109ms)
+  ✔ retry crosses total deadline: no renewal and no late reservation (2182.3203ms)
+  ✔ total deadline elapsed before dispatch: no late effect, forwarded to PD06 expired queue (292.0062ms)
+✔ PD08 broker + PostgreSQL integration using the merged local inbox (28781.1207ms)
+ℹ tests 7
+ℹ suites 0
+ℹ pass 7
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 29764.5108
+
+
+Complete existing HTTP e2e run
+﹣ TC52 HTTP broker contract: pending PD-03 request-reply and command lookup (382.4712ms) # PD-03 not implemented; TC52 currently verified at broker level
+✔ cô lập dữ liệu: node bãi A không biết địa chỉ DB của bãi khác (601.3264ms)
+✔ TC01 tra cứu tổng hợp các bãi theo cấu hình (53.5096ms)
+﹣ PD-12 etcd gắn nhãn vùng Bắc/Nam và registry trả đủ sáu bãi (0.302ms) # SKIP
+✔ TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh (164.1232ms)
+✔ TC02 + TC08 đặt chỗ, gửi lại cùng Idempotency-Key không tạo bản thứ hai (818.2724ms)
+✔ TC09 20 request đồng thời cùng một slot (Postgres thật): đúng 1 thành công (128.8387ms)
+✔ 10 lần gửi đồng thời CÙNG một Idempotency-Key: chỉ 1 reservation, mọi phản hồi cùng id (63.7772ms)
+✔ TC27 hai lần trả tiền song song khác key cho cùng một phiên (Postgres thật): đúng 1 thành công (599.7831ms)
+✔ TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> RabbitMQ -> Aggregator -> Socket.IO (1120.8498ms)
+✔ TC37 notification dừng: vẫn đặt chỗ được, bật lại nhận đúng thông báo tồn (16413.5688ms)
+✔ TC04 + TC05 tắt bãi B: A, C vẫn chạy, ghi B bị 503, chi tiết B trả dữ liệu cũ; bật lại thì ONLINE (39624.2727ms)
+✔ DB bãi C khởi động lại: node C không sập, DB về thì tự kết nối lại và ghi được (1660.1446ms)
+✔ TC10 Aggregator tắt: sự kiện nằm chờ trong queue RabbitMQ, bật lại thì được xử lý hết (10483.2547ms)
+✔ Broker tắt: sự kiện nằm trong outbox của bãi, broker bật lại thì relay gửi hết (15135.2359ms)
+﹣ TC47 mạng chậm vượt timeout khi đặt chỗ: 504, thử lại cùng key -> đúng 1 lượt đặt (0.3404ms) # SKIP
+﹣ TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200 (0.1498ms) # SKIP
+﹣ TC44 HA: xe vào qua Aggregator 1, socket Aggregator 2 nhận SLOT_UPDATED (0.1144ms) # SKIP
+TC46 - Enter: 200 Exit: 200 Enter lại: 200
+TC46 - PASS: A06 OCCUPIED
+✔ TC46: Staff thao tác khi Aggregator sập (2797.7661ms)
+﹣ TC48 cụm RabbitMQ: tắt nút rabbitmq, chuyển nút < 10s, outbox về 0 và Aggregator nhận sự kiện (0.5771ms) # SKIP
+﹣ TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), outbox giữ tin; bật lại thì xả về 0 (0.2298ms) # SKIP
+✔ PD-02 PostgreSQL: 10 concurrent DB clients deduplicate and preserve transaction invariants (2459.6455ms)
+✔ TC52 PD-02 broker: 10 concurrent messages with one messageId create one reservation and 10 identical replies (4275.2998ms)
+✔ TC53 PD-02 broker: crash after COMMIT before ack, restart, redelivery replays without another effect (13981.8951ms)
+﹣ TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd -> tự động hiện trên API danh sách bãi trong <= 2s (0.2915ms) # SKIP
+﹣ TC64 phân hoạch mạng node <-> etcd: mất lease nhưng HTTP còn sống -> trạng thái chuyển DEGRADED (0.1082ms) # SKIP
+﹣ TC67 cấu hình động qua etcd watch: đổi timeoutMs thành 500ms -> Aggregator nhận ngay không cần restart (0.0928ms) # SKIP
+﹣ TC65 bầu Leader Aggregator: tắt leader -> bản còn lại lên làm leader mới trong <= 7s, metric = 1 (0.1175ms) # SKIP
+﹣ TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token cũ -> bị node từ chối STALE_LEADER, metric tăng (0.0962ms) # SKIP
+﹣ TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng epoch etcd, node tự chuyển pool sang DB mới (0.0778ms) # SKIP
+﹣ TC69 zombie primary fencing: DB primary cũ sống lại (mang epoch cũ) -> Node từ chối ghi (STALE_DB_EPOCH) (0.0689ms) # SKIP
+﹣ TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự động hạ cấp sang async, giải phóng lệnh ghi (0.0714ms) # SKIP
+﹣ TC-PD21 giới hạn đăng nhập phân tán: 5 lần sai rải qua 2 Aggregator -> lần 6 bị 429 ở cả hai (0.0661ms) # SKIP
+﹣ TC73 phân mảnh users: tắt db-users-1 -> người ở phân mảnh 2 vẫn đăng nhập và đặt chỗ được (0.0644ms) # SKIP
+﹣ TC75 saga 3 bãi qua broker: mọi bước giữ chỗ rồi xác nhận, saga COMPLETED (0.1069ms) # SKIP
+﹣ TC76 saga qua broker: bước 3 lỗi -> bù trừ 2 bước trước, không còn chỗ giữ (0.1879ms) # SKIP
+﹣ TC55 bãi tắt lâu hơn TTL: lệnh EXPIRED, bật lại không bị đặt muộn (0.2059ms) # SKIP
+﹣ TC59 hàng đợi lệnh đầy: trả 503 kèm Retry-After, không mất lệnh đã nhận (0.1446ms) # SKIP
+ℹ tests 38
+ℹ suites 0
+ℹ pass 17
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 21
+ℹ todo 0
+ℹ duration_ms 111265.9405
+
+Final Docker unit summary (node --test --test-concurrency=2 test/*.test.js)
+# tests 111
+# pass 110
+# fail 0
+# skipped 1
+# duration_ms 121183.179619

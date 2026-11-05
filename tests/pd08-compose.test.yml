@@ -1,0 +1,36 @@
+# Only the dedicated pd08-* test project; normal service entrypoints and isolated ports/images.
+services:
+  rabbitmq:
+    ports: !override ["127.0.0.1:5683:5672", "127.0.0.1:15683:15672"]
+  db-a:
+    ports: ["127.0.0.1:25442:5432"]
+  db-agg:
+    ports: ["127.0.0.1:25443:5432"]
+  parking-a:
+    image: pd08-dev/parking-node:20261103
+    ports: !override ["127.0.0.1:18101:8001"]
+    environment:
+      NODE_ENV: test
+      RETRY_TEST_MESSAGE_ID: ${PD08_FAULT_ID:-pd08-runtime:retry}
+      RETRY_TEST_FAILURES: "${PD08_FAULT_COUNT:-2}"
+  parking-b:
+    image: pd08-dev/parking-node:20261103
+    ports: !override ["127.0.0.1:18102:8002"]
+  parking-c:
+    image: pd08-dev/parking-node:20261103
+    ports: !override ["127.0.0.1:18103:8003"]
+  aggregator:
+    image: pd08-dev/aggregator:20261103
+    ports: !override ["127.0.0.1:18010:8000"]
+    environment:
+      COMMAND_MODE: ${COMMAND_MODE:-http}
+      COMMAND_TTL_MS: "60000"
+  frontend:
+    image: pd08-dev/frontend:20261103
+    ports: !override ["127.0.0.1:13010:80"]
+  notification:
+    image: pd08-dev/notification:20261103
+  pd08-unit:
+    profiles: [pd08-tests]
+    build: { context: ., dockerfile: tests/pd02-fixes.Dockerfile }
+    image: pd08-dev/unit:20261103

@@ -13,6 +13,7 @@
 //   node scripts/measure-failover.mjs --status   # Xem trạng thái hiện tại các service
 //   node scripts/measure-failover.mjs --reset    # Khôi phục trạng thái ban đầu
 
+import { fileURLToPath } from 'node:url';
 import { execSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,7 +25,7 @@ try {
   // dùng biến môi trường có sẵn
 }
 
-const ROOT_DIR = path.resolve(new URL('..', import.meta.url).pathname);
+const ROOT_DIR = fileURLToPath(new URL('..', import.meta.url));
 const ENV_FILE = path.join(ROOT_DIR, '.env');
 const AGGREGATOR_URL = process.env.AGGREGATOR_URL || 'http://localhost:8000';
 const NODE_A_URL = 'http://localhost:8001';

@@ -4,6 +4,8 @@
 // Dịch vụ này tắt thì đặt chỗ vẫn chạy bình thường; bật lại thì xử lý tiếp tin còn nằm trong queue (durable).
 const { makeConnector } = require('./amqp-connect');
 const { makeRules } = require('./rules');
+const { context, propagation, ROOT_CONTEXT, SpanKind, SpanStatusCode, trace } = require('@opentelemetry/api');
+const notificationTracer = trace.getTracer('notification-service/events');
 
 const url = process.env.RABBITMQ_URL ?? 'amqp://localhost';
 const log = (level, msg, f) => console.log(JSON.stringify({ ts: new Date().toISOString(), level, service: 'notification', msg, ...f }));
@@ -24,20 +26,32 @@ async function run() {
     await ch.prefetch(20);
     await ch.consume('notification.events', async (m) => {
       if (!m) return;
-      try {
-        const e = JSON.parse(m.content.toString());
-        for (const n of rules(e)) {
-          ch.publish('user.notifications', n.to === '*' ? 'broadcast' : `user.${n.to}`,
-            Buffer.from(JSON.stringify({ ...n, parkingId: e.parkingId, at: new Date().toISOString() })),
-            { persistent: true, contentType: 'application/json', ...(e.requestId && { correlationId: e.requestId }) });
-          log('info', 'gửi thông báo', { requestId: e.requestId, to: n.to, text: n.text });
+      const parent = propagation.extract(ROOT_CONTEXT, m.properties?.headers ?? {});
+      return notificationTracer.startActiveSpan('notification.process', {
+        kind: SpanKind.CONSUMER,
+        attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': 'notification.events' },
+      }, parent, async (span) => {
+        try {
+          const e = JSON.parse(m.content.toString());
+          for (const n of rules(e)) {
+            const headers = {};
+            propagation.inject(context.active(), headers);
+            ch.publish('user.notifications', n.to === '*' ? 'broadcast' : `user.${n.to}`,
+              Buffer.from(JSON.stringify({ ...n, parkingId: e.parkingId, at: new Date().toISOString() })),
+              { persistent: true, contentType: 'application/json', headers, ...(e.requestId && { correlationId: e.requestId }) });
+            log('info', 'gửi thông báo', { requestId: e.requestId, to: n.to, text: n.text });
+          }
+          await ch.waitForConfirms();
+          ch.ack(m);   // ack SAU khi broker nhận thông báo: chết giữa chừng thì xử lý lại (at-least-once)
+        } catch (err) {
+          span.recordException(err);
+          span.setStatus({ code: SpanStatusCode.ERROR, message: err.message });
+          log('error', 'bỏ tin lỗi', { error: err.message });
+          ch.ack(m);
+        } finally {
+          span.end();
         }
-        await ch.waitForConfirms();
-        ch.ack(m);   // ack SAU khi broker nhận thông báo: chết giữa chừng thì xử lý lại (at-least-once)
-      } catch (err) {
-        log('error', 'bỏ tin lỗi', { error: err.message });
-        ch.ack(m);
-      }
+      });
     });
     log('info', 'Đã kết nối RabbitMQ, đang nhận sự kiện');
   } catch (e) {

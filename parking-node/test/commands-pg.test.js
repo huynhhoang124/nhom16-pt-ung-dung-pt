@@ -2,11 +2,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID } = require('node:crypto');
-const path = require('node:path');
 const { Pool } = require('pg');
-const source = process.env.PD02_SOURCE_ROOT ?? path.resolve(__dirname, '../src');
-const { makeCommandProcessor } = require(path.join(source, 'commands'));
-const { signature } = require(path.join(source, 'command-signature'));
+const { makeCommandProcessor } = require('../src/commands');
+const { signature } = require('../src/command-signature');
 
 test('PostgreSQL: concurrent duplicate transactions, same-slot contention, SQL failure and rollback', {
   skip: !process.env.PD02_REAL_DATABASE_URL,

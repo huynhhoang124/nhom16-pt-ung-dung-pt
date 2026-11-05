@@ -1,12 +1,36 @@
 // NV-06: lịch sử gửi xe; NV-03: phí, bảng giá. Dữ liệu phiên nằm ở DB từng bãi -> gom song song, bãi lỗi thì báo thiếu.
 const enc = encodeURIComponent;
+function sessionHlcKey(session) {
+  if (
+    typeof session.hlc === 'string' &&
+    /^\d{13}-\d{4}$/.test(session.hlc)
+  ) {
+    return session.hlc;
+  }
 
-function mountSessions(app, { reg, need, forward, reserveTimeoutMs }) {
+  // Fallback cho phiên lịch sử chưa được ghi HLC.
+  const parsed = Date.parse(session.enteredAt);
+  const ms = Number.isFinite(parsed) ? Math.max(0, Math.trunc(parsed)) : 0;
+
+  return `${String(ms).padStart(13, '0')}-0000`;
+}
+
+function mountSessions(app, { reg, need, forward, reserveTimeoutMs, commandMode, broker }) {
   const gatherSessions = async (query) => {
     const parts = await reg.gather(async (n) => ({ sessions: await reg.json(n, `/api/sessions?${query}`) }));
     return {
-      sessions: parts.flatMap((p) => (p.sessions ?? []).map((x) => ({ parkingId: p.parkingId, ...x })))
-        .sort((a, b) => b.enteredAt.localeCompare(a.enteredAt)),
+      sessions: parts
+      .flatMap((p) => (p.sessions ?? []).map((x) => ({
+        parkingId: p.parkingId,
+        ...x,
+      })))
+      .sort((a, b) => {
+        const ka = sessionHlcKey(a);
+        const kb = sessionHlcKey(b);
+
+        // Lịch sử mới nhất hiển thị trước, như cách sắp xếp cũ.
+        return ka < kb ? 1 : ka > kb ? -1 : 0;
+      }),
       unavailable: parts.filter((p) => p.status === 'OFFLINE').map((p) => p.parkingId),
     };
   };
@@ -36,6 +60,7 @@ function mountSessions(app, { reg, need, forward, reserveTimeoutMs }) {
   app.post('/api/me/sessions/:id/:sid/pay', need('USER'), async (req, res) => {
     const key = req.get('idempotency-key');
     if (!key || key.length > 64) return res.status(400).json({ error: 'IDEMPOTENCY_KEY_REQUIRED' });
+    if(commandMode==='broker')return broker(req,res,'pay',{sessionId:req.params.sid,method:'ONLINE'},key);
     await forward(res, reg.get(req.params.id), `/api/sessions/${enc(req.params.sid)}/pay`, {
       method: 'POST', ms: reserveTimeoutMs(), retry: true,
       body: { method: 'ONLINE', paymentKey: `${req.user.sub}:${key}`, userId: req.user.sub },
