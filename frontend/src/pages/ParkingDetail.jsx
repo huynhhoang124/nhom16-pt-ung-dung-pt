@@ -179,7 +179,7 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
     if (isStaff && centralDown(r)) r = await nodeApi(parkingId, `/api/slots/${selected}/${action}`, { method: 'POST', body });
     if (r.status === 402) {   // chưa trả tiền: bước thu tiền bình thường, không phải lỗi
       setNote(null);
-      setCharge({ slotCode: selected, fee: r.data.fee, plate: occupant?.licensePlate, breakdown: occupant?.quote?.breakdown ?? [], received: false });
+      setCharge({ slotCode: selected, fee: r.data.fee, paid: r.data.paid ?? 0, total: r.data.total ?? r.data.fee, extra: !!r.data.extra, plate: occupant?.licensePlate, breakdown: r.data.breakdown ?? occupant?.quote?.breakdown ?? [], received: false });
     } else {
       setCharge(null);
       setNote(r.ok ? { kind: 'ok', text: doneText(action, r.data, cash) } : { kind: 'error', text: message(r.data) });
@@ -500,8 +500,10 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
                           <dt>Vào lúc</dt><dd>{fmt(occupant.enteredAt)} <span className="muted small">· đã gửi {since(occupant.enteredAt)}</span></dd>
                           <dt>Phí tạm tính</dt>
                           <dd>
-                            <b className="tnum-inline">{(occupant.paidAt ? occupant.fee : occupant.quote?.fee ?? 0).toLocaleString('vi-VN')} đ</b>
-                            {occupant.paidAt ? <span className="st ok"><Icon name="check" />Đã trả</span>
+                            <b className="tnum-inline">{(occupant.quote?.fee ?? occupant.fee ?? 0).toLocaleString('vi-VN')} đ</b>
+                            {occupant.paidAt && (occupant.quote?.due ?? 0) > 0
+                              ? <span className="st warn"><Icon name="alert" />Đã trả {(occupant.quote.paid ?? 0).toLocaleString('vi-VN')} đ · cần thu thêm {occupant.quote.due.toLocaleString('vi-VN')} đ</span>
+                              : occupant.paidAt ? <span className="st ok"><Icon name="check" />Đã trả{occupant.quote?.payDeadline ? ` · ra trước ${new Date(occupant.quote.payDeadline).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}` : ''}</span>
                               : (occupant.quote?.fee ?? 0) > 0 ? <span className="st warn"><Icon name="clock" />Chưa trả</span>
                               : <span className="muted small">miễn phí dưới 5 phút</span>}
                           </dd>
@@ -546,7 +548,8 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
                 )}
                 {isStaff && charge && charge.slotCode === slot.slotCode && (
                   <div className="charge" role="status">
-                    <span className="kicker">Thu phí trước khi cho ra</span>
+                    <span className="kicker">{charge.extra ? 'Thu thêm phí phát sinh' : 'Thu phí trước khi cho ra'}</span>
+                    {charge.extra && <span className="small">Khách đã trả {charge.paid.toLocaleString('vi-VN')} đ trên ứng dụng nhưng ra quá 15 phút sau khi trả; tổng phí hiện là {charge.total.toLocaleString('vi-VN')} đ.</span>}
                     {charge.plate && <Plate value={charge.plate} />}
                     <div className="charge-amount">{charge.fee.toLocaleString('vi-VN')}<span> đ</span></div>
                     {charge.breakdown.length > 0 && (

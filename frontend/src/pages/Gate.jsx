@@ -81,8 +81,8 @@ export default function Gate({ parkingId }) {
           title: action === 'enter' ? `Ô ${extra.slot ?? ''}`.trim() : 'Hẹn gặp lại!',
           detail: action === 'exit' ? (fee ? `Phí ${fee.toLocaleString('vi-VN')} đ · đã thanh toán` : 'Miễn phí') : '' }
       : { ok: false, ...extra, verdict: r.status === 402 ? 'Chưa thanh toán' : 'Không cho qua',
-          title: r.status === 402 ? `Cần thu ${r.data.fee.toLocaleString('vi-VN')} đ` : message(r.data),
-          detail: r.status === 402 ? 'Mời khách thanh toán trên ứng dụng, hoặc thu tiền mặt ở trang "Bãi" rồi cho ra.' : '' };
+          title: r.status === 402 ? `Cần thu ${r.data.extra ? 'thêm ' : ''}${r.data.fee.toLocaleString('vi-VN')} đ` : message(r.data),
+          detail: r.status === 402 ? (r.data.extra ? 'Khách đã trả nhưng ra quá 15 phút sau khi trả nên phát sinh thêm. ' : '') + 'Mời khách thanh toán trên ứng dụng, hoặc thu tiền mặt ở trang "Bãi" rồi cho ra.' : '' };
     setResult(res);
     setLog((xs) => [res, ...xs].slice(0, 8));
     beep(r.ok);

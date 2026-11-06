@@ -29,9 +29,16 @@ test('PostgreSQL: concurrent duplicate transactions, same-slot contention, SQL f
     finally { c.release(); await pool.end(); }
   });
   for (const code of slotCodes) await pool.query('INSERT INTO parking_slots(slot_code) VALUES ($1)', [code]);
+  // Mỗi lượt (theo id) một biển số riêng: test này kiểm tranh chấp Ô và idempotency, không kiểm luật
+  // "một biển số không giữ hai chỗ trùng giờ" (luật đó có test riêng trong slots.test.js).
+  const plates = new Map();
+  const plateFor = (id) => {
+    if (!plates.has(id)) plates.set(id, `30A-${String(800 + plates.size).padStart(3, '0')}.88`);
+    return plates.get(id);
+  };
   const make = (id, slot, extra = {}) => {
     const body = { schemaVersion: 1, type: 'reserve', parkingId: 'A', actor: { userId, role: 'USER' },
-      payload: { slotCode: slot, licensePlate: '30A-888.88', ...extra } };
+      payload: { slotCode: slot, licensePlate: plateFor(id), ...extra } };
     const properties = { messageId: `${userId}:${id}`, correlationId: `${userId}:${id}`, replyTo: 'test.pg', type: 'reserve', headers: {} };
     properties.headers['x-command-signature'] = signature(key, body, properties);
     return { content: Buffer.from(JSON.stringify(body)), properties, fields: { routingKey: 'cmd.A.reserve' } };

@@ -31,6 +31,16 @@ export default function History({ user, onOpenSlot }) {
   useEffect(() => { if (mine) load(); }, [mine, load]);
   useLive(['SLOT_UPDATED'], () => (mine ? load() : plate && data && load(plate)));
 
+  // Trả trong bãi xong có 15 phút để ra; quá hạn thì có thể phát sinh thêm (máy chủ bãi tính, xem quote.due).
+  const GRACE_MS = 15 * 60000;
+  const payExpired = (x) => !!x.paidAt && !x.exitedAt && Date.now() - new Date(x.paidAt) > GRACE_MS;
+  const canPay = (x) => mine && !x.exitedAt && (!x.paidAt || payExpired(x));
+  const hhmm = (t) => new Date(t).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+  const paidChip = (x) => (x.paidAt
+    ? <span className="st ok"><Icon name="check" />{!x.exitedAt && !payExpired(x) ? `Đã trả · ra trước ${hhmm(new Date(x.paidAt).getTime() + GRACE_MS)}` : 'Đã trả'}</span>
+    : x.fee ? <span className="st warn"><Icon name="clock" />Chưa trả</span> : null);
+  const payLabel = (x) => (x.paidAt ? 'Kiểm tra phí phát sinh' : 'Thanh toán');
+
   async function startPay(x) {
     const q = await api(`/api/parkings/${x.parkingId}/sessions/${x.id}/quote`);
     if (!q.ok) return setError(message(q.data));
@@ -41,7 +51,7 @@ export default function History({ user, onOpenSlot }) {
     const { x } = paying;
     const r = await commandRequest(`/api/me/sessions/${x.parkingId}/${x.id}/pay`, { method: 'POST', headers: { 'idempotency-key': paying.key } },
       () => setError('Đang xử lý thanh toán…'));
-    if (r.ok) { toast(`Đã thanh toán ${money(paying.quote.fee)} · phiên ${x.slotCode}`, 'ok'); setPaying(null); setError(''); load(); }
+    if (r.ok) { toast(`Đã thanh toán ${money(paying.quote.due ?? paying.quote.fee)} · phiên ${x.slotCode}. Mời ra cổng trong 15 phút.`, 'ok'); setPaying(null); setError(''); load(); }
     else if (r.status === 504 || r.status === 0) setPaying({ ...paying, unknown: true });   // chưa rõ: thử lại cùng key
     else { setPaying(null); setError(message(r.data)); load(); }
   }
@@ -81,8 +91,10 @@ export default function History({ user, onOpenSlot }) {
             <ul className="small mono" style={{ margin: 0, paddingLeft: 'var(--space-4)' }}>
               {paying.quote.breakdown.map((b) => <li key={b.label}>{b.label}: {money(b.amount)}</li>)}
             </ul>
-            <div className="big" style={{ fontSize: 44 }}>{(paying.quote.fee ?? 0).toLocaleString('vi-VN')}<span className="muted"> đ</span></div>
-            {paying.quote.fee > 0 ? (
+            {paying.quote.paid > 0 && <p className="muted" style={{ margin: 0 }}>Tổng phí đến giờ {money(paying.quote.fee)} · đã trả {money(paying.quote.paid)}. Cần trả thêm:</p>}
+            <div className="big" style={{ fontSize: 44 }}>{(paying.quote.due ?? paying.quote.fee ?? 0).toLocaleString('vi-VN')}<span className="muted"> đ</span></div>
+            {(paying.quote.due ?? paying.quote.fee) > 0 && <p className="muted small" style={{ margin: 0 }}>Trả xong có 15 phút để ra cổng; ở lâu hơn có thể phát sinh thêm phí.</p>}
+            {(paying.quote.due ?? paying.quote.fee) > 0 ? (
               paying.unknown && (
                 <div className="cmd timeout" role="status">
                   <span className="ic"><Icon name="wifi-off" /></span>
@@ -90,10 +102,10 @@ export default function History({ user, onOpenSlot }) {
                   <span className="cmd-sub">{message({ error: 'TIMEOUT_UNKNOWN_RESULT' })}</span>
                 </div>
               )
-            ) : <p className="muted" style={{ margin: 0 }}>Gửi dưới 5 phút: miễn phí.</p>}
+            ) : <p className="muted" style={{ margin: 0 }}>{paying.quote.paid > 0 ? 'Không phát sinh thêm phí, bạn có thể ra cổng.' : 'Gửi dưới 5 phút: miễn phí.'}</p>}
             <div className="dialog-actions">
               <button onClick={() => setPaying(null)}>Để sau</button>
-              {paying.quote.fee > 0 && (
+              {(paying.quote.due ?? paying.quote.fee) > 0 && (
                 <button className="primary" onClick={pay}>{paying.unknown ? <><Icon name="retry" /> Thử lại (cùng giao dịch)</> : <><Icon name="card" /> Thanh toán (giả lập)</>}</button>
               )}
             </div>
@@ -116,10 +128,10 @@ export default function History({ user, onOpenSlot }) {
                 <dt>Phí</dt>
                 <dd>
                   <b className="tnum-inline">{money(x.fee)}</b>{' '}
-                  {x.paidAt ? <span className="st ok"><Icon name="check" />Đã trả</span> : x.fee ? <span className="st warn"><Icon name="clock" />Chưa trả</span> : null}
+                  {paidChip(x)}
                 </dd>
               </dl>
-              {mine && !x.paidAt && !x.exitedAt && <button className="primary block" onClick={() => startPay(x)}><Icon name="card" /> Thanh toán</button>}
+              {canPay(x) && <button className="primary block" onClick={() => startPay(x)}><Icon name="card" /> {payLabel(x)}</button>}
               {canOpen(x) && <button className="block" onClick={() => onOpenSlot(x.parkingId, x.slotCode)}><Icon name="pin" /> Xem ô {x.slotCode}</button>}
             </li>
           ))}
@@ -135,9 +147,9 @@ export default function History({ user, onOpenSlot }) {
                 <td className="mono small">{time(x.enteredAt)}</td>
                 <td>{x.exitedAt ? <span className="mono small">{time(x.exitedAt)}</span> : <span className="st info"><Icon name="car" />Đang gửi</span>}</td>
                 <td className="tnum">{money(x.fee)}</td>
-                <td>{x.paidAt ? <span className="st ok"><Icon name="check" />Đã trả</span> : x.fee ? <span className="st warn"><Icon name="clock" />Chưa trả</span> : <span className="muted">—</span>}</td>
+                <td>{paidChip(x) ?? <span className="muted">—</span>}</td>
                 <td>
-                  {mine && !x.paidAt && !x.exitedAt && <button className="primary" onClick={() => startPay(x)}><Icon name="card" /> Thanh toán</button>}
+                  {canPay(x) && <button className="primary" onClick={() => startPay(x)}><Icon name="card" /> {payLabel(x)}</button>}
                   {canOpen(x) && <button onClick={() => onOpenSlot(x.parkingId, x.slotCode)}><Icon name="pin" /> Xem ô {x.slotCode}</button>}
                 </td>
               </tr>

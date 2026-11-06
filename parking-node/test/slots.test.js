@@ -273,6 +273,34 @@ test('TC26 trả 2 lần cùng key: chỉ ghi nhận 1 lần, lần 2 trả lạ
   assert.deepEqual([exit.code, exit.body.session.fee, exit.body.session.paymentMethod], [200, 35000, 'ONLINE']);
 });
 
+test('trả sớm rồi ở thêm: trong 15 phút ra bình thường; quá 15 phút mà phí tăng thì phải trả thêm phần chênh', async () => {
+  const pool = await makePool();
+  const { id, userId } = await parkedFor(pool, 150);                     // 2,5 giờ: 35.000 đ
+  const pay = (key) => s.pay(pool, { sessionId: id, method: 'ONLINE', paymentKey: `${userId}:${key}`, userId });
+  assert.equal((await pay('k1')).body.fee, 35000);
+  // trả xong, 4 giờ sau mới ra (giả lập: lùi giờ vào và giờ trả 4 giờ) -> phí lên 75.000 đ, còn thiếu 40.000 đ
+  await pool.query(`UPDATE parking_sessions SET entered_at = entered_at - interval '4 hours', paid_at = paid_at - interval '4 hours' WHERE id=$1`, [id]);
+  const q = await s.quote(pool, id);
+  assert.deepEqual([q.fee, q.paid, q.due], [75000, 35000, 40000]);
+  const blocked = await exitA01(pool);
+  assert.deepEqual([blocked.code, blocked.body.fee, blocked.body.extra], [402, 40000, true]);
+  // trả phần chênh trên ứng dụng -> tổng 75.000 đ, ra được; trả lại lần nữa -> ALREADY_PAID
+  const extra = await pay('k2');
+  assert.deepEqual([extra.code, extra.body.fee], [200, 75000]);
+  assert.deepEqual(await pay('k3'), { code: 409, body: { error: 'ALREADY_PAID' } });
+  const exit = await exitA01(pool);
+  assert.deepEqual([exit.code, exit.body.session.fee], [200, 75000]);
+});
+
+test('trả sớm, quá 15 phút: nhân viên thu tiền mặt phần chênh thì ghi đúng tổng phí', async () => {
+  const pool = await makePool();
+  const { id, userId } = await parkedFor(pool, 150);
+  await s.pay(pool, { sessionId: id, method: 'ONLINE', paymentKey: `${userId}:k1`, userId });
+  await pool.query(`UPDATE parking_sessions SET entered_at = entered_at - interval '4 hours', paid_at = paid_at - interval '4 hours' WHERE id=$1`, [id]);
+  const exit = await exitA01(pool, { cash: true });
+  assert.deepEqual([exit.code, exit.body.session.fee], [200, 75000]);
+});
+
 test('key thanh toán đã dùng cho phiên khác: 422, không trả lại kết quả của phiên kia, phiên này vẫn chưa trả', async () => {
   const pool = await makePool();
   const { id } = await parkedFor(pool, 150);

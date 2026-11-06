@@ -93,9 +93,9 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     // Một biển số không giữ hai chỗ trùng giờ trong cùng bãi (bấm nhầm / giữ chỗ hộ). Biển số đã chuẩn hoá ở app.js.
     const dup = (await c.query(
       `SELECT s.slot_code FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
-       WHERE r.status IN ('ACTIVE','PENDING_SAGA') AND r.license_plate = $1
+       WHERE r.status IN ('ACTIVE','PENDING_SAGA') AND r.license_plate = $1 AND s.slot_code <> $4
          AND r.start_time < $2::timestamptz + make_interval(mins => $3) AND r.end_time > $2::timestamptz
-       LIMIT 1`, [licensePlate, start, durationMinutes])).rows[0];
+       LIMIT 1`, [licensePlate, start, durationMinutes, slotCode])).rows[0];   // cùng ô thì để ràng buộc khung giờ báo TIME_CONFLICT
     if (dup) throw new Abort(409, { error: 'PLATE_ALREADY_BOOKED', slotCode: dup.slot_code });
     let slot;
     if (instant) {
@@ -167,11 +167,13 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
       if (open) {
         plate = plate || open.license_plate;
         const q = await quoteIn(c, open.id);
-        const fee = open.paid_at ? open.fee : q.fee;     // đã trả trước thì giữ số tiền đã trả
-        // NV-04: chưa trả thì không cho ra; nhân viên thu tiền mặt = trả CASH + cho ra trong một giao dịch.
-        if (!open.paid_at && fee > 0 && !opts.cash) {
-          throw new Abort(402, { error: 'PAYMENT_REQUIRED', sessionId: open.id, fee, breakdown: q.breakdown });
+        // NV-04: còn tiền phải trả thì không cho ra; nhân viên thu tiền mặt = trả CASH + cho ra trong một giao dịch.
+        // Đã trả trong bãi: trong 15 phút giữ số đã trả; quá hạn mà phí tăng thì phải trả thêm phần chênh (q.due).
+        if (q.due > 0 && !opts.cash) {
+          throw new Abort(402, { error: 'PAYMENT_REQUIRED', sessionId: open.id, fee: q.due, total: q.fee, paid: q.paid,
+            extra: !!open.paid_at, breakdown: q.breakdown });
         }
+        const fee = q.due > 0 || !open.paid_at ? q.fee : open.fee;
         await c.query(
           `UPDATE parking_sessions SET exited_at=now(), fee=$2,
              paid_at = COALESCE(paid_at, CASE WHEN $2 > 0 THEN now() END),
@@ -195,15 +197,24 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
 const getSession = async (c, id) => (await c.query(
   `SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id WHERE ps.id=$1`, [id])).rows[0];
 
+// Trả tiền trong bãi xong có PAY_GRACE_MIN phút để ra. Quá hạn mà phí đã lên mức cao hơn -> phải trả thêm phần chênh
+// (trước đây trả sớm là khoá số tiền: trả lúc 1 giờ rồi ở thêm 5 giờ vẫn ra với giá 1 giờ).
+const PAY_GRACE_MIN = 15;
+
 // Phí của một phiên: đã ra thì tính đến giờ ra; còn trong bãi thì tạm tính đến now() của DB bãi.
+// paid: số đã trả; due: số còn phải trả bây giờ (0 nếu đã trả và còn trong 15 phút, hoặc phí chưa tăng).
 async function quoteIn(c, sessionId) {
   const r = (await c.query(
-    `SELECT ps.entered_at, COALESCE(ps.exited_at, now()) AS until, ps.exited_at, pr.*
+    `SELECT ps.entered_at, COALESCE(ps.exited_at, now()) AS until, ps.exited_at, ps.paid_at, ps.fee AS paid_fee,
+            (ps.paid_at IS NOT NULL AND now() - ps.paid_at > make_interval(mins => $2)) AS pay_expired,
+            ps.paid_at + make_interval(mins => $2) AS pay_deadline, pr.*
      FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
-     LEFT JOIN pricing_rules pr ON pr.vehicle_type = s.type WHERE ps.id=$1`, [sessionId])).rows[0];
+     LEFT JOIN pricing_rules pr ON pr.vehicle_type = s.type WHERE ps.id=$1`, [sessionId, PAY_GRACE_MIN])).rows[0];
   if (!r) return null;
   const q = r.vehicle_type ? calcFee(fromRow(r), r.entered_at, r.until) : { fee: 0, minutes: 0, breakdown: [] };
-  return { sessionId, ...q, final: !!r.exited_at };
+  const paid = r.paid_at ? (r.paid_fee ?? 0) : 0;
+  const due = !r.paid_at ? q.fee : (!r.exited_at && r.pay_expired && q.fee > paid ? q.fee - paid : 0);
+  return { sessionId, ...q, final: !!r.exited_at, paid, due, paidAt: r.paid_at, payDeadline: r.pay_deadline };
 }
 const quote = (pool, sessionId) => quoteIn(pool, sessionId);
 
@@ -223,9 +234,9 @@ async function payIn(c, { sessionId, method, paymentKey, userId }) {
     const cur = (await c.query(
       `SELECT paid_at, user_id FROM parking_sessions WHERE id=$1 FOR UPDATE`, [sessionId])).rows[0];
     if (!cur || (userId && cur.user_id !== userId)) throw new Abort(404, { error: 'SESSION_NOT_FOUND' });
-    if (cur.paid_at) throw new Abort(409, { error: 'ALREADY_PAID' });
     const q = await quoteIn(c, sessionId);
-    if (q.fee <= 0) throw new Abort(409, { error: 'NOTHING_TO_PAY' });
+    // Đã trả và chưa phát sinh thêm -> ALREADY_PAID; quá 15 phút mà phí tăng -> trả phần chênh (ghi tổng mới).
+    if (q.due <= 0) throw new Abort(409, { error: cur.paid_at ? 'ALREADY_PAID' : 'NOTHING_TO_PAY' });
     await c.query(
       `UPDATE parking_sessions SET paid_at=now(), payment_method=$2, payment_key=$3, fee=$4 WHERE id=$1`,
       [sessionId, method, paymentKey, q.fee]);

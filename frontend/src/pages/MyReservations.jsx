@@ -97,7 +97,7 @@ export default function MyReservations({ onGo }) {
           )}
           {kind === 'inside' && (
             <div className="banner info"><Icon name="info" />
-              <div><strong>Khi ra về</strong>Thanh toán phí ở mục “Lịch sử gửi xe”, rồi quét mã QR này ở cổng ra. Chưa trả thì nhân viên cổng thu tiền mặt.
+              <div><strong>Khi ra về</strong>Thanh toán phí ở mục “Lịch sử gửi xe” rồi ra cổng trong 15 phút, quét mã QR này ở cổng ra. Chưa trả thì nhân viên cổng thu tiền mặt.
                 {onGo && <div style={{ marginTop: 'var(--space-2)' }}><button className="primary" onClick={() => onGo('history')}><Icon name="card" /> Xem phí &amp; thanh toán</button></div>}
               </div>
             </div>
