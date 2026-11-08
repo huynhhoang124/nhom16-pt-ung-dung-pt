@@ -29,3 +29,9 @@ const summary = values => {
     p95: values[Math.floor(values.length * .95)], p99: values[Math.floor(values.length * .99)] };
 };
 console.log(JSON.stringify(Object.fromEntries(Object.entries(stages).map(([key, values]) => [key, summary(values)])), null, 2));
+
+for (const [service, port] of [['parking-a',8001], ['parking-b',8002], ['parking-c',8003]]) {
+  const metrics = execFileSync('docker', ['compose', 'exec', '-T', service, 'node', '-e',
+    "fetch('http://localhost:"+port+"/metrics').then(r=>r.text()).then(console.log)"], { encoding: 'utf8' });
+  console.log(service, metrics.split('\n').filter(line => line.startsWith('command_consumer_stage_seconds')).join('\n'));
+}

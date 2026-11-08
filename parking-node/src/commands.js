@@ -275,11 +275,16 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
           const { consumerTag } = await ch.consume(queue, (m) => {
             if (!m) { end(s); return; }
             if (m.fields?.redelivered) require('./metrics').incRedelivered();   // PD-25
+            const receivedAt = performance.now();
             // SAC chooses a consumer, NOT a serial async callback execution order.
             s.tail = s.tail.then(async () => {
               if (s.dead || stopped) return;
               try {
-                const result = await processCommand(m);
+                const metric = require('./metrics').consumerStage;
+                metric.observe({ stage: 'prefetch_wait' }, (performance.now() - receivedAt) / 1000);
+                const endProcessing = metric.startTimer({ stage: 'processing' });
+                let result;
+                try { result = await processCommand(m); } finally { endProcessing(); }
                 await afterCommit(result);
                 if (!s.dead) ch.ack(m); // processor returns only after COMMIT succeeds.
               } catch (error) {

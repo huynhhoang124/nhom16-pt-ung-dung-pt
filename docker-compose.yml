@@ -24,7 +24,12 @@ x-otel-env: &otel-env
 
 x-rabbit: &rabbit
   image: rabbitmq:3.13-management-alpine
-  environment: { RABBITMQ_DEFAULT_USER: parking, RABBITMQ_DEFAULT_PASS: parking, RABBITMQ_ERLANG_COOKIE: nhom16-cookie }
+  # Share CPU with Node/Postgres on the demo host; avoid Erlang scheduler busy waiting.
+  environment:
+    RABBITMQ_DEFAULT_USER: parking
+    RABBITMQ_DEFAULT_PASS: parking
+    RABBITMQ_ERLANG_COOKIE: nhom16-cookie
+    RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2 +sbwt none +sbwtdcpu none +sbwtdio none"
   healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"], interval: 5s, timeout: 5s, retries: 30 }
 
 x-node-env: &node-env

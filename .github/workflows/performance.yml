@@ -31,9 +31,14 @@ jobs:
           curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
           sleep 10
           node scripts/net.mjs B latency 1500
-      - run: bash scripts/do-so-sanh.sh tc80-acceptance
+      - run: |
+          mkdir -p tai-lieu/ket-qua-do
+          docker stats --format '{{json .}}' > tai-lieu/ket-qua-do/tc80-acceptance-cpu.log &
+          stats_pid=$!
+          trap 'kill "$stats_pid" 2>/dev/null || true' EXIT
+          bash scripts/do-so-sanh.sh tc80-acceptance
       - if: always()
-        run: node tests/load/command-stages.mjs | tee tai-lieu/ket-qua-do/tc80-acceptance-stages.json
+        run: node tests/load/command-stages.mjs | tee tai-lieu/ket-qua-do/tc80-acceptance-stages.log
       - run: node tests/load/check-invariants.mjs | tee tai-lieu/ket-qua-do/tc80-acceptance-invariants.log
       - if: always()
         uses: actions/upload-artifact@v4
