@@ -1,0 +1,89 @@
+name: GĐ2 integration
+on:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - 'tests/**'
+      - 'docker-compose*.yml'
+      - 'aggregator-service/**'
+      - 'parking-node/**'
+      - 'stats-service/**'
+      - 'rabbitmq/**'
+      - '.github/workflows/gd2.yml'
+concurrency:
+  group: gd2-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: [stats, replica, sac]
+    env:
+      COMPOSE_PROJECT_NAME: gd2-ci
+      COMMAND_MODE: http
+      RABBITMQ_URL: amqp://parking:parking@rabbitmq/%2F
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cp .env.example .env && node scripts/gen-keys.mjs
+      - run: npm ci --prefix aggregator-service && npm ci --prefix frontend
+      - if: matrix.profile == 'stats'
+        env:
+          COMPOSE_PROFILES: stats
+          USE_STATS_SERVICE: 'true'
+          STATS_E2E: '1'
+        run: |
+          docker compose up -d --build --wait
+          node --test --test-name-pattern='PD-23' tests/e2e.test.mjs
+      - if: matrix.profile == 'replica'
+        env:
+          COMPOSE_FILE: docker-compose.yml:docker-compose.scale.yml
+          COMPOSE_PROFILES: scale,coord,ha
+        run: |
+          docker compose up -d --build
+          for port in 8000 8001 8005; do
+            curl --fail --retry 40 --retry-all-errors --retry-delay 2 "http://localhost:$port/health"
+          done
+          node --test tests/tc71.pd15.test.mjs
+          TC71_PARKING_ID=E node --test tests/tc71.pd15.test.mjs
+      - if: matrix.profile == 'sac'
+        env:
+          COMPOSE_FILE: docker-compose.yml:docker-compose.pd13.yml
+          COMPOSE_PROFILES: ha,pd13
+          COMMAND_MODE: broker
+          RABBITMQ_URL: amqp://parking:parking@rabbitmq/%2F,amqp://parking:parking@rabbitmq-2/%2F,amqp://parking:parking@rabbitmq-3/%2F
+          PD13: '1'
+        run: |
+          docker compose up -d --build
+          curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
+          node --test --test-name-pattern='PD-05|TC60' tests/e2e.test.mjs
+      - if: failure()
+        run: docker compose logs --no-color --tail 60
+  jepsen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: TC78, ids: 'A,B,C,D,E,F', args: '--scenario tc78 --nemesis partition --seed 42 --time 120' }
+          - { name: TC79, ids: 'A,B,C', args: '--scenario tc79 --seed 42 --time 60' }
+          - { name: failover-42, ids: 'A,B,C,D,E,F', args: '--nemesis random --seed 42 --time 300' }
+          - { name: failover-43, ids: 'A,B,C,D,E,F', args: '--nemesis random --seed 43 --time 300' }
+    env:
+      JEPSEN_PARKING_IDS: ${{ matrix.ids }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: node --test tests/jepsen/*.test.mjs
+      - run: node tests/jepsen/run.mjs ${{ matrix.args }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: jepsen-${{ matrix.name }}
+          path: tests/jepsen/results/

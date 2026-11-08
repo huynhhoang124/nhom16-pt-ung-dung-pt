@@ -610,6 +610,42 @@ test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), o
   }
 );
 
+test('PD-23: CQRS agrees with parking nodes and resumes after restart', {
+  timeout: 180_000,
+  skip: process.env.STATS_E2E !== '1',
+}, async () => {
+  const token = await login('admin');
+  const from = new Date(Date.now() - 3 * 3600_000).toISOString();
+  const to = new Date(Date.now() + 3600_000).toISOString();
+  const query = new URLSearchParams({ from, to });
+  const slotCode = await freeSlot('A');
+  const digits = String(Date.now()).slice(-5);
+  const plate = `30A-${digits.slice(0, 3)}.${digits.slice(3)}`;
+  const entered = await node('A', `/api/slots/${slotCode}/enter`, { method: 'POST', body: { licensePlate: plate } });
+  assert.equal(entered.status, 200);
+  const id = entered.body.session.id;
+  assert.match(id, /^[0-9a-f-]{36}$/i);
+  sql('db-a', `UPDATE parking_sessions SET entered_at=now()-interval '90 minutes' WHERE id='${id}'`);
+  const exited = await node('A', `/api/slots/${slotCode}/exit`, { method: 'POST', body: { cash: true } });
+  assert.equal(exited.status, 200);
+  assert.ok(Number(exited.body.session.fee) > 0);
+
+  const direct = await node('A', `/api/stats?${query}`);
+  assert.equal(direct.status, 200);
+  const read = async () => {
+    const response = await agg(`/api/admin/stats?${query}`, { token });
+    const parking = response.body?.parkings?.find((p) => p.parkingId === 'A');
+    if (response.status !== 200 || !parking || parking.revenue !== direct.body.revenue) return false;
+    for (const key of ['sessions', 'exited', 'revenue', 'occupied', 'total']) {
+      assert.equal(parking[key], direct.body[key], key);
+    }
+    return true;
+  };
+  await until('CQRS projection', read, 30_000);
+  compose('restart stats-service');
+  await until('CQRS projection after restart', read, 30_000);
+});
+
 registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot });
 registerTc60Pd05Tests({ ROOT, sh, sql, KEY, node, login, freeSlot });
 
