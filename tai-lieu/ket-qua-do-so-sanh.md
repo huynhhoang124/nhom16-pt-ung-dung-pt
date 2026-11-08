@@ -9,7 +9,7 @@
 - Đồng bộ và bất đồng bộ gần như bằng nhau ở p95 (đặt 4517 so với 4166 ms); riêng lượt đồng bộ có 1,56% trả 503, lượt bất đồng bộ 0%. Một lượt chưa đủ để kết luận nguyên nhân.
 - **TC80 chưa chứng minh được:** bản "trước" (`COMMAND_MODE=http`, B chậm 1500 ms) đã có 504 = 0%, nên không có mức giảm 504 để so sánh. Bản "sau" (`broker`) có đặt p95 8454 ms, vượt ngưỡng 3000 ms.
 
-Chưa đối chiếu được "SLO mục 3.3" của PLAN B15: trong repo không có tài liệu nào nêu mục này, nên chỉ so với ngưỡng mặc định của `tests/load/k6.js`.
+Đối chiếu mục 3.3 của kế hoạch mở rộng GĐ2 v1.4, p95 đặt chỗ qua broker phải ≤ 300 ms trong vùng và ≤ 450 ms liên vùng. p95 tra cứu tổng hợp sáu bãi phải ≤ 250 ms. Các lượt đo dưới đây vượt cả ngưỡng chạy k6 và SLO của kế hoạch.
 
 **Cấu hình thật của từng dòng**
 - `http`, `broker`: `docker-compose.yml`, 3 bãi, 1 Aggregator. Dòng "3 (A–C)" dùng lại số của `http`.

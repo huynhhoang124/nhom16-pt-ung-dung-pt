@@ -198,6 +198,13 @@ async function main() {
   const reconcileQueue = createReconcileQueue(reg, cache, push, log, 500, leader);
   // PT-01: mỗi bản Aggregator một queue riêng -> bản nào cũng nhận đủ sự kiện, đẩy cho client đang nối với nó
   // (không cần Redis adapter). Queue durable: bản này tắt thì tin chờ, bật lại xử lý tiếp.
+  let replayStarted = false;
+  const onEventConsumerReady = () => {
+    if (replayStarted) return;
+    replayStarted = true;
+    void replayRecentEvents(env('RABBITMQ_URL', 'amqp://localhost'), cache, push, log)
+      .catch((error) => log.warn('Replay events.stream failed', { error: error.message }));
+  };
   const eventTracer = trace.getTracer('aggregator/events');
   startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e, parent) => {
     eventTracer.startActiveSpan('event.process', { kind: SpanKind.CONSUMER,
@@ -213,7 +220,7 @@ async function main() {
         throw error;
       } finally { span.end(); }
     });
-  }, log, { queue: `aggregator.slot-updates.${instance}` });
+  }, log, { queue: `aggregator.slot-updates.${instance}`, onReady: onEventConsumerReady });
 
   const onChange = (n, prev) => {
     log.info(`Bãi ${n.id}: ${prev} -> ${n.status}`);
@@ -272,8 +279,6 @@ async function main() {
 
   // PD-11: mỗi vòng đọc lại healthIntervalMs (đổi qua etcd thì vòng sau áp dụng ngay, không cần restart)
   const scheduleCheck = () => setTimeout(() => check().finally(scheduleCheck), config.get('healthIntervalMs'));
-  void replayRecentEvents(env('RABBITMQ_URL', 'amqp://localhost'), cache, push, log)
-    .catch((error) => log.warn('Replay events.stream failed', { error: error.message }));
   scheduleCheck();
 
   const port = Number(env('PORT', 8000));

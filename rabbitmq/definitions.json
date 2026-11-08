@@ -24,6 +24,7 @@
     }
   ],
   "exchanges": [
+    { "name": "parking.events", "vhost": "/", "type": "topic", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
     {
       "name": "parking.commands",
       "vhost": "/",

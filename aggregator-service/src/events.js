@@ -48,7 +48,7 @@ const slotsFromCache = (cache, parkingId) =>
 
 // Consumer: queue durable, ack thủ công sau khi xử lý, tự kết nối lại sau 5 s nếu broker sập.
 // Mặc định nghe sự kiện slot; NV-08 dùng lại cho exchange user.notifications.
-function startConsumer(url, onEvent, log = console, { exchange = EXCHANGE, queue = QUEUE, pattern = 'parking.#' } = {}) {
+function startConsumer(url, onEvent, log = console, { exchange = EXCHANGE, queue = QUEUE, pattern = 'parking.#', onReady } = {}) {
   const connectAny = makeConnector(url);   // PT-03: url có thể là danh sách nút của cụm
   async function run() {
     let conn;
@@ -72,6 +72,7 @@ function startConsumer(url, onEvent, log = console, { exchange = EXCHANGE, queue
         ch.ack(m);
       });
       log.log('Đã kết nối RabbitMQ, đang nhận tin', { queue });
+      onReady?.();
     } catch (e) {
       log.error('RabbitMQ chưa sẵn sàng, thử lại sau 5s', { error: e.message });
       if (conn) conn.close().catch(() => {});   // sự kiện 'close' sẽ hẹn lần thử lại
@@ -177,8 +178,8 @@ async function replayRecentEvents(
         consumerTag = result.consumerTag;
 
         pub.publish(
-          'parking.events',
-          'pd22.replay.marker',
+          '',
+          'events.stream',
           Buffer.from(JSON.stringify({
             _pd22ReplayMarker: true,
             markerId,
