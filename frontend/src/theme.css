@@ -388,3 +388,16 @@ tr.clickable { cursor: pointer; }
   .foot-bottom-in { padding: 12px var(--space-4); }
 }
 @media (prefers-reduced-motion: reduce) { .live .dot { animation: none; } }
+
+/* ───── Bề rộng trang ─────
+   Trước giới hạn 1200px nên màn rộng (1920px) hở mỗi bên hơn 300px. Giờ: người dùng tối đa 1440px,
+   nhân viên/quản trị 1600px; lề hai bên co giãn theo màn (16–40px). Header, thân trang, footer dùng chung
+   một biến nên luôn thẳng lề nhau. */
+.theme-brand { --page-max: 1440px; --page-pad: clamp(16px, 3vw, 40px); }
+.theme-brand:has(main.dense) { --page-max: 1600px; }
+.theme-brand main, .theme-brand main.dense { max-width: var(--page-max); padding-left: var(--page-pad); padding-right: var(--page-pad); }
+.theme-brand .bar-in, .theme-brand .site-foot-in, .theme-brand .foot-bottom-in,
+.app:has(main.dense) .bar-in, .app:has(main.dense) .site-foot-in, .app:has(main.dense) .foot-bottom-in {
+  max-width: var(--page-max); padding-left: var(--page-pad); padding-right: var(--page-pad); }
+/* Danh sách bãi giãn hết chiều ngang (auto-fit) thay vì chừa cột trống bên phải */
+.theme-brand .cards { grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); }
