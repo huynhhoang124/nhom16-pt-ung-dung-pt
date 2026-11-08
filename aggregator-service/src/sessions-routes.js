@@ -101,7 +101,7 @@ function mountSessions(app, {
 
   // UX-02: thống kê gom từ các bãi (truy vấn phân tán). Bãi lỗi -> ghi tên trong `unavailable`, số liệu là MỘT PHẦN.
   // STAFF chỉ xem bãi của mình.
-  
+
   app.get('/api/admin/stats', need('STAFF', 'ADMIN'), async (req, res) => {
     const q = new URLSearchParams(
       Object.entries({

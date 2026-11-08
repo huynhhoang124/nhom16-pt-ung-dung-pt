@@ -263,11 +263,11 @@ async function main() {
         console.log(`${tc79.passed ? 'PASS' : 'FAIL'} TC79: ${tc79.details}`);
         if (!tc79.passed) failures.push(tc79.details);
       }
-      if (options.nemesis === 'random') {
-        const types = (Array.isArray(nemesisEntry) ? nemesisEntry : []).map((entry) => entry.type);
-        if (!types.includes('nemesis:db') || !types.includes('nemesis:leader')) {
-          failures.push('random nemesis did not complete both DB failover and leader pause');
-        }
+    }
+    if (options.nemesis === 'random') {
+      const types = (Array.isArray(nemesisEntry) ? nemesisEntry : []).map((entry) => entry.type);
+      if (!types.includes('nemesis:db') || !types.includes('nemesis:leader')) {
+        failures.push('random nemesis did not complete both DB failover and leader pause');
       }
     }
     if (checks.some((check) => !check.passed)) failures.push('one or more invariants failed');

@@ -223,21 +223,40 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
   });
 
   // Nghiệp vụ 1: tra cứu toàn hệ thống (scatter–gather, kết quả một phần khi có bãi lỗi)
-  const localAvailability = async () => Promise.all(reg.ordered()
-    .filter((n) => (n.zone ?? zone) === zone).map(async (n) => {
-      if (n.status === 'OFFLINE') return { parkingId: n.id, status: 'OFFLINE' };
-      try {
-        const response = await reg.hedgedGet(n, '/api/availability');
-        if (!response.ok) throw new Error(`${n.id} availability -> ${response.status}`);
-        return {
-          parkingId: n.id,
-          status: n.status,
-          ...(await response.json()),
-        };
-      } catch {
-        return { parkingId: n.id, status: 'OFFLINE' };
-      }
-    }));
+  const availabilitySnapshots = new Map();
+  async function parkingAvailability(n) {
+    const offline = { parkingId: n.id, status: 'OFFLINE' };
+    if (n.status === 'OFFLINE') {
+      availabilitySnapshots.delete(n.id);
+      return offline;
+    }
+
+    let state = availabilitySnapshots.get(n.id);
+    if (state?.url !== n.url) {
+      state = { url: n.url };
+      availabilitySnapshots.set(n.id, state);
+    }
+    const age = Date.now() - state.fetchedAt;
+    if (age < 200) return { ...state.data, status: n.status };
+    if (!state.refresh) {
+      state.refresh = (async () => {
+        try {
+          const response = await reg.hedgedGet(n, '/api/availability');
+          if (!response.ok) return offline;
+          state.data = await response.json();
+          state.fetchedAt = Date.now();
+          return { ...state.data, status: n.status };
+        } catch {
+          return offline;
+        }
+      })().finally(() => { state.refresh = null; });
+    }
+    // Reuse a recent snapshot while one refresh is in flight for this bãi.
+    if (age < 3000) return { ...state.data, status: n.status, stale: true };
+    return state.refresh;
+  }
+  const localAvailability = () => Promise.all(reg.ordered()
+    .filter((n) => (n.zone ?? zone) === zone).map(parkingAvailability));
   const availability = async (scope) => {
     const local = localAvailability();
     if (scope === 'zone') {

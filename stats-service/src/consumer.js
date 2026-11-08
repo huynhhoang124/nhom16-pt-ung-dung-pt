@@ -143,7 +143,7 @@ async function processEvent(message, offset) {
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (session_id)
          DO UPDATE SET exited_at = EXCLUDED.exited_at,
-                       entered_at = COALESCE(stats_sessions.entered_at, EXCLUDED.entered_at),
+                       entered_at = COALESCE(EXCLUDED.entered_at, stats_sessions.entered_at),
                        updated_at = NOW()`,
         [String(sessionId), String(parkingId), event.enteredAt ?? null, event.exitedAt ?? occurredAt],
       );
@@ -206,27 +206,27 @@ async function startConsumer() {
       { stream: STREAM_NAME, offset: startOffset },
       (message) => {
         pending = pending.then(async () => {
-        if (failed) return;
-        const offset = BigInt(message.offset);
+          if (failed) return;
+          const offset = BigInt(message.offset);
 
-        try {
-          await processEvent(message, offset.toString());
+          try {
+            await processEvent(message, offset.toString());
 
-          await pool.query(
-            `UPDATE stats_consumer_offsets
-             SET last_offset = GREATEST(last_offset, $2),
-                 updated_at = NOW()
-             WHERE consumer_name = $1`,
-            [CONSUMER_NAME, offset.toString()]
-          );
-        } catch (error) {
-          failed = true;
-          console.error(
-            `[stats-service] Failed at offset ${offset}:`,
-            error.message
-          );
-          process.exit(1);
-        }
+            await pool.query(
+              `UPDATE stats_consumer_offsets
+               SET last_offset = GREATEST(last_offset, $2),
+                   updated_at = NOW()
+               WHERE consumer_name = $1`,
+              [CONSUMER_NAME, offset.toString()]
+            );
+          } catch (error) {
+            failed = true;
+            console.error(
+              `[stats-service] Failed at offset ${offset}:`,
+              error.message
+            );
+            process.exit(1);
+          }
         });
         return pending;
       }

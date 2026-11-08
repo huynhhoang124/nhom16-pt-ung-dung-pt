@@ -742,23 +742,18 @@ export function registerTc60Pd05Tests({
         'Only the first command should create a reservation for the selected slot'
       );
 
-      const duplicateReplies = querySql(
+      // A redelivery can enqueue another reply. Each reply must match the durable inbox result.
+      const invalidReplies = querySql(
         'db-a',
         `SELECT count(*)
-         FROM (
-           SELECT command_id
-           FROM command_reply_outbox
-           WHERE command_id LIKE '${messagePrefix}%'
-           GROUP BY command_id
-           HAVING count(*) > 1
-         ) AS duplicates`
+         FROM inbox_messages i
+         LEFT JOIN command_reply_outbox o ON o.command_id = i.message_id
+         WHERE i.message_id LIKE '${messagePrefix}%'
+           AND (o.id IS NULL
+                OR o.payload->'result' IS DISTINCT FROM i.result
+                OR (o.payload->>'statusCode')::int IS DISTINCT FROM i.status_code)`
       );
-
-      assert.equal(
-        duplicateReplies,
-        '0',
-        'A command must not create duplicate reply outbox records'
-      );
+      assert.equal(invalidReplies, '0', 'Every command must have a reply matching its inbox result');
 
       console.log(
         `TC60 passed: 100 commands; ` +

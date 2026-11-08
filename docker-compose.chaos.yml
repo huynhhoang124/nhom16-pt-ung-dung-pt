@@ -10,7 +10,7 @@ services:
     volumes: [./toxiproxy/toxiproxy.json:/config/toxiproxy.json:ro]
     ports: ["8474:8474"]          # API điều khiển
     depends_on: [parking-b]
-  
+
   parking-b:
     environment:
       NODE_URL: http://toxiproxy:18002

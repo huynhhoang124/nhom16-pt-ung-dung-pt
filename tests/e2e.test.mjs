@@ -618,28 +618,43 @@ test('PD-23: CQRS agrees with parking nodes and resumes after restart', {
   const from = new Date(Date.now() - 3 * 3600_000).toISOString();
   const to = new Date(Date.now() + 3600_000).toISOString();
   const query = new URLSearchParams({ from, to });
-  const slotCode = await freeSlot('A');
-  const digits = String(Date.now()).slice(-5);
-  const plate = `30A-${digits.slice(0, 3)}.${digits.slice(3)}`;
-  const entered = await node('A', `/api/slots/${slotCode}/enter`, { method: 'POST', body: { licensePlate: plate } });
-  assert.equal(entered.status, 200);
-  const id = entered.body.session.id;
-  assert.match(id, /^[0-9a-f-]{36}$/i);
-  sql('db-a', `UPDATE parking_sessions SET entered_at=now()-interval '90 minutes' WHERE id='${id}'`);
-  const exited = await node('A', `/api/slots/${slotCode}/exit`, { method: 'POST', body: { cash: true } });
-  assert.equal(exited.status, 200);
-  assert.ok(Number(exited.body.session.fee) > 0);
-
-  const direct = await node('A', `/api/stats?${query}`);
-  assert.equal(direct.status, 200);
+  const ids = ['A', 'B', 'C'];
+  const plateStart = Date.now() % 99_800;
+  const counts = {};
+  for (const [index, parkingId] of ids.entries()) {
+    const slotCode = await freeSlot(parkingId);
+    for (let trip = 0; trip < 50; trip++) {
+      const digits = String(plateStart + index * 50 + trip).padStart(5, '0');
+      const path = `/api/slots/${slotCode}`;
+      const entered = await node(parkingId, `${path}/enter`, {
+        method: 'POST',
+        body: { licensePlate: `30A-${digits.slice(0, 3)}.${digits.slice(3)}` },
+      });
+      assert.equal(entered.status, 200);
+      if (parkingId === 'A' && trip === 0) {
+        const id = entered.body.session.id;
+        assert.match(id, /^[0-9a-f-]{36}$/i);
+        sql('db-a', `UPDATE parking_sessions SET entered_at=now()-interval '90 minutes' WHERE id='${id}'`);
+      }
+      const exited = await node(parkingId, `${path}/exit`, { method: 'POST', body: { cash: true } });
+      assert.equal(exited.status, 200);
+    }
+    const direct = await node(parkingId, `/api/stats?${query}`);
+    assert.equal(direct.status, 200);
+    assert.equal(direct.body.sessions, 50);
+    counts[parkingId] = direct.body;
+  }
+  assert.ok(counts.A.revenue > 0);
   const read = async () => {
     const response = await agg(`/api/admin/stats?${query}`, { token });
-    const parking = response.body?.parkings?.find((p) => p.parkingId === 'A');
-    if (response.status !== 200 || !parking || parking.revenue !== direct.body.revenue) return false;
-    for (const key of ['sessions', 'exited', 'revenue', 'occupied', 'total']) {
-      assert.equal(parking[key], direct.body[key], key);
-    }
-    return true;
+    if (response.status !== 200) return false;
+    return ids.every((id) => {
+      const parking = response.body.parkings?.find((p) => p.parkingId === id);
+      if (!parking) return false;
+      return ['sessions', 'exited', 'revenue', 'occupied', 'total', 'avgMinutes']
+        .every((key) => parking[key] === counts[id][key])
+        && parking.byHour.every((count, hour) => count === counts[id].byHour[hour]);
+    });
   };
   await until('CQRS projection', read, 30_000);
   compose('restart stats-service');

@@ -61,6 +61,31 @@ test('TC04 bãi OFFLINE: ghi bị từ chối ngay (503); chi tiết bãi trả 
   assert.equal(online.body.slots.length, 3);
 });
 
+test('PD-20 reuses a recent availability snapshot while one refresh runs', async (t) => {
+  const { agg } = await system(t);
+  let calls = 0;
+  let finishRefresh;
+  const refresh = new Promise((resolve) => { finishRefresh = resolve; });
+  agg.reg.hedgedGet = async (n) => {
+    if (n.id !== 'A') return Response.json({ parkingId: n.id, available: 1, total: 1 });
+    calls += 1;
+    if (calls > 1) await refresh;
+    return Response.json({ parkingId: 'A', available: 1, total: 1 });
+  };
+  try {
+    assert.equal((await agg.call('/api/parkings/availability')).body[0].available, 1);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const results = await Promise.all([
+      agg.call('/api/parkings/availability'),
+      agg.call('/api/parkings/availability'),
+    ]);
+    assert.ok(results.every(({ body }) => body.find((p) => p.parkingId === 'A')?.stale));
+    assert.equal(calls, 2);
+  } finally {
+    finishRefresh();
+  }
+});
+
 test('PD-20 ETag: version không đổi trả 304, version thay đổi trả 200', async (t) => {
   const { agg } = await system(t);
 

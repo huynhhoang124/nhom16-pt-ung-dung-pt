@@ -250,7 +250,7 @@ function makeRegistry({
     }
 
     recordGetRequest();
-    
+
     const effectiveMs = ms ?? getTimeout();
 
     const firstEndpoint = await resolveUrl(replicas[0].url);

@@ -1,4 +1,5 @@
 // Nhận sự kiện slot từ RabbitMQ và giữ cache trạng thái slot trong RAM (chỉ-đọc, nguồn gốc ở DB bãi).
+const { randomUUID } = require('node:crypto');
 const hlc = require('./hlc');
 const { observeHlc } = require('./metrics');
 const { makeConnector } = require('./amqp-connect');
@@ -14,6 +15,7 @@ function applyEvent(cache, e) {
   const validHlc = observeHlc(e.hlc, e.parkingId);
   if (validHlc) hlc.update(e.hlc);
 
+  if (!e.parkingId || !e.slot || typeof e.status !== 'string' || !Number.isFinite(e.version)) return false;
   const k = `${e.parkingId}:${e.slot}`;
   const cur = cache.get(k);
 
@@ -95,7 +97,7 @@ async function replayRecentEvents(
   let consumerTag;
   let settled = false;
 
-  const markerId = `${process.pid}-${Date.now()}`;
+  const markerId = randomUUID();
 
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => void finish(new Error("events.stream replay timed out")), 8000);
