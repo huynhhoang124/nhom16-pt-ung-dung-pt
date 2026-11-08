@@ -1,7 +1,12 @@
 const { normalizePlate } = require("./plate");
 // Shared lock permits concurrent user operations; broadcast mutation takes the exclusive lock.
-async function guardAdminIn(c, { slotCode, licensePlate, unlock = false }) {
-  await c.query("SELECT id FROM admin_command_gate WHERE id=1 FOR SHARE");
+const ADMIN_GATE_SQL = "SELECT id FROM admin_command_gate WHERE id=1 FOR SHARE";
+async function guardAdminIn(c, input) {
+  await c.query(ADMIN_GATE_SQL);
+  return checkAdminIn(c, input);
+}
+// Caller must already hold the shared gate in this transaction.
+async function checkAdminIn(c, { slotCode, licensePlate, unlock = false }) {
   // Read after acquiring the gate: a broadcast may commit while the lock is waiting.
   const { rows: [denied] } = await c.query(
     `SELECT EXISTS(SELECT 1 FROM banned_plates WHERE license_plate=$1) AS banned,
@@ -16,4 +21,4 @@ async function guardAdminIn(c, { slotCode, licensePlate, unlock = false }) {
   };
   return null;
 }
-module.exports = { guardAdminIn };
+module.exports = { guardAdminIn, checkAdminIn, ADMIN_GATE_SQL };

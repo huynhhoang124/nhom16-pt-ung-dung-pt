@@ -7,7 +7,7 @@ const { requestId } = require('./log');
 const hlc = require('./hlc');
 const { context, propagation } = require('@opentelemetry/api');
 const { fenceIn } = require('./fencing');
-const { guardAdminIn } = require('./admin-guards');
+const { guardAdminIn, checkAdminIn, ADMIN_GATE_SQL } = require('./admin-guards');
 
 // Dừng giao dịch với kết quả nghiệp vụ (409, 404...) thay vì lỗi hệ thống.
 class Abort {
@@ -93,11 +93,10 @@ const findByRequest = (pool, requestId) =>
 // Mốc thời gian lấy theo now() của DB bãi.
 // Bodies below use the caller's transaction; no BEGIN/COMMIT inside inbox processing.
 async function business(c, fn, recover) {
-  await c.query('SAVEPOINT business_operation');
+  await c.query('SAVEPOINT business_operation; ' + ADMIN_GATE_SQL);
   try {
-    const out = await fn();
-    await c.query('RELEASE SAVEPOINT business_operation');
-    return out;
+    // The transaction owner commits/rolls back after this operation, releasing the savepoint there.
+    return await fn();
   } catch (e) {
     await c.query('ROLLBACK TO SAVEPOINT business_operation');
     await c.query('RELEASE SAVEPOINT business_operation');
@@ -116,7 +115,7 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
   const prior = await replayOr(null);
   if (prior) return prior;
   return business(c, async () => {
-    const denied = await guardAdminIn(c, { slotCode, licensePlate });
+    const denied = await checkAdminIn(c, { slotCode, licensePlate });
     if (denied) throw new Abort(denied.code, denied.body);
     // An immediate reservation uses the transaction clock in INSERT, avoiding a separate round trip.
     const now = startTime ? (await c.query('SELECT now() AS now')).rows[0].now : null;
