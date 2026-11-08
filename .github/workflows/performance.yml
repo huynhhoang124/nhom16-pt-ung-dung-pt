@@ -62,7 +62,7 @@ jobs:
           for mode in false true; do
             HEDGE_ENABLED=$mode docker compose up -d --no-deps aggregator
             sleep 10
-            docker run --rm --network pd20-perf_default               --mount "type=bind,source=$PWD/tests/load,target=/work,readonly"               --mount "type=bind,source=$PWD/tai-lieu/ket-qua-do/pd20,target=/results"               -e SUMMARY_PATH=/results/hedge-$mode.json grafana/k6 run /work/pd20.k6.js
+            docker run --rm --user "$(id -u):$(id -g)" --network pd20-perf_default               --mount "type=bind,source=$PWD/tests/load,target=/work,readonly"               --mount "type=bind,source=$PWD/tai-lieu/ket-qua-do/pd20,target=/results"               -e SUMMARY_PATH=/results/hedge-$mode.json grafana/k6 run /work/pd20.k6.js
           done
           node --input-type=module -e '
             import fs from "node:fs";
