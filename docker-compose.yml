@@ -159,7 +159,7 @@ services:
   db-agg: { <<: *pg, volumes: [db-agg-data:/var/lib/postgresql/data] }
 
   # PD-23: Database riêng cho Stats CQRS
-  db-stats: { <<: *pg, volumes: [db-stats-data:/var/lib/postgresql/data] }
+  db-stats: { <<: *pg, profiles: [stats], volumes: [db-stats-data:/var/lib/postgresql/data] }
 
   parking-a:
     build: ./parking-node
@@ -250,6 +250,8 @@ services:
 
     # PD-23: CQRS statistics service
   stats-service:
+    profiles: [stats]
+    restart: on-failure
     build: ./stats-service
     environment:
       PORT: 8011
@@ -263,8 +265,6 @@ services:
         condition: service_healthy
       rabbitmq:
         condition: service_healthy
-    ports:
-    - "8011:8011"
 
   frontend:
     build: ./frontend

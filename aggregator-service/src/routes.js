@@ -281,21 +281,6 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
     const n = reg.get(req.params.id);
     if (!n) return res.status(404).json({ error: 'PARKING_NOT_FOUND' });
 
-    // ETag được tính bằng tổng version của các slot trong events cache.
-    const cachedSlots = slotsFromCache(cache, n.id);
-    const versionSum = cachedSlots.reduce((sum, slot) => sum + (Number(slot.version) || 0), 0);
-    const etag = `"${versionSum}"`;
-
-    res.set('ETag', etag);
-
-    const ifNoneMatch = req.get('If-None-Match');
-    if (ifNoneMatch && ifNoneMatch.split(',').some((tag) => {
-      const value = tag.trim().replace(/^W\//, '');
-      return value === etag || value === '*';
-    })) {
-      return res.status(304).end();
-    }
-
     if (n.status !== 'OFFLINE') {
       try {
         const response = await reg.hedgedGet(n, '/api/slots');
@@ -315,7 +300,7 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
       ...info(n),
       status: n.status,
       stale: true,
-      slots: cachedSlots,
+      slots: slotsFromCache(cache, n.id),
     });
   });
 

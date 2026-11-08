@@ -36,41 +36,20 @@ app.get('/api/stats', async (req, res) => {
   }
 
   try {
-    const [hourlyResult, sessionsResult, stateResult] = await Promise.all([
+    const [sessionsResult, stateResult] = await Promise.all([
       pool.query(
-        `SELECT parking_id,
-                COALESCE(SUM(entries), 0)::int AS entries,
-                COALESCE(SUM(exits), 0)::int AS exits,
-                COALESCE(SUM(revenue), 0)::numeric(14, 2) AS revenue,
-                EXTRACT(HOUR FROM hour AT TIME ZONE 'UTC')::int AS hour_of_day
-         FROM stats_hourly
-         WHERE hour >= $1 AND hour < $2
-         GROUP BY parking_id, hour_of_day`,
-        [from, to]
-      ),
-      pool.query(
-        `SELECT parking_id,
-                COUNT(*) FILTER (
-                  WHERE entered_at >= $1 AND entered_at < $2
-                )::int AS sessions,
-                COUNT(*) FILTER (
-                  WHERE exited_at >= $1 AND exited_at < $2
-                )::int AS exited,
-                COALESCE(
-                  ROUND(AVG(EXTRACT(EPOCH FROM (exited_at - entered_at)) / 60)
-                    FILTER (
-                      WHERE entered_at IS NOT NULL
-                        AND exited_at IS NOT NULL
-                        AND exited_at >= $1 AND exited_at < $2
-                    )),
-                  0
-                )::int AS avg_minutes
+        `SELECT parking_id, count(*)::int AS sessions,
+                count(exited_at)::int AS exited,
+                COALESCE(sum(fee), 0)::int AS revenue,
+                COALESCE(round(avg(EXTRACT(EPOCH FROM (exited_at - entered_at)) / 60)), 0)::int AS avg_minutes,
+                array_agg(EXTRACT(HOUR FROM entered_at AT TIME ZONE 'Asia/Ho_Chi_Minh')::int) AS hours
          FROM stats_sessions
+         WHERE entered_at >= $1 AND entered_at < $2
          GROUP BY parking_id`,
-        [from, to]
+        [from, to],
       ),
       pool.query(
-        `SELECT parking_id, available, total
+        `SELECT parking_id, occupied, total
          FROM stats_parking_state`
       ),
     ]);
@@ -95,25 +74,19 @@ app.get('/api/stats', async (req, res) => {
       return map.get(id);
     }
 
-    for (const row of hourlyResult.rows) {
-      const p = getParking(row.parking_id);
-      p.entries += row.entries;
-      p.exits += row.exits;
-      p.revenue += Number(row.revenue);
-      p.byHour[row.hour_of_day] += row.entries;
-    }
-
     for (const row of sessionsResult.rows) {
       const p = getParking(row.parking_id);
-      p.sessions = row.sessions;
-      p.exited = row.exited;
+      p.sessions = p.entries = row.sessions;
+      p.exited = p.exits = row.exited;
+      p.revenue = row.revenue;
       p.avgMinutes = row.avg_minutes;
+      for (const hour of row.hours) p.byHour[hour] += 1;
     }
 
     for (const row of stateResult.rows) {
       const p = getParking(row.parking_id);
       p.total = row.total;
-      p.occupied = Math.max(0, row.total - row.available);
+      p.occupied = row.occupied;
     }
 
     const parkings = [...map.values()];
@@ -164,7 +137,7 @@ async function main() {
 
   startConsumer().catch((error) => {
     console.error('[stats-service] Consumer failed:', error);
-    process.exitCode = 1;
+    process.exit(1);
   });
 }
 

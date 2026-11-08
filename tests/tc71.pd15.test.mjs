@@ -11,6 +11,10 @@ try {
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const AGG = process.env.AGGREGATOR_URL ?? 'http://localhost:8000';
+const PARKING_ID = process.env.TC71_PARKING_ID ?? 'A';
+assert.match(PARKING_ID, /^[A-F]$/);
+const DB = `db-${PARKING_ID.toLowerCase()}`;
+const REPLICA = `${DB}-replica`;
 const DEMO_PASSWORD = process.env.DEMO_PASSWORD ?? '123456';
 
 function docker(...args) {
@@ -40,7 +44,7 @@ function psql(service, query) {
 
 function replicaDelay() {
   const output = psql(
-    'db-a-replica',
+    REPLICA,
     `SELECT setting, COALESCE(source, ''), context
      FROM pg_settings
      WHERE name = 'recovery_min_apply_delay'`,
@@ -62,7 +66,7 @@ function replicaShell(script) {
     'exec',
     '-T',
     '-u', 'postgres',
-    'db-a-replica',
+    REPLICA,
     'sh',
     '-c',
     script,
@@ -170,7 +174,7 @@ async function loginUser() {
 
 function availableSlot() {
   return psql(
-    'db-a',
+    DB,
     `SELECT slot_code
      FROM parking_slots
      WHERE status = 'AVAILABLE'
@@ -181,7 +185,7 @@ function availableSlot() {
 
 function replicaIsBehind(lsn) {
   const result = psql(
-    'db-a-replica',
+    REPLICA,
     `SELECT CASE
        WHEN pg_last_wal_replay_lsn() < '${lsn}'::pg_lsn THEN 'yes'
        ELSE 'no'
@@ -228,7 +232,7 @@ test('TC71 - Read-your-writes khi replica trễ 2 giây', {
 
     // Remote apply sẽ làm COMMIT chờ replica replay, không phù hợp TC71.
     const syncSettings = psql(
-      'db-a',
+      DB,
       `SELECT current_setting('synchronous_commit'),
               current_setting('synchronous_standby_names')`,
     );
@@ -259,7 +263,7 @@ test('TC71 - Read-your-writes khi replica trễ 2 giây', {
     applyReplicaDelay();
 
     assert.equal(
-      psql('db-a-replica', 'SELECT pg_reload_conf()'),
+      psql(REPLICA, 'SELECT pg_reload_conf()'),
       't',
       'Replica phải reload được cấu hình',
     );
@@ -270,7 +274,7 @@ test('TC71 - Read-your-writes khi replica trễ 2 giây', {
     );
 
     // Ghi reservation qua Aggregator vào Primary A.
-    const created = await request('/api/parkings/A/reservations', {
+    const created = await request(`/api/parkings/${PARKING_ID}/reservations`, {
       method: 'POST',
       token: user.token,
       headers: {
@@ -289,7 +293,7 @@ test('TC71 - Read-your-writes khi replica trễ 2 giây', {
     // tìm lại bằng requestId để vẫn có thể dọn dữ liệu.
     if (!reservationId) {
       reservationId = psql(
-        'db-a',
+        DB,
         `SELECT id
          FROM reservations
          WHERE request_id = ${sqlLiteral(requestId)}
@@ -330,7 +334,7 @@ test('TC71 - Read-your-writes khi replica trễ 2 giây', {
     const read = await request('/api/me/reservations', {
       token: user.token,
       headers: {
-        'x-min-lsn': JSON.stringify({ A: lsn }),
+        'x-min-lsn': JSON.stringify({ [PARKING_ID]: lsn }),
       },
     });
 
@@ -346,7 +350,7 @@ test('TC71 - Read-your-writes khi replica trễ 2 giây', {
     );
 
     const found = read.body.reservations.find(
-      (item) => item.id === reservationId && item.parkingId === 'A',
+      (item) => item.id === reservationId && item.parkingId === PARKING_ID,
     );
 
     assert.ok(
@@ -375,7 +379,7 @@ test('TC71 - Read-your-writes khi replica trễ 2 giây', {
         restoreReplicaConfig();
 
         assert.equal(
-        psql('db-a-replica', 'SELECT pg_reload_conf()'),
+        psql(REPLICA, 'SELECT pg_reload_conf()'),
         't',
         'Không reload được cấu hình sau khi khôi phục',
         );
@@ -403,7 +407,7 @@ test('TC71 - Read-your-writes khi replica trễ 2 giây', {
     if (user && requestId && !reservationId) {
       try {
         reservationId = psql(
-          'db-a',
+          DB,
           `SELECT id
            FROM reservations
            WHERE request_id = ${sqlLiteral(requestId)}
@@ -417,7 +421,7 @@ test('TC71 - Read-your-writes khi replica trễ 2 giây', {
     if (user && reservationId) {
       try {
         const removed = await request(
-          `/api/parkings/A/reservations/${encodeURIComponent(reservationId)}`,
+          `/api/parkings/${PARKING_ID}/reservations/${encodeURIComponent(reservationId)}`,
           {
             method: 'DELETE',
             token: user.token,

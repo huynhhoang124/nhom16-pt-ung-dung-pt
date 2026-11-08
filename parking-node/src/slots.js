@@ -1,6 +1,7 @@
 // Nghiệp vụ của một bãi. Mọi thay đổi trạng thái slot đi kèm 1 dòng parking_events (outbox)
 // trong CÙNG giao dịch => có sự kiện khi và chỉ khi DB đã commit.
 
+const { randomUUID } = require('node:crypto');
 const { calcFee, fromRow } = require('./pricing');
 const { requestId } = require('./log');
 const hlc = require('./hlc');
@@ -49,7 +50,8 @@ async function tx(pool, fn) {
 async function emit(c, parkingId, type, slotCode, status, version, plate,extra = {}, eventHlc = null) {
   const occ = (await c.query(
     `SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available,
-            count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total
+            count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total,
+            count(*) FILTER (WHERE status='OCCUPIED')::int AS occupied
      FROM parking_slots`
   )).rows[0];
 
@@ -57,6 +59,8 @@ async function emit(c, parkingId, type, slotCode, status, version, plate,extra =
 
   const payload = {
     event: 'SLOT_UPDATED',
+    eventId: randomUUID(),
+    occurredAt: new Date().toISOString(),
     type,
     parkingId,
     slot: slotCode,
@@ -293,34 +297,19 @@ async function payIn(c, { sessionId, method, paymentKey, userId, parkingId }) {
     const q = await quoteIn(c, sessionId);
     if (q.fee <= 0) throw new Abort(409, { error: 'NOTHING_TO_PAY' });
     await c.query(
-  `UPDATE parking_sessions
-   SET paid_at=now(), payment_method=$2, payment_key=$3, fee=$4
-   WHERE id=$1`,
-  [sessionId, method, paymentKey, q.fee]
-);
-
-const session = await getSession(c, sessionId);
-
-await emit(
-  c,
-  parkingId,
-  'PAYMENT_COMPLETED',
-  session.slotCode,
-  'OCCUPIED',
-  0,
-  session.licensePlate,
-  {
-    event: 'PAYMENT_COMPLETED',
-    sessionId,
-    fee: Number(q.fee),
-    occurredAt: new Date().toISOString(),
-    userId: session.userId,
-    paymentMethod: method,
-    paymentKey
-  }
-);
-
-return { code: 200, body: session };
+      `UPDATE parking_sessions SET paid_at=now(), payment_method=$2, payment_key=$3, fee=$4 WHERE id=$1`,
+      [sessionId, method, paymentKey, q.fee],
+    );
+    const session = await getSession(c, sessionId);
+    if (parkingId) {
+      await emit(c, parkingId, 'PAYMENT_COMPLETED', session.slotCode, undefined, 0, null, {
+        event: 'PAYMENT_COMPLETED',
+        sessionId,
+        fee: Number(session.fee),
+        occurredAt: session.paidAt,
+      });
+    }
+    return { code: 200, body: session };
   }, (e) => {
     if (e instanceof Abort) {
       const out = { code: e.code, body: e.body };

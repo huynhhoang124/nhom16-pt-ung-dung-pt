@@ -18,13 +18,13 @@ async function processEvent(message, offset) {
 
   try {
     event = JSON.parse(message.content.toString('utf8'));
-    console.log('[stats-service] EVENT:', JSON.stringify(event));
   } catch (error) {
     console.error('[stats-service] Invalid event JSON:', error.message);
     return;
   }
 
-  const eventId = String(event.eventId ?? event.id ?? offset);
+  if (!event || typeof event !== 'object') return;
+  const eventId = String(event.eventId ?? `offset:${offset}`);
   const parkingId = event.parkingId;
   const type = String(
     event.event === 'PAYMENT_COMPLETED' ||
@@ -38,6 +38,7 @@ async function processEvent(message, offset) {
   if (!parkingId) return;
 
   const hour = getHour(occurredAt);
+  if (!Number.isFinite(hour.getTime())) return;
   const zone = String(event.zone || event.floor || 'default');
 
   let entries = 0;
@@ -48,6 +49,7 @@ async function processEvent(message, offset) {
     entries = 1;
   } else if (['CAR_EXIT', 'VEHICLE_EXIT'].includes(type)) {
     exits = 1;
+    if (event.paymentMethod === 'CASH' && event.paidAt === event.exitedAt) revenue = Number(event.fee);
   } else if (['PAYMENT_COMPLETED', 'PAYMENT_SUCCESS'].includes(type)) {
     revenue = Number(
       event.fee ??
@@ -56,7 +58,7 @@ async function processEvent(message, offset) {
       event.session?.fee ??
       0
     );
-  } else if (type !== 'SLOT_UPDATED') {
+  } else if (event.event !== 'SLOT_UPDATED') {
     return;
   }
 
@@ -72,6 +74,7 @@ async function processEvent(message, offset) {
   null;
   const available = Number(event.available);
   const total = Number(event.total);
+  const occupied = event.occupied;
 
   const client = await pool.connect();
 
@@ -106,17 +109,18 @@ async function processEvent(message, offset) {
       );
     }
 
-    if (Number.isInteger(available) && Number.isInteger(total)) {
+    if (Number.isInteger(occupied) && Number.isInteger(available) && Number.isInteger(total)) {
       await client.query(
         `INSERT INTO stats_parking_state
-           (parking_id, available, total, updated_at)
-         VALUES ($1, $2, $3, NOW())
+           (parking_id, available, total, occupied, updated_at)
+         VALUES ($1, $2, $3, $4, NOW())
          ON CONFLICT (parking_id)
          DO UPDATE SET
            available = EXCLUDED.available,
            total = EXCLUDED.total,
+           occupied = EXCLUDED.occupied,
            updated_at = NOW()`,
-        [String(parkingId), available, total]
+        [String(parkingId), available, total, occupied]
       );
     }
 
@@ -129,29 +133,19 @@ async function processEvent(message, offset) {
          DO UPDATE SET
            entered_at = COALESCE(stats_sessions.entered_at, EXCLUDED.entered_at),
            updated_at = NOW()`,
-        [String(sessionId), String(parkingId), occurredAt]
+        [String(sessionId), String(parkingId), event.enteredAt ?? occurredAt]
       );
     }
 
     if (sessionId && exits) {
-      const fee = Number(
-        event.fee ??
-        event.amount ??
-        event.revenue ??
-        event.session?.fee ??
-        0
-      );
-
       await client.query(
-        `INSERT INTO stats_sessions
-          (session_id, parking_id, exited_at, fee)
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT (session_id)
-        DO UPDATE SET
-          exited_at = EXCLUDED.exited_at,
-          fee = GREATEST(stats_sessions.fee, EXCLUDED.fee),
-          updated_at = NOW()`,
-        [String(sessionId), String(parkingId), occurredAt, fee]
+        `INSERT INTO stats_sessions (session_id, parking_id, entered_at, exited_at)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (session_id)
+         DO UPDATE SET exited_at = EXCLUDED.exited_at,
+                       entered_at = COALESCE(stats_sessions.entered_at, EXCLUDED.entered_at),
+                       updated_at = NOW()`,
+        [String(sessionId), String(parkingId), event.enteredAt ?? null, event.exitedAt ?? occurredAt],
       );
     }
 
@@ -206,9 +200,13 @@ async function startConsumer() {
     const startOffset =
       lastOffset < 0n ? Offset.first() : Offset.offset(lastOffset + 1n);
 
+    let pending = Promise.resolve();
+    let failed = false;
     const consumer = await client.declareConsumer(
       { stream: STREAM_NAME, offset: startOffset },
-      async (message) => {
+      (message) => {
+        pending = pending.then(async () => {
+        if (failed) return;
         const offset = BigInt(message.offset);
 
         try {
@@ -222,11 +220,15 @@ async function startConsumer() {
             [CONSUMER_NAME, offset.toString()]
           );
         } catch (error) {
+          failed = true;
           console.error(
             `[stats-service] Failed at offset ${offset}:`,
             error.message
           );
+          process.exit(1);
         }
+        });
+        return pending;
       }
     );
 

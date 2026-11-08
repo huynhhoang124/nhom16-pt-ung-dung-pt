@@ -50,7 +50,8 @@ test('đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện', async ()
   assert.match(ev.hlc, /^\d{13}-\d{4}$/);
   assert.equal(ev.payload.hlc, ev.hlc);
 
-  const { hlc: payloadHlc, ...payload } = ev.payload;
+  const { hlc: payloadHlc, eventId, occurredAt, ...payload } = ev.payload;
+  assert.ok(eventId && Number.isFinite(Date.parse(occurredAt)));
   assert.match(payloadHlc, /^\d{13}-\d{4}$/);
 
   assert.deepEqual(payload, {
@@ -62,6 +63,7 @@ test('đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện', async ()
     version: 1,
     available: 4,
     total: 5,
+    occupied: 0,
     userId: 'u1',
     reservationId: r.body.id,
   });

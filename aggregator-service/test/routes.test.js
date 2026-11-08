@@ -67,6 +67,7 @@ test('PD-20 ETag: version không đổi trả 304, version thay đổi trả 200
   applyEvent(agg.cache, { parkingId: 'A', slot: 'A01', status: 'AVAILABLE', version: 1 });
   applyEvent(agg.cache, { parkingId: 'A', slot: 'A02', status: 'OCCUPIED', version: 2 });
 
+  agg.reg.get('A').status = 'OFFLINE';
   const url = `http://127.0.0.1:${agg.server.address().port}/api/parkings/A`;
 
   const first = await fetch(url);
