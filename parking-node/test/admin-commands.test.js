@@ -257,7 +257,7 @@ test("admin shares the real inbox transaction: duplicate, key reuse and outbox r
       return {
         release: c.release,
         query: (sql, params) => {
-          if (sql.startsWith("INSERT INTO command_reply_outbox"))
+          if (sql.includes("INSERT INTO command_reply_outbox"))
             throw new Error("outbox unavailable");
           return c.query(sql, params);
         },

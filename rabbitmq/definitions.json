@@ -24,6 +24,7 @@
     }
   ],
   "exchanges": [
+    { "name": "parking.events", "vhost": "/", "type": "topic", "durable": true, "auto_delete": false, "internal": false, "arguments": {} },
     {
       "name": "parking.commands",
       "vhost": "/",
@@ -44,6 +45,7 @@
     }
   ],
   "queues": [
+    { "name": "events.stream", "vhost": "/", "durable": true, "auto_delete": false, "arguments": { "x-queue-type": "stream", "x-max-age": "1D" } },
     {
       "name": "cmd.A",
       "vhost": "/",
@@ -115,6 +117,7 @@
     }
   ],
   "bindings": [
+    { "source": "parking.events", "vhost": "/", "destination": "events.stream", "destination_type": "queue", "routing_key": "#", "arguments": {} },
     { "source": "parking.commands", "vhost": "/", "destination": "cmd.D.admin", "destination_type": "queue", "routing_key": "cmd.zone-nam.#", "arguments": {} },
     { "source": "parking.commands", "vhost": "/", "destination": "cmd.D.admin", "destination_type": "queue", "routing_key": "cmd.all.#", "arguments": {} },
     { "source": "parking.commands", "vhost": "/", "destination": "cmd.E.admin", "destination_type": "queue", "routing_key": "cmd.zone-nam.#", "arguments": {} },

@@ -33,6 +33,7 @@ function makeCommandFlow({
   const pending = new Map();   // commandId -> Set các request HTTP đang chờ kết quả
   let stopped = false;
   let publishing = false;
+  let publishRequested = false;
   let scanning = false;
   let replyReady = false;
   let timer;
@@ -116,11 +117,11 @@ function makeCommandFlow({
     const waiter = wait(id);   // phải đăng ký chờ TRƯỚC khi ghi ý định, vì worker có thể gửi ngay sau đó
 
     try {
-      await pool.query(
+      const inserted = await pool.query(
         `INSERT INTO commands(id, parking_id, type, user_id, request_hash, payload, actor, envelope, correlation_id, reply_to)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$1,$9) ON CONFLICT (id) DO NOTHING`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$1,$9) ON CONFLICT (id) DO NOTHING RETURNING *`,
         [id, parkingId, type, user.sub, hash, payload, actor, envelope, `agg.${instanceId}`]);
-      let row = await get(id);
+      let row = inserted.rows[0] ?? await get(id);
       if (row.request_hash !== hash) throw fail('IDEMPOTENCY_KEY_REUSED', 422);
       // Leader mới phát lại cùng ID với token mới; inbox của node bảo đảm không ghi hai lần.
       if (sagaId && row.status === 'PENDING' && replyReady &&
@@ -172,44 +173,35 @@ function makeCommandFlow({
   }
 
   // Nhận một lệnh để gửi: khoá dòng (SKIP LOCKED) và đặt lease để bản Aggregator khác không gửi trùng
-  async function claim(owner) {
-    const c = await pool.connect();
-    try {
-      await c.query('BEGIN');
-      const row = (await c.query(
-        `SELECT * FROM commands
+  async function claimBatch(owner) {
+    const { rows } = await pool.query(
+      `WITH next_command AS (
+         SELECT id FROM commands
          WHERE status='PENDING' AND publish_state<>'CONFIRMED' AND next_publish_at <= now()
            AND (publish_lease_until IS NULL OR publish_lease_until < now())
            AND (envelope->>'deadlineAt')::bigint > $1
-         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`, [now()])).rows[0];
-      if (row) {
-        await c.query(
-          `UPDATE commands SET uncertain = uncertain OR publish_state IN ('SENDING','UNKNOWN'), publish_state='SENDING',
-             publish_owner=$2, publish_lease_until=now() + ($3 * interval '1 millisecond'),
-             attempts=attempts+1, updated_at=now()
-           WHERE id=$1`, [row.id, owner, leaseMs]);
-      }
-      await c.query('COMMIT');
-      return row;
-    } catch (e) {
-      await c.query('ROLLBACK').catch(() => {});
-      throw e;
-    } finally {
-      c.release();
-    }
+         ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT $4
+       ), claimed AS (
+       UPDATE commands c
+       SET uncertain = c.uncertain OR c.publish_state IN ('SENDING','UNKNOWN'), publish_state='SENDING',
+           publish_owner=$2, publish_lease_until=now() + ($3 * interval '1 millisecond'),
+           attempts=c.attempts+1, updated_at=now()
+       FROM next_command n WHERE c.id=n.id RETURNING c.*
+       ) SELECT * FROM claimed ORDER BY created_at, id`,
+      [now(), owner, leaseMs, PUBLISH_BATCH],
+    );
+    return rows;
   }
 
   async function publishOne(row, owner) {
-    const uncertain = row.uncertain || ['SENDING', 'UNKNOWN'].includes(row.publish_state);
+    const uncertain = row.uncertain;
     await afterClaim(row);
     try {
       await publisher.send(row.parking_id, row.type, row.payload, {
         ...row.envelope, actor: row.actor, messageId: row.id, correlationId: row.correlation_id, replyTo: row.reply_to,
       });
       await afterPublish(row);
-      await pool.query(
-        `UPDATE commands SET publish_state='CONFIRMED', publish_lease_until=NULL, updated_at=now()
-         WHERE id=$1 AND publish_owner=$2 AND status='PENDING'`, [row.id, owner]);
+      return row.id;
     } catch (e) {
       if (!uncertain && DEFINITE_SEND_ERRORS.includes(e.code)) {
         const r = await pool.query(
@@ -228,16 +220,29 @@ function makeCommandFlow({
   }
 
   async function pump() {
-    if (stopped || publishing || !replyReady) return;
+    if (stopped || !replyReady) return;
+    publishRequested = true;
+    if (publishing) return;
     publishing = true;
     try {
       await expireUnsent();
-      for (let n = 0; n < PUBLISH_BATCH && !stopped && replyReady; n++) {
+      do {
+        publishRequested = false;
         const owner = randomUUID();
-        const row = await claim(owner);
-        if (!row) break;
-        await publishOne(row, owner);
-      }
+        const rows = await claimBatch(owner);
+        // Pipeline confirms on the same channel. Waiting per command serializes the broker's disk flushes.
+        const sent = await Promise.allSettled(rows.map((row) => publishOne(row, owner)));
+        const confirmed = sent.filter(result => result.status === 'fulfilled' && result.value).map(result => result.value);
+        // One durable update per batch avoids competing with replies for twenty pool connections/commits.
+        if (confirmed.length) await pool.query(
+          // The durable SENDING lease survives a lost confirm marker, so recovery retries the same command ID.
+          `WITH delivery AS MATERIALIZED (SELECT set_config('synchronous_commit','off',true))
+           UPDATE commands SET publish_state='CONFIRMED', publish_lease_until=NULL, updated_at=now()
+           FROM delivery WHERE id=ANY($1::text[]) AND publish_owner=$2 AND status='PENDING'`, [confirmed, owner]);
+        if (rows.length === PUBLISH_BATCH) publishRequested = true;
+        const failed = sent.find((result) => result.status === 'rejected');
+        if (failed) throw failed.reason;
+      } while (publishRequested && !stopped && replyReady);
     } finally {
       publishing = false;
     }
@@ -280,7 +285,7 @@ function makeCommandFlow({
     while (publishing || scanning) await new Promise((r) => setTimeout(r, 10));
   }
 
-  return { execute, get, pump, scan, start, stop, signal, markFailed, pending, setReady(v) { replyReady = v; } };
+  return { execute, get, pump, scan, start, stop, signal, settle, markFailed, pending, setReady(v) { replyReady = v; } };
 }
 
 module.exports = { makeCommandFlow, response, terminal };

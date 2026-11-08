@@ -1,0 +1,150 @@
+services:
+  rabbitmq:
+    ports: !override ["${JEPSEN_RABBIT_PORT:-25672}:5672", "${JEPSEN_RABBIT_UI_PORT:-25673}:15672"]
+    user: "100:101"
+
+  rabbitmq-2:
+    user: "100:101"
+
+  rabbitmq-3:
+    user: "100:101"
+
+  parking-a:
+    ports: !override ["${JEPSEN_PARKING_PORT_A:-18001}:8001"]
+    environment:
+      NODE_URL: http://toxiproxy-a:18001
+
+  parking-b:
+    ports: !override ["${JEPSEN_PARKING_PORT_B:-18002}:8002"]
+    environment:
+      NODE_URL: http://toxiproxy-b:18002
+
+  parking-c:
+    ports: !override ["${JEPSEN_PARKING_PORT_C:-18003}:8003"]
+    environment:
+      NODE_URL: http://toxiproxy-c:18003
+
+  parking-d:
+    build: ./parking-node
+    image: nhom16/parking-node
+    ports: !override ["${JEPSEN_PARKING_PORT_D:-18004}:8004"]
+    environment:
+      NODE_URL: http://toxiproxy-d:18004
+
+  parking-e:
+    build: ./parking-node
+    image: nhom16/parking-node
+    ports: !override ["${JEPSEN_PARKING_PORT_E:-18005}:8005"]
+    environment:
+      NODE_URL: http://toxiproxy-e:18005
+
+  parking-f:
+    build: ./parking-node
+    image: nhom16/parking-node
+    ports: !override ["${JEPSEN_PARKING_PORT_F:-18006}:8006"]
+    environment:
+      NODE_URL: http://toxiproxy-f:18006
+
+  aggregator:
+    ports: !override ["18000:8000"]
+    environment:
+      NODES: ${PD26_JEPSEN_NODES:?Jepsen runner must provide the proxied parking node list}
+
+  etcd-1:
+    ports: !override []
+
+  etcd-2:
+    ports: !override []
+
+  etcd-3:
+    ports: !override []
+
+  toxiproxy-a:
+    profiles: [jepsen]
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes: ["./tests/jepsen/toxiproxy-a.json:/config/toxiproxy.json:ro"]
+    ports: ["${JEPSEN_TOXI_PORT_A:-19474}:8474"]
+
+  toxiproxy-b:
+    profiles: [jepsen]
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes: ["./tests/jepsen/toxiproxy-b.json:/config/toxiproxy.json:ro"]
+    ports: ["${JEPSEN_TOXI_PORT_B:-19475}:8474"]
+
+  toxiproxy-c:
+    profiles: [jepsen]
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes: ["./tests/jepsen/toxiproxy-c.json:/config/toxiproxy.json:ro"]
+    ports: ["${JEPSEN_TOXI_PORT_C:-19476}:8474"]
+
+  toxiproxy-d:
+    profiles: [jepsen]
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes: ["./tests/jepsen/toxiproxy-d.json:/config/toxiproxy.json:ro"]
+    ports: ["${JEPSEN_TOXI_PORT_D:-19477}:8474"]
+
+  toxiproxy-e:
+    profiles: [jepsen]
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes: ["./tests/jepsen/toxiproxy-e.json:/config/toxiproxy.json:ro"]
+    ports: ["${JEPSEN_TOXI_PORT_E:-19478}:8474"]
+
+  toxiproxy-f:
+    profiles: [jepsen]
+    image: ghcr.io/shopify/toxiproxy:2.9.0
+    command: ["-host=0.0.0.0", "-config=/config/toxiproxy.json"]
+    volumes: ["./tests/jepsen/toxiproxy-f.json:/config/toxiproxy.json:ro"]
+    ports: ["${JEPSEN_TOXI_PORT_F:-19479}:8474"]
+
+  netem-a:
+    profiles: [netem]
+    image: nicolaka/netshoot:v0.13
+    network_mode: "service:toxiproxy-a"
+    cap_add: [NET_ADMIN]
+    command: ["sleep", "infinity"]
+    depends_on: [toxiproxy-a]
+
+  netem-b:
+    profiles: [netem]
+    image: nicolaka/netshoot:v0.13
+    network_mode: "service:toxiproxy-b"
+    cap_add: [NET_ADMIN]
+    command: ["sleep", "infinity"]
+    depends_on: [toxiproxy-b]
+
+  netem-c:
+    profiles: [netem]
+    image: nicolaka/netshoot:v0.13
+    network_mode: "service:toxiproxy-c"
+    cap_add: [NET_ADMIN]
+    command: ["sleep", "infinity"]
+    depends_on: [toxiproxy-c]
+
+  netem-d:
+    profiles: [netem]
+    image: nicolaka/netshoot:v0.13
+    network_mode: "service:toxiproxy-d"
+    cap_add: [NET_ADMIN]
+    command: ["sleep", "infinity"]
+    depends_on: [toxiproxy-d]
+
+  netem-e:
+    profiles: [netem]
+    image: nicolaka/netshoot:v0.13
+    network_mode: "service:toxiproxy-e"
+    cap_add: [NET_ADMIN]
+    command: ["sleep", "infinity"]
+    depends_on: [toxiproxy-e]
+
+  netem-f:
+    profiles: [netem]
+    image: nicolaka/netshoot:v0.13
+    network_mode: "service:toxiproxy-f"
+    cap_add: [NET_ADMIN]
+    command: ["sleep", "infinity"]
+    depends_on: [toxiproxy-f]
