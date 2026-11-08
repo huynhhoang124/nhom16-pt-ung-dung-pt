@@ -176,13 +176,11 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         // PD-06: TTL của RabbitMQ chỉ tính lúc tin nằm trong queue; tin đã prefetch rồi chờ s.tail có thể quá hạn.
         // Không áp dụng nữa, lưu kết quả 410 vào inbox để gửi lại cùng messageId cũng nhận đúng kết quả này.
         out = { code: 410, body: { error: 'COMMAND_EXPIRED' } };
-        await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
       } else {
         await beforeDispatch?.(m, c); // Test-only faults exercise the real inbox transaction rollback.
         out = adminCommand ? await dispatchAdminIn(c, env, { parkingId }) : await dispatch(c, env, { parkingId, reservationMinutes, qrSecret });
         // Normalize Date values once: first delivery and replay return identical JSON.
         out.body = JSON.parse(JSON.stringify(out.body));
-        await c.query('UPDATE inbox_messages SET result=$2, status_code=$3, processed_at=now() WHERE message_id=$1', [env.messageId, out.body, out.code]);
       }
       const metadata = Object.fromEntries(
         META
@@ -199,9 +197,13 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
         actor: env.actor, statusCode: out.code, result: out.body, ...metadata };
       const properties = { messageId: randomUUID(), correlationId: env.correlationId, type: 'COMMAND_RESULT',
         headers: { schemaVersion: 1, ...metadata, causationId: env.causationId ?? env.messageId } };
-      await enrichReply(c, env, payload, properties, internalKey);
-      await c.query('INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties) VALUES ($1,$2,$3,$4)',
-        [env.messageId, env.replyTo, payload, properties]);
+      await enrichReply(c, env, payload, properties, internalKey, out.replySlot);
+      await c.query(`WITH saved AS (
+        UPDATE inbox_messages SET result=$5,status_code=$6,processed_at=now()
+        WHERE message_id=$1 AND $7::boolean
+      )
+      INSERT INTO command_reply_outbox(command_id, reply_to, payload, properties) VALUES ($1,$2,$3,$4)`,
+        [env.messageId, env.replyTo, payload, properties, out.body, out.code, inserted.rowCount > 0]);
       // Kiểm lại trước COMMIT: giao dịch đã qua lần kiểm đầu rồi bị chậm thì không được commit vào primary cũ sau failover
       const late = await epochError(pool, c);
       if (late) { await c.query('ROLLBACK'); return { ...late, messageId: env.messageId }; }
@@ -223,7 +225,7 @@ function crashAfterCommitOnce(result) {
 }
 
 function startCommandConsumer({ url, pool, parkingId, internalKey, log = console,
-  connect = (u) => amqp.connect(u, { timeout: 2000 }), retryMs = 5000, timers = { setTimeout, clearTimeout },
+  connect = amqp.connect, retryMs = 5000, timers = { setTimeout, clearTimeout },
   processCommand = makeCommandProcessor({ pool, parkingId, internalKey }), afterCommit = crashAfterCommitOnce, retryOrDead }) {
   const connectAny = makeConnector(url, connect);
   let stopped = false;
@@ -275,11 +277,16 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
           const { consumerTag } = await ch.consume(queue, (m) => {
             if (!m) { end(s); return; }
             if (m.fields?.redelivered) require('./metrics').incRedelivered();   // PD-25
+            const receivedAt = performance.now();
             // SAC chooses a consumer, NOT a serial async callback execution order.
             s.tail = s.tail.then(async () => {
               if (s.dead || stopped) return;
               try {
-                const result = await processCommand(m);
+                const metric = require('./metrics').consumerStage;
+                metric.observe({ stage: 'prefetch_wait' }, (performance.now() - receivedAt) / 1000);
+                const endProcessing = metric.startTimer({ stage: 'processing' });
+                let result;
+                try { result = await processCommand(m); } finally { endProcessing(); }
                 await afterCommit(result);
                 if (!s.dead) ch.ack(m); // processor returns only after COMMIT succeeds.
               } catch (error) {

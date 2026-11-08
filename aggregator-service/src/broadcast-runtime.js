@@ -8,7 +8,7 @@ function startBroadcastReplies({
   broadcasts,
   log = console,
   retryMs = 1000,
-  connect = (u) => amqp.connect(u, { timeout: 2000 }),
+  connect = amqp.connect,
 }) {
   const connectAny = makeConnector(url, connect);
   let stopped = false,

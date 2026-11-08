@@ -7,7 +7,7 @@ const { requestId } = require('./log');
 const hlc = require('./hlc');
 const { context, propagation } = require('@opentelemetry/api');
 const { fenceIn } = require('./fencing');
-const { guardAdminIn } = require('./admin-guards');
+const { guardAdminIn, checkAdminIn, ADMIN_GATE_SQL } = require('./admin-guards');
 
 // Dừng giao dịch với kết quả nghiệp vụ (409, 404...) thay vì lỗi hệ thống.
 class Abort {
@@ -48,13 +48,6 @@ async function tx(pool, fn) {
 // Ghi HLC cùng sự kiện outbox trong giao dịch nghiệp vụ.
 // HLC chỉ sắp thứ tự nhân quả, không dùng để tính phí hay hết hạn.
 async function emit(c, parkingId, type, slotCode, status, version, plate,extra = {}, eventHlc = null) {
-  const occ = (await c.query(
-    `SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available,
-            count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total,
-            count(*) FILTER (WHERE status='OCCUPIED')::int AS occupied
-     FROM parking_slots`
-  )).rows[0];
-
   const timestamp = eventHlc ?? hlc.now();
 
   const payload = {
@@ -66,7 +59,6 @@ async function emit(c, parkingId, type, slotCode, status, version, plate,extra =
     slot: slotCode,
     status,
     version: Number(version),
-    ...occ,
     ...extra,
     hlc: timestamp,
     requestId: requestId(),
@@ -75,8 +67,14 @@ async function emit(c, parkingId, type, slotCode, status, version, plate,extra =
   const carrier = {};
   propagation.inject(context.active(), carrier);
   return c.query(
-    `INSERT INTO parking_events(event_type, slot_code, license_plate, payload, hlc, traceparent)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+    `WITH occupancy AS (
+       SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available,
+              count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total,
+              count(*) FILTER (WHERE status='OCCUPIED')::int AS occupied
+       FROM parking_slots
+     )
+     INSERT INTO parking_events(event_type, slot_code, license_plate, payload, hlc, traceparent)
+     SELECT $1, $2, $3, to_jsonb(occupancy) || $4::jsonb, $5, $6 FROM occupancy`,
     [type, slotCode, plate ?? null, payload, timestamp, carrier.traceparent ?? null],
   );
 }
@@ -95,11 +93,10 @@ const findByRequest = (pool, requestId) =>
 // Mốc thời gian lấy theo now() của DB bãi.
 // Bodies below use the caller's transaction; no BEGIN/COMMIT inside inbox processing.
 async function business(c, fn, recover) {
-  await c.query('SAVEPOINT business_operation');
+  await c.query('SAVEPOINT business_operation; ' + ADMIN_GATE_SQL);
   try {
-    const out = await fn();
-    await c.query('RELEASE SAVEPOINT business_operation');
-    return out;
+    // The transaction owner commits/rolls back after this operation, releasing the savepoint there.
+    return await fn();
   } catch (e) {
     await c.query('ROLLBACK TO SAVEPOINT business_operation');
     await c.query('RELEASE SAVEPOINT business_operation');
@@ -118,27 +115,31 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
   const prior = await replayOr(null);
   if (prior) return prior;
   return business(c, async () => {
-    const denied = await guardAdminIn(c, { slotCode, licensePlate });
+    const denied = await checkAdminIn(c, { slotCode, licensePlate });
     if (denied) throw new Abort(denied.code, denied.body);
-    const now = (await c.query('SELECT now() AS now')).rows[0].now;
-    const start = startTime && new Date(startTime) > now ? new Date(startTime) : now;
-    const instant = start - now <= minutes * 60_000;
-    let slot;
-    if (instant) {
-      // compare-and-swap nguyên tử: chỉ một request thấy 1 dòng bị ảnh hưởng
-      slot = (await c.query(
-        `UPDATE parking_slots SET status='RESERVED', version=version+1, updated_at=now()
-         WHERE slot_code=$1 AND status='AVAILABLE' RETURNING id, version`, [slotCode])).rows[0];
-    } else {
-      slot = (await c.query(`SELECT id FROM parking_slots WHERE slot_code=$1 AND status NOT IN ('MAINTENANCE','HIDDEN')`, [slotCode])).rows[0];
-    }
-    if (!slot) throw new Abort(409, { error: 'SLOT_TAKEN' });
+    // An immediate reservation uses the transaction clock in INSERT, avoiding a separate round trip.
+    const now = startTime ? (await c.query('SELECT now() AS now')).rows[0].now : null;
+    const start = startTime ? (new Date(startTime) > now ? new Date(startTime) : now) : null;
+    const instant = !startTime || start - now <= minutes * 60_000;
+    // compare-and-swap nguyên tử: chỉ một request thấy 1 dòng bị ảnh hưởng
+    // The held row feeds the INSERT: a losing CAS creates no reservation, and a failed INSERT rolls back the CAS.
+    const hold = instant
+      ? `UPDATE parking_slots SET status='RESERVED',version=version+1,updated_at=now()
+         WHERE slot_code=$3 AND status='AVAILABLE' RETURNING id,version`
+      : `SELECT id,version FROM parking_slots WHERE slot_code=$3 AND status NOT IN ('MAINTENANCE','HIDDEN')`;
     const r = await c.query(
-      `INSERT INTO reservations(request_id, user_id, slot_id, license_plate, start_time, end_time, expire_time, status)
-       VALUES ($1,$2,$3,$4, $5::timestamptz, $5::timestamptz + make_interval(mins => $6), $5::timestamptz + make_interval(mins => $7), $8) RETURNING *`,
-      [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes, input.sagaId ? 'PENDING_SAGA' : 'ACTIVE']);
-    if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', slot.version, licensePlate, { userId, reservationId: r.rows[0].id });
-    return { code: 201, body: { ...r.rows[0], slot_code: slotCode } };
+      `WITH held AS (${hold})
+       INSERT INTO reservations(request_id,user_id,slot_id,license_plate,start_time,end_time,expire_time,status)
+       SELECT $1,$2,held.id,$4,COALESCE($5::timestamptz,now()),
+         COALESCE($5::timestamptz,now()) + make_interval(mins => $6),
+         COALESCE($5::timestamptz,now()) + make_interval(mins => $7),$8 FROM held
+       RETURNING *, (SELECT version FROM held) AS slot_version`,
+      [requestId,userId,slotCode,licensePlate,start,durationMinutes,minutes,input.sagaId ? 'PENDING_SAGA' : 'ACTIVE']);
+    if (!r.rowCount) throw new Abort(409, { error: 'SLOT_TAKEN' });
+    const { slot_version: version, ...reservation } = r.rows[0];
+    if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', version, licensePlate, { userId, reservationId: reservation.id });
+    return { code: 201, body: { ...reservation, slot_code: slotCode },
+      ...(instant && { replySlot: { slotCode, status: 'RESERVED', version: Number(version) } }) };
   }, async (e) => {
     if (e instanceof Abort) return replayOr({ code: e.code, body: e.body });
     if (e.code === '23P01') return replayOr({ code: 409, body: { error: 'TIME_CONFLICT' } });
@@ -357,7 +358,8 @@ function endReservationIn(c, parkingId, id, status, userId, sagaId, step) {
       await emit(c, parkingId, status, s.rows[0].slot_code, 'AVAILABLE', s.rows[0].version, r.rows[0].license_plate,
         { userId: r.rows[0].user_id, reservationId: id });
     }
-    return { code: 200, body: { id, status } };
+    return { code: 200, body: { id, status },
+      ...(s.rowCount && { replySlot: { slotCode: s.rows[0].slot_code, status: 'AVAILABLE', version: Number(s.rows[0].version) } }) };
   });
 }
 

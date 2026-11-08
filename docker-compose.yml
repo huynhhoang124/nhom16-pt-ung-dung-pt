@@ -24,8 +24,20 @@ x-otel-env: &otel-env
 
 x-rabbit: &rabbit
   image: rabbitmq:3.13-management-alpine
-  environment: { RABBITMQ_DEFAULT_USER: parking, RABBITMQ_DEFAULT_PASS: parking, RABBITMQ_ERLANG_COOKIE: nhom16-cookie }
-  healthcheck: { test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"], interval: 5s, timeout: 5s, retries: 30 }
+  # Share CPU with Node/Postgres on the demo host; avoid Erlang scheduler busy waiting.
+  environment:
+    RABBITMQ_DEFAULT_USER: parking
+    RABBITMQ_DEFAULT_PASS: parking
+    RABBITMQ_ERLANG_COOKIE: nhom16-cookie
+    RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS: "+S 2:2 +sbwt none +sbwtdcpu none +sbwtdio none"
+  # Erlang CLI startup is costly on a shared host. Keep fast startup probes, then probe every 30 seconds.
+  healthcheck:
+    test: ["CMD", "rabbitmq-diagnostics", "-q", "check_port_connectivity"]
+    start_period: 60s
+    start_interval: 5s
+    interval: 30s
+    timeout: 5s
+    retries: 5
 
 x-node-env: &node-env
   <<: *otel-env
@@ -156,7 +168,11 @@ services:
       db-c:
         condition: service_healthy
 
-  db-agg: { <<: *pg, volumes: [db-agg-data:/var/lib/postgresql/data] }
+  db-agg:
+    <<: *pg
+    # Group concurrent durable commits for 500 microseconds; fsync and synchronous commit stay enabled.
+    command: [postgres, -c, commit_delay=500, -c, commit_siblings=1]
+    volumes: [db-agg-data:/var/lib/postgresql/data]
 
   # PD-23: Database riêng cho Stats CQRS
   db-stats: { <<: *pg, profiles: [stats], volumes: [db-stats-data:/var/lib/postgresql/data] }

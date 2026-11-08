@@ -1,0 +1,33 @@
+services:
+  pd20-etcd:
+    image: quay.io/coreos/etcd:v3.5.15
+    command: [etcd, --name=pd20, --data-dir=/tmp/etcd, --listen-client-urls=http://0.0.0.0:2379, --advertise-client-urls=http://pd20-etcd:2379]
+    healthcheck:
+      test: [CMD, etcdctl, --endpoints=http://localhost:2379, endpoint, health]
+      interval: 3s
+      timeout: 3s
+      retries: 30
+  parking-a:
+    environment:
+      ETCD_ENDPOINTS: http://pd20-etcd:2379
+  parking-b:
+    hostname: pd20-b-primary
+    environment:
+      ETCD_ENDPOINTS: http://pd20-etcd:2379
+      NODE_URL: http://toxiproxy:18002
+  parking-c:
+    environment:
+      ETCD_ENDPOINTS: http://pd20-etcd:2379
+  parking-b-2:
+    extends:
+      file: docker-compose.yml
+      service: parking-b
+    hostname: pd20-b-secondary
+    ports: !override []
+    environment:
+      ETCD_ENDPOINTS: http://pd20-etcd:2379
+      NODE_URL: http://parking-b-2:8002
+  aggregator:
+    environment:
+      ETCD_ENDPOINTS: http://pd20-etcd:2379
+      HEDGE_ENABLED: ${HEDGE_ENABLED:-true}
