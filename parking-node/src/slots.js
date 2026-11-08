@@ -122,23 +122,25 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     const now = startTime ? (await c.query('SELECT now() AS now')).rows[0].now : null;
     const start = startTime ? (new Date(startTime) > now ? new Date(startTime) : now) : null;
     const instant = !startTime || start - now <= minutes * 60_000;
-    let slot;
-    if (instant) {
-      // compare-and-swap nguyên tử: chỉ một request thấy 1 dòng bị ảnh hưởng
-      slot = (await c.query(
-        `UPDATE parking_slots SET status='RESERVED', version=version+1, updated_at=now()
-         WHERE slot_code=$1 AND status='AVAILABLE' RETURNING id, version`, [slotCode])).rows[0];
-    } else {
-      slot = (await c.query(`SELECT id FROM parking_slots WHERE slot_code=$1 AND status NOT IN ('MAINTENANCE','HIDDEN')`, [slotCode])).rows[0];
-    }
-    if (!slot) throw new Abort(409, { error: 'SLOT_TAKEN' });
+    // compare-and-swap nguyên tử: chỉ một request thấy 1 dòng bị ảnh hưởng
+    // The held row feeds the INSERT: a losing CAS creates no reservation, and a failed INSERT rolls back the CAS.
+    const hold = instant
+      ? `UPDATE parking_slots SET status='RESERVED',version=version+1,updated_at=now()
+         WHERE slot_code=$3 AND status='AVAILABLE' RETURNING id,version`
+      : `SELECT id,version FROM parking_slots WHERE slot_code=$3 AND status NOT IN ('MAINTENANCE','HIDDEN')`;
     const r = await c.query(
-      `INSERT INTO reservations(request_id, user_id, slot_id, license_plate, start_time, end_time, expire_time, status)
-       VALUES ($1,$2,$3,$4, COALESCE($5::timestamptz,now()), COALESCE($5::timestamptz,now()) + make_interval(mins => $6), COALESCE($5::timestamptz,now()) + make_interval(mins => $7), $8) RETURNING *`,
-      [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes, input.sagaId ? 'PENDING_SAGA' : 'ACTIVE']);
-    if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', slot.version, licensePlate, { userId, reservationId: r.rows[0].id });
-    return { code: 201, body: { ...r.rows[0], slot_code: slotCode },
-      ...(instant && { replySlot: { slotCode, status: 'RESERVED', version: Number(slot.version) } }) };
+      `WITH held AS (${hold})
+       INSERT INTO reservations(request_id,user_id,slot_id,license_plate,start_time,end_time,expire_time,status)
+       SELECT $1,$2,held.id,$4,COALESCE($5::timestamptz,now()),
+         COALESCE($5::timestamptz,now()) + make_interval(mins => $6),
+         COALESCE($5::timestamptz,now()) + make_interval(mins => $7),$8 FROM held
+       RETURNING *, (SELECT version FROM held) AS slot_version`,
+      [requestId,userId,slotCode,licensePlate,start,durationMinutes,minutes,input.sagaId ? 'PENDING_SAGA' : 'ACTIVE']);
+    if (!r.rowCount) throw new Abort(409, { error: 'SLOT_TAKEN' });
+    const { slot_version: version, ...reservation } = r.rows[0];
+    if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', version, licensePlate, { userId, reservationId: reservation.id });
+    return { code: 201, body: { ...reservation, slot_code: slotCode },
+      ...(instant && { replySlot: { slotCode, status: 'RESERVED', version: Number(version) } }) };
   }, async (e) => {
     if (e instanceof Abort) return replayOr({ code: e.code, body: e.body });
     if (e.code === '23P01') return replayOr({ code: 409, body: { error: 'TIME_CONFLICT' } });
