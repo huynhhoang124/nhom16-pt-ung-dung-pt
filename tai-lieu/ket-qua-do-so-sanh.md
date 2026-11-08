@@ -71,10 +71,11 @@ Các sửa đổi: gửi lệnh theo lô có pipeline publisher confirm; ghi ph�
 | c13173a / 42487674442 | 46,06 | 405,90 | 603,54 | Chưa đạt khi lặp |
 | d366438 / 42488122775 | 25,56 | 547,50 | 859,40 | Gộp xác nhận broker, chưa đạt |
 | 013a577 / 42488184397 | 54,17 | 396 | 528 | Chưa đạt |
+| 7b2e818 / 42490077058 | 45,56 | 371 | 496,86 | Cùng runtime 4bf3378, lượt bổ sung vẫn biến động |
 
 Lượt 5548730 đầu có 673,75 HTTP req/s, 82.292 HTTP workload, không có 503/504 hoặc trạng thái ngoài dự kiến. [Log/JSON lưu trong repo](ket-qua-do/tc80-5548730/tc80-acceptance.json). Hai lượt khác runner cho kết quả biến động, nên không chọn riêng lượt tốt để kết luận ổn định.
 
-### TC80 đạt sau tối ưu giao dịch
+### TC80 sau tối ưu giao dịch
 
 Runtime `4bf3378`; `7b2e818` chỉ tách test kết nối để mỗi image chạy độc lập. Hai runner riêng chạy đủ 300 VU trong 2 phút, cùng seed và cùng cấu hình broker/B chậm 1500 ms:
 
@@ -83,7 +84,7 @@ Runtime `4bf3378`; `7b2e818` chỉ tách test kết nối để mỗi image ch�
 | [42489837577](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42489837577) | 22,68 | 209 / 281 | 654,17 | 0% | 100% | 0% / 0% |
 | [42489834410](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42489834410) | 21,38 | 174 / 252 | 662,03 | 0% | 100% | 0% / 0% |
 
-Cả hai lượt **đạt p95 đặt <300 ms** và toàn bộ ngưỡng k6. 12 kiểm tra bất biến trên ba DB đều đạt sau tải: không đặt chồng, không trùng request_id, không có hai phiên mở trên một slot, outbox sự kiện gửi hết. Lượt 1 có 103.919 checks và 79.953 HTTP; lượt 2 có 105.666 checks và 80.861 HTTP; không có check lỗi. HTTP count có setup theo quy ước k6, còn kiểm 503/504 chỉ tính workload.
+Hai lượt này **đạt p95 đặt <300 ms** và toàn bộ ngưỡng k6. Lượt CI bổ sung 7b2e818 còn 371 ms (bảng trên), nên vẫn tiếp tục giảm tải kiểm tra sức khỏe RabbitMQ trước khi tích hợp. 12 kiểm tra bất biến trên ba DB đều đạt sau tải: không đặt chồng, không trùng request_id, không có hai phiên mở trên một slot, outbox sự kiện gửi hết. Lượt 1 có 103.919 checks và 79.953 HTTP; lượt 2 có 105.666 checks và 80.861 HTTP; không có check lỗi. HTTP count có setup theo quy ước k6, còn kiểm 503/504 chỉ tính workload.
 
 Bằng chứng đầy đủ: [lượt 1](ket-qua-do/tc80-4bf3378-r1/), [lượt 2](ket-qua-do/tc80-4bf3378-r2/), gồm JSON, log k6, log bất biến, thời gian các giai đoạn và Docker CPU. Khác biệt quyết định ở bản cuối: gộp inbox/result/reply outbox trong một câu SQL, dùng snapshot từ dòng slot đang khóa để ký phản hồi và tạo reservation trực tiếp từ CTE giữ slot. Vẫn giữ commit bền, outbox, xác thực chữ ký, idempotency, SAVEPOINT và thứ tự xử lý consumer.
 
