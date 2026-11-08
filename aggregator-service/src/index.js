@@ -218,10 +218,6 @@ async function main() {
   const onChange = (n, prev) => {
     log.info(`Bãi ${n.id}: ${prev} -> ${n.status}`);
     emitSocket(io, 'NODE_STATUS', { parkingId: n.id, status: n.status });
-    // PD-10: Chỉ Leader mới chạy đối soát (reconcile)
-    if (n.status === 'ONLINE' && leader.isLeader()) {
-      reconcileQueue.enqueue(n);
-    }
   };
   const check = () => {
     const p = hasEtcd
@@ -230,6 +226,9 @@ async function main() {
           .then(({ rows }) => reg.sync(rows).forEach((id) => log.info(`Nạp bãi mới ${id} (do bản Aggregator khác thêm)`)));
     return p
       .then(() => reg.check(onChange))
+      .then(() => {
+        if (leader.isLeader()) reg.all().filter((n) => n.status === 'ONLINE').forEach(reconcileQueue.enqueue);
+      })
       .catch((e) => log.error('health check lỗi', { error: e.message }));
   };
 
