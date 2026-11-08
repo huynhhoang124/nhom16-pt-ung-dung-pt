@@ -47,8 +47,10 @@ Hai job dùng cùng loại runner Ubuntu và mỗi job dựng một stack riêng
 | `7f58824` | Broker | 1.609 | 1.706 | 0% |
 | `1180d79` | HTTP | 160 | 1.610 | 0% |
 | `1180d79` | Broker | 355 | 1.046 | 0% |
+| `c87eba8` | HTTP | 143 | 1.595 | 0% |
+| `c87eba8` | Broker | 355 | 870 | 0% |
 
-Bản `1180d79` dùng chung lượt làm mới thông tin chỗ trống giữa các yêu cầu và kích hoạt gửi phản hồi ngay sau khi node commit lệnh. p95 đặt qua broker giảm 38,7% so với lượt broker trước. TC80 vẫn chưa đạt. p95 của lượt broker mới vượt ngưỡng và tỷ lệ lỗi HTTP là 4,48%. Hai lượt HTTP đều đã có 0% lỗi 504. Chỉ tiêu tra cứu 250 ms trong kế hoạch áp dụng cho sáu bãi. Lượt TC80 trên đây chạy ba bãi. Log và JSON ở mục Artifacts của [lượt 7f58824](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42470803318) và [lượt 1180d79](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42471407708).
+Bản `1180d79` dùng chung lượt làm mới thông tin chỗ trống giữa các yêu cầu và kích hoạt gửi phản hồi ngay sau khi node commit lệnh. p95 đặt qua broker giảm 38,7% so với lượt broker trước. TC80 vẫn chưa đạt. p95 của lượt broker mới vượt ngưỡng và tỷ lệ lỗi HTTP là 4,48%. Hai lượt HTTP đều đã có 0% lỗi 504. Bản `c87eba8` gộp thao tác nhận lệnh vào một truy vấn nguyên tử. p95 đặt qua broker giảm tiếp xuống 870 ms, vẫn vượt ngưỡng. [Log và JSON của lượt c87eba8](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42471813096). Chỉ tiêu tra cứu 250 ms trong kế hoạch áp dụng cho sáu bãi. Lượt TC80 trên đây chạy ba bãi. Log và JSON ở mục Artifacts của [lượt 7f58824](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42470803318) và [lượt 1180d79](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42471407708).
 
 ## Cách chạy lại
 

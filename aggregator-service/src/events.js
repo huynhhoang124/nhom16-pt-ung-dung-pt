@@ -34,9 +34,9 @@ function applyEvent(cache, e) {
 
 // Anti-entropy: lấy ảnh chụp slot từ node rồi gộp bằng "giữ version lớn hơn".
 // Phép gộp này giao hoán, kết hợp, idempotent => chạy bao nhiêu lần, theo thứ tự nào cũng ra cùng kết quả.
-async function reconcile(reg, cache, n, onApplied) {
+async function reconcile(reg, cache, n, onApplied, { fenced = true } = {}) {
   let applied = 0;
-  for (const s of await reg.json(n, '/api/slots', { job: 'reconcile' })) {   // PD-10: việc của leader, mang fencing token
+  for (const s of await reg.json(n, '/api/slots', fenced ? { job: 'reconcile' } : undefined)) {   // PD-10: việc của leader, mang fencing token
     const e = { event: 'SLOT_UPDATED', type: 'RECONCILE', parkingId: n.id, slot: s.slotCode, status: s.status, version: s.version };
     if (applyEvent(cache, e)) { applied++; onApplied?.(e); }
   }
@@ -207,6 +207,7 @@ async function replayRecentEvents(
 function createReconcileQueue(reg, cache, onApplied, log = console, delayMs = 500, leader) {
   const pending = [];
   const queued = new Set();
+  const initialized = new WeakSet();
   let running = false;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -220,8 +221,11 @@ function createReconcileQueue(reg, cache, onApplied, log = console, delayMs = 50
         const n = pending.shift();
 
         try {
-          if (leader && !leader.isLeader()) continue;
-          const count = await reconcile(reg, cache, n, onApplied);
+          const fenced = !leader || leader.isLeader();
+          if (!fenced && initialized.has(n)) continue;
+          // Followers warm their own read-only cache once. The leader owns periodic reconciliation.
+          const count = await reconcile(reg, cache, n, onApplied, { fenced });
+          initialized.add(n);
           log.info?.(`Đối soát bãi ${n.id}: cập nhật ${count} slot`);
         } catch (e) {
           if (e.message?.includes('STALE_LEADER')) leader?.demote();

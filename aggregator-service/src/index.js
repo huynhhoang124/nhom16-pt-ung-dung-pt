@@ -234,7 +234,7 @@ async function main() {
     return p
       .then(() => reg.check(onChange))
       .then(() => {
-        if (leader.isLeader()) reg.all().filter((n) => n.status === 'ONLINE').forEach(reconcileQueue.enqueue);
+        reg.all().filter((n) => n.status === 'ONLINE').forEach(reconcileQueue.enqueue);
       })
       .catch((e) => log.error('health check lỗi', { error: e.message }));
   };

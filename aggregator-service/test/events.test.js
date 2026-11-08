@@ -158,3 +158,22 @@ test('applyEvent lưu HLC của sự kiện nhận được', () => {
     hlc: '1800000000000-0007',
   });
 });
+test('PD-22: follower hydrates untouched slots without running periodic reconciliation', async () => {
+  const node = { id: 'A' };
+  const cache = new Map();
+  const calls = [];
+  const reg = {
+    async json(_node, _path, opts) {
+      calls.push(opts);
+      return [{ slotCode: 'A01', status: 'AVAILABLE', version: 0 }];
+    },
+  };
+  const queue = createReconcileQueue(reg, cache, null, {}, 0, { isLeader: () => false });
+  const tick = () => new Promise((resolve) => setImmediate(resolve));
+  queue.enqueue(node);
+  await tick();
+  queue.enqueue(node);
+  await tick();
+  assert.deepEqual(calls, [undefined]);
+  assert.deepEqual(cache.get('A:A01'), { status: 'AVAILABLE', version: 0 });
+});
