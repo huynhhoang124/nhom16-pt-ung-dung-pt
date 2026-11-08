@@ -96,7 +96,7 @@ jobs:
         mode: [http, broker]
     env:
       COMPOSE_PROJECT_NAME: gd2-tc80
-      COMPOSE_FILE: docker-compose.yml:docker-compose.chaos.yml
+      COMPOSE_FILE: docker-compose.yml:docker-compose.chaos.yml:tests/load/benchmark-slots.compose.yml
       COMPOSE_PROFILES: chaos
       COMMAND_MODE: ${{ matrix.mode }}
       K6_NETWORK: gd2-tc80_default

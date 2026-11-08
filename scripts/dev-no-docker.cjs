@@ -32,9 +32,9 @@ const KEY = 'dev';
 const { privateKey, publicKey } = require('node:crypto').generateKeyPairSync('rsa', {
   modulusLength: 2048, privateKeyEncoding: { type: 'pkcs8', format: 'pem' }, publicKeyEncoding: { type: 'spki', format: 'pem' } });
 const BAYS = [
-  ['A', 8001, 'CAR:1:10,CAR:2:10,MOTO:1:20', 'Bãi A – PTIT Hà Đông', '96A Trần Phú, Hà Đông', 20.9809, 105.7875],
-  ['B', 8002, 'CAR:1:10,CAR:2:10,CAR:3:10,MOTO:1:30', 'Bãi B – Cầu Giấy', 'Cầu Giấy, Hà Nội', 21.0362, 105.7906],
-  ['C', 8003, 'CAR:1:10,CAR:2:5,MOTO:1:15', 'Bãi C – Hoàn Kiếm', 'Hoàn Kiếm, Hà Nội', 21.0287, 105.8524],
+  ['A', 8001, 'CAR:1:5,CAR:2:3,MOTO:1:2', 'Bãi A – PTIT Hà Đông', '96A Trần Phú, Hà Đông', 20.9809, 105.7875],
+  ['B', 8002, 'CAR:1:5,CAR:2:3,MOTO:1:2', 'Bãi B – Cầu Giấy', 'Cầu Giấy, Hà Nội', 21.0362, 105.7906],
+  ['C', 8003, 'CAR:1:5,CAR:2:3,MOTO:1:2', 'Bãi C – Hoàn Kiếm', 'Hoàn Kiếm, Hà Nội', 21.0287, 105.8524],
 ];
 
 async function pool() {

@@ -182,19 +182,19 @@ services:
     image: nhom16/parking-node
     # READ_DATABASE_URL: chỉ đặt (trong .env) khi bật profile ha. Trỏ tới bản sao không tồn tại thì lần đọc phải chờ
     # kết nối hỏng mới rơi về bản chính -> chậm. Để trống = đọc bản chính.
-    environment: { <<: *node-env, NODE_URL: "http://parking-a:8001", READ_DATABASE_URL: "${A_READ_DATABASE_URL:-}", PARKING_ID: A, PORT: 8001, SLOTS: "CAR:1:10,CAR:2:10,MOTO:1:20", DATABASE_URL: "${A_DATABASE_URL:-postgres://postgres:dev@db-a/parking}" }   # A_DATABASE_URL: failover (runbook-failover.md)
+    environment: { <<: *node-env, NODE_URL: "http://parking-a:8001", READ_DATABASE_URL: "${A_READ_DATABASE_URL:-}", PARKING_ID: A, PORT: 8001, SLOTS: "CAR:1:5,CAR:2:3,MOTO:1:2", DATABASE_URL: "${A_DATABASE_URL:-postgres://postgres:dev@db-a/parking}" }   # A_DATABASE_URL: failover (runbook-failover.md)
     ports: ["8001:8001"]
     depends_on: { db-a: { condition: service_healthy } }
   parking-b:
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, NODE_URL: "http://parking-b:8002", READ_DATABASE_URL: "${B_READ_DATABASE_URL:-}", PARKING_ID: B, PORT: 8002, SLOTS: "CAR:1:10,CAR:2:10,CAR:3:10,MOTO:1:30", DATABASE_URL: "postgres://postgres:dev@db-b/parking" }
+    environment: { <<: *node-env, NODE_URL: "http://parking-b:8002", READ_DATABASE_URL: "${B_READ_DATABASE_URL:-}", PARKING_ID: B, PORT: 8002, SLOTS: "CAR:1:5,CAR:2:3,MOTO:1:2", DATABASE_URL: "postgres://postgres:dev@db-b/parking" }
     ports: ["8002:8002"]
     depends_on: { db-b: { condition: service_healthy } }
   parking-c:
     build: ./parking-node
     image: nhom16/parking-node
-    environment: { <<: *node-env, NODE_URL: "http://parking-c:8003", READ_DATABASE_URL: "${C_READ_DATABASE_URL:-}", PARKING_ID: C, PORT: 8003, SLOTS: "CAR:1:10,CAR:2:5,MOTO:1:15", DATABASE_URL: "postgres://postgres:dev@db-c/parking" }
+    environment: { <<: *node-env, NODE_URL: "http://parking-c:8003", READ_DATABASE_URL: "${C_READ_DATABASE_URL:-}", PARKING_ID: C, PORT: 8003, SLOTS: "CAR:1:5,CAR:2:3,MOTO:1:2", DATABASE_URL: "postgres://postgres:dev@db-c/parking" }
     ports: ["8003:8003"]
     depends_on: { db-c: { condition: service_healthy } }
 
@@ -304,7 +304,7 @@ services:
       NODE_URL: "http://parking-d:8004"
       PARKING_ID: D
       PORT: 8004
-      SLOT_COUNT: 10
+      SLOTS: "CAR:1:5,CAR:2:5"
       CLOCK_SKEW_MS: "${CLOCK_SKEW_MS:-0}"
       DATABASE_URL: "postgres://postgres:dev@db-d/parking"
     ports: ["8004:8004"]

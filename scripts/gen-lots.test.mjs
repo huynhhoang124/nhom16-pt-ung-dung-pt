@@ -8,9 +8,9 @@ const root = new URL('../', import.meta.url);
 test('PD-12 sinh đúng ba bãi Nam với DB, node, zone và lease etcd riêng', () => {
   const { services, volumes } = makeScaleCompose();
   for (const [id, port, slots] of [
-    ['D', 8004, 'CAR:1:10,CAR:2:10'],
-    ['E', 8005, 'CAR:1:10,MOTO:1:10'],
-    ['F', 8006, 'CAR:1:10,MOTO:1:10'],
+    ['D', 8004, 'CAR:1:5,CAR:2:5'],
+    ['E', 8005, 'CAR:1:8,MOTO:1:2'],
+    ['F', 8006, 'CAR:1:8,MOTO:1:2'],
   ]) {
     const key = id.toLowerCase();
     const parking = services[`parking-${key}`];

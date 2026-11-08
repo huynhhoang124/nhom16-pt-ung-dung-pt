@@ -120,6 +120,20 @@ PD-20 đo với 100 VU, mỗi vế hai phút, hai replica B và một replica tr
 
 PostgreSQL ở Aggregator gom các commit đồng thời trong tối đa 500 µs. Intent, giao dịch đặt chỗ, inbox và kết quả cuối vẫn chờ ghi bền. Chỉ dấu giao tin đã được RabbitMQ xác nhận dùng commit bất đồng bộ. Nếu mất dấu khi sập, hệ thống phát lại cùng ID và bên nhận xử lý trùng. [Tài liệu PostgreSQL về commit_delay](https://www.postgresql.org/docs/16/runtime-config-wal.html#GUC-COMMIT-DELAY).
 
+## Kiểm tra lại lượt TC80 338 ms
+
+Lượt 338 ms có 22,4% lệnh bãi B chờ hơn 100 ms trong hàng consumer, so với 1,9% và 8,9% ở hai lượt đạt của bản trước. p95 từ lúc lưu lệnh đến khi giao dịch node bắt đầu là 199 ms. Từ lúc giao dịch node bắt đầu đến lúc Aggregator ghi kết quả là 94 ms ở p95. Các percentile từng giai đoạn được tính riêng. [Lượt trượt](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42498232640/attempts/1).
+
+Aggregator chuyển quét hết hạn sang nhịp bảo trì, gộp thông báo kết quả vào giao dịch cập nhật và bỏ lượt đọc lại ở bản vừa ghi. Node bỏ rollback khi câu giữ slot không đổi dòng nào và vẫn kiểm tra idempotency. Nginx ghi access log theo lô. Bản chỉ tối ưu Aggregator từng có một lượt 307 ms, nên tiếp tục tối ưu node và proxy. [Lượt 307 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42500492832).
+
+| Lượt độc lập, runtime ba69300 | Đọc p95 | Đặt p95 | Đặt p99 |
+|---|---:|---:|---:|
+| [42501009645](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42501009645) | 20,77 ms | 183 ms | 247 ms |
+| [42501005467](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42501005467) | 17,12 ms | 141 ms | 204 ms |
+| [42501008634](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42501008634) | 14,72 ms | 125 ms | 190 ms |
+
+Ba lượt chạy 300 VU trong hai phút, B chậm 1.500 ms và đạt cả 12 bất biến sau tải. Mọi ngưỡng k6 đều qua, 503/504 bằng 0. Dữ liệu demo mới dùng 10 slot/bãi. Overlay `tests/load/benchmark-slots.compose.yml` giữ A/B/C ở 40/60/30 slot khi chạy TC80 và PD-20 để so sánh với kết quả cũ.
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).
