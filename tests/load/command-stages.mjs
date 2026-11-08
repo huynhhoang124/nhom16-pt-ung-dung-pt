@@ -2,7 +2,7 @@
 import { execFileSync } from 'node:child_process';
 const read = (service, query) => JSON.parse(execFileSync('docker',
   ['compose', 'exec', '-T', service, 'psql', '-U', 'postgres', '-d', 'parking', '-tAc', query],
-  { encoding: 'utf8' }).trim());
+  { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 }).trim());
 const commands = read('db-agg', `SELECT coalesce(json_agg(t),'[]') FROM (
   SELECT id,created_at,updated_at,status FROM commands WHERE id LIKE '%:k6-%'
 ) t`);
