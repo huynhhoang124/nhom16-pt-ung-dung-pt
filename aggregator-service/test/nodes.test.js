@@ -513,3 +513,14 @@ test('PD-20 hedged GET: chặn các hedge đang chờ khi tỷ lệ vượt 5%',
   assert.ok(stats.additionalRatio > 0.05);
   assert.equal(stats.hedgingDisabled, true);
 });
+test('PD-20 rejects a fast 503 and uses the healthy replica', async t => {
+  const failed = http.createServer((_req, res) => { res.writeHead(503); res.end(); });
+  const healthy = http.createServer((_req, res) => { res.setHeader('content-type', 'application/json'); res.end('{"ok":true}'); });
+  for (const server of [failed, healthy]) await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => { failed.close(); healthy.close(); });
+  const url = server => `http://127.0.0.1:${server.address().port}`;
+  const reg = makeRegistry({ internalKey: 'dev' });
+  const node = reg.add({ parking_id: 'A', api_url: url(failed) });
+  node.replicas = new Map([['primary', { url: url(failed) }], ['secondary', { url: url(healthy) }]]);
+  assert.deepEqual(await (await reg.hedgedGet(node, '/api/slots')).json(), { ok: true });
+});

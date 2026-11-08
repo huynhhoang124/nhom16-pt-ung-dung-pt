@@ -3,7 +3,7 @@
 // Chỉ chạy trên stack thử; đặt thành công thì huỷ để quay vòng slot.
 import http from 'k6/http';
 import { check, fail, sleep } from 'k6';
-import { Rate, Trend } from 'k6/metrics';
+import { Rate, Trend, Counter } from 'k6/metrics';
 
 const BASE = (__ENV.BASE || 'http://frontend').replace(/\/$/, '');
 const PARKINGS = (__ENV.PARKING_IDS || 'A,B,C').split(',').map((id) => id.trim()).filter(Boolean);
@@ -13,6 +13,8 @@ const POLL_TIMEOUT_MS = Number(__ENV.POLL_TIMEOUT_MS || 30000);
 const POLL_INTERVAL_MS = Number(__ENV.POLL_INTERVAL_MS || 500);
 const DEBUG_SLOW_MS = Number(__ENV.DEBUG_SLOW_MS || 0);
 const json = { headers: { 'Content-Type': 'application/json' } };
+const statusCounts = new Counter('http_status_count');
+const reportedErrors = new Set();
 const httpStatuses = new Rate('unexpected_status');
 const status503 = new Rate('response_503');
 const status504 = new Rate('response_504');
@@ -43,7 +45,9 @@ function body(response) {
 // Mọi HTTP của workload (kể cả poll/huỷ) cùng mẫu số; setup không tính vào hai tỉ lệ này.
 function record(response, operation) {
   httpStatuses.add(![200, 201, 202, 409].includes(response.status), { status: String(response.status) });
-  if (![200, 201, 202, 409].includes(response.status) && __ITER === 0) {
+  statusCounts.add(1, { status: String(response.status), operation });
+  if (![200, 201, 202, 409].includes(response.status) && !reportedErrors.has(response.status)) {
+    reportedErrors.add(response.status);
     console.error(`${operation}: status=${response.status} body=${response.body}`);
   }
   status503.add(response.status === 503);
