@@ -87,3 +87,38 @@ jobs:
         with:
           name: jepsen-${{ matrix.name }}
           path: tests/jepsen/results/
+  tc80:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [http, broker]
+    env:
+      COMPOSE_PROJECT_NAME: gd2-tc80
+      COMPOSE_FILE: docker-compose.yml:docker-compose.chaos.yml
+      COMPOSE_PROFILES: chaos
+      COMMAND_MODE: ${{ matrix.mode }}
+      K6_NETWORK: gd2-tc80_default
+      LOOKUP_P95_MS: '250'
+      RESERVE_P95_MS: '300'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cp .env.example .env && node scripts/gen-keys.mjs
+      - run: |
+          docker compose up -d --build --wait
+          curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
+          node scripts/net.mjs B latency 1500
+      - name: Measure 300 VU with a slow parking node
+        id: measure
+        continue-on-error: true
+        run: bash scripts/do-so-sanh.sh tc80-ci-${{ matrix.mode }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc80-${{ matrix.mode }}
+          path: tai-lieu/ket-qua-do/tc80-ci-${{ matrix.mode }}.*
+      - if: steps.measure.outcome == 'failure'
+        run: echo "::warning::TC80 workload exited nonzero. Review the k6 result and SLO before marking PD-27 complete."

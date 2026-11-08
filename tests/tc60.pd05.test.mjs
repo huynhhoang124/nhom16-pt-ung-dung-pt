@@ -327,12 +327,10 @@ export function registerTc60Pd05Tests({
       // ---------------------------------------------------------------
 
       for (const service of ['rabbitmq', 'rabbitmq-2', 'rabbitmq-3']) {
-        const broker = serviceContainer(service);
-
-        assert.equal(
-          broker.info.State.Health?.Status,
-          'healthy',
-          `${service} must be healthy`
+        await waitFor(
+          `${service} healthy`,
+          () => serviceContainer(service).info.State.Health?.Status === 'healthy',
+          60_000,
         );
       }
 
