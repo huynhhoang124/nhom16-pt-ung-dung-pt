@@ -11,6 +11,7 @@ test('GS-03 relay ghi đúng request ID từ outbox chỉ sau broker confirm và
     { get: () => 'gs03-relay-trace' }, { set() {}, on() {} },
     () => s.reserve(pool, 'A', { requestId: 'idempotency-key-khac', userId: 'u', slotCode: 'A01', licensePlate: 'p' }).then(resolve, reject),
   ));
+  const commitSetting = await one(pool, 'SHOW synchronous_commit');
   const logs = [];
   let confirmed = false;
   const relay = makeRelay(pool, async () => confirmed, { info: (msg, fields) => logs.push({ msg, ...fields }) });
@@ -18,6 +19,7 @@ test('GS-03 relay ghi đúng request ID từ outbox chỉ sau broker confirm và
   assert.deepEqual(logs, []);
   confirmed = true;
   assert.equal(await relay(), 1);
+  assert.deepEqual(await one(pool, 'SHOW synchronous_commit'), commitSetting);
   const event = await one(pool, 'SELECT id, published_at FROM parking_events');
   assert.ok(event.published_at);
   assert.deepEqual(logs, [{ msg: 'outbox đã gửi', requestId: 'gs03-relay-trace', eventId: event.id,

@@ -150,7 +150,9 @@ function makeRelay(pool, publish, logger = log, onConfirmed = () => {}) {
       const ids = rows.map((e) => e.id);
 
       await client.query(
-        'UPDATE parking_events SET published_at = clock_timestamp() WHERE id = ANY($1)',
+        // A lost delivery marker causes a duplicate event, handled by consumers; the original event is already durable.
+        `WITH delivery AS MATERIALIZED (SELECT set_config('synchronous_commit','off',true))
+         UPDATE parking_events SET published_at = clock_timestamp() FROM delivery WHERE id = ANY($1)`,
         [ids],
       );
 

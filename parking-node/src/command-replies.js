@@ -137,9 +137,13 @@ function makeReplyRelay(pool, publish) {
             confirmed.push(r.id);
           }));
           if (confirmed.length) {
-            await pool.query(`UPDATE command_reply_outbox SET published_at=now(),attempts=attempts+1,
+            // Losing this delivery marker only replays a confirmed reply; business/inbox commits stay synchronous.
+            await pool.query(`WITH delivery AS MATERIALIZED (
+              SELECT set_config('synchronous_commit','off',true)
+            )
+            UPDATE command_reply_outbox SET published_at=now(),attempts=attempts+1,
               last_attempt_at=now(),last_error=NULL,next_attempt_at=NULL
-              WHERE id=ANY($1::bigint[]) AND published_at IS NULL`, [confirmed]);
+              FROM delivery WHERE id=ANY($1::bigint[]) AND published_at IS NULL`, [confirmed]);
             count += confirmed.length;
           }
           const failed = results.find(result => result.status === 'rejected');
