@@ -137,7 +137,8 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
        VALUES ($1,$2,$3,$4, COALESCE($5::timestamptz,now()), COALESCE($5::timestamptz,now()) + make_interval(mins => $6), COALESCE($5::timestamptz,now()) + make_interval(mins => $7), $8) RETURNING *`,
       [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes, input.sagaId ? 'PENDING_SAGA' : 'ACTIVE']);
     if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', slot.version, licensePlate, { userId, reservationId: r.rows[0].id });
-    return { code: 201, body: { ...r.rows[0], slot_code: slotCode } };
+    return { code: 201, body: { ...r.rows[0], slot_code: slotCode },
+      ...(instant && { replySlot: { slotCode, status: 'RESERVED', version: Number(slot.version) } }) };
   }, async (e) => {
     if (e instanceof Abort) return replayOr({ code: e.code, body: e.body });
     if (e.code === '23P01') return replayOr({ code: 409, body: { error: 'TIME_CONFLICT' } });
@@ -356,7 +357,8 @@ function endReservationIn(c, parkingId, id, status, userId, sagaId, step) {
       await emit(c, parkingId, status, s.rows[0].slot_code, 'AVAILABLE', s.rows[0].version, r.rows[0].license_plate,
         { userId: r.rows[0].user_id, reservationId: id });
     }
-    return { code: 200, body: { id, status } };
+    return { code: 200, body: { id, status },
+      ...(s.rowCount && { replySlot: { slotCode: s.rows[0].slot_code, status: 'AVAILABLE', version: Number(s.rows[0].version) } }) };
   });
 }
 
