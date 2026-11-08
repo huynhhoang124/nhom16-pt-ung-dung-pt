@@ -113,6 +113,14 @@ jobs:
       - run: cp .env.example .env && node scripts/gen-keys.mjs
       - run: npm ci --prefix frontend
       - run: docker compose up -d --build --wait
+      - name: Wait for the live slot event consumer
+        run: |
+          timeout 60s bash -c '
+            until docker compose exec -T rabbitmq rabbitmqctl -q list_queues name consumers |
+              awk "\$1 == \"aggregator.slot-updates.1\" && \$2 > 0 { ready=1 } END { exit !ready }"; do
+              sleep 1
+            done
+          '
       - run: node --test tests/pd24-tracing.e2e.mjs
       - if: failure()
         run: docker compose logs --no-color --tail 200

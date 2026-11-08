@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [stats, replica, sac]
+        profile: [stats, replica, sac, scale, shards]
     env:
       COMPOSE_PROJECT_NAME: gd2-ci
       COMMAND_MODE: http
@@ -61,6 +61,26 @@ jobs:
           docker compose up -d --build
           curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
           node --test --test-name-pattern='PD-05|TC60' tests/e2e.test.mjs
+      - if: matrix.profile == 'scale'
+        env:
+          COMPOSE_FILE: docker-compose.yml:docker-compose.scale.yml
+          COMPOSE_PROFILES: scale,coord,ha
+          RABBITMQ_URL: amqp://parking:parking@rabbitmq/%2F,amqp://parking:parking@rabbitmq-2/%2F,amqp://parking:parking@rabbitmq-3/%2F
+          SCALE: '1'
+          COORD: '1'
+          HA: '1'
+        run: |
+          docker compose up -d --build
+          curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
+          node --test tests/e2e.test.mjs
+      - if: matrix.profile == 'shards'
+        env:
+          COMPOSE_FILE: docker-compose.yml:docker-compose.shard.yml
+          SHARD: '1'
+          HA: '1'
+        run: |
+          docker compose up -d --build --wait
+          node --test --test-name-pattern='TC73|TC-PD21' tests/e2e.test.mjs
       - if: failure()
         run: docker compose logs --no-color --tail 60
   jepsen:
