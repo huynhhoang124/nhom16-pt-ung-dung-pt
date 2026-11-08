@@ -304,3 +304,87 @@ tr.clickable { cursor: pointer; }
 .pw { display: flex; gap: var(--space-2); }
 .pw input { flex: 1; min-width: 0; }
 .pw-toggle { white-space: nowrap; }
+
+/* ───── Header & footer (Shell.jsx) ─────
+   Một hàng gọn, thẳng lề với nội dung trang; chữ menu đậm, đủ tương phản. */
+.theme-brand .bar { display: block; padding: 0; min-height: 0; border-bottom: 1px solid var(--line); }
+.bar-in { max-width: 1200px; margin: 0 auto; padding: 0 var(--space-5); min-height: 68px; display: flex; align-items: center; gap: var(--space-5); }
+.app:has(main.dense) .bar-in, .app:has(main.dense) .site-foot-in, .app:has(main.dense) .foot-bottom-in { max-width: 1360px; }
+.brand-btn { border: 0; background: none; padding: 0; min-height: 0; border-radius: var(--r-sm, 8px); flex: none; }
+.brand-btn:hover { background: none; }
+.theme-brand .brand { gap: 10px; margin: 0; }
+.theme-brand .brand-mark { width: 38px; height: 38px; font-size: 22px; border-radius: 11px; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.1; text-align: left; }
+.brand-name { font-family: var(--font-head); font-weight: 800; font-size: 19px; letter-spacing: -.01em; color: var(--text); }
+.brand-sub { font-size: 12px; font-weight: 500; color: var(--muted); margin-top: 2px; }
+.theme-brand .bar nav { flex: 1; display: flex; gap: 2px; align-self: stretch; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.theme-brand .bar nav .tab { min-height: 68px; padding: 0 14px; font-size: 15px; font-weight: 600; color: color-mix(in srgb, var(--text) 78%, transparent); white-space: nowrap; }
+.theme-brand .bar nav .tab:hover { color: var(--text); background: color-mix(in srgb, var(--primary) 6%, transparent); }
+.theme-brand .bar nav .tab.active { color: var(--primary); box-shadow: inset 0 -3px 0 var(--primary); background: none; }
+.bar-right { display: flex; align-items: center; gap: var(--space-3); flex: none; }
+.live { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: var(--radius-pill); font-size: 13px; font-weight: 600;
+  color: var(--ok); background: var(--ok-soft); white-space: nowrap; }
+.live .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: none; animation: live-pulse 2.4s ease-in-out infinite; }
+.live.off { color: var(--bad); background: var(--bad-soft); }
+.live.off .dot { animation: none; }
+@keyframes live-pulse { 50% { opacity: .35; } }
+/* Nút tài khoản + menu */
+.acct { position: relative; }
+.theme-brand .acct-btn { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 4px 12px 4px 4px; border: 1px solid var(--line);
+  border-radius: var(--radius-pill); background: var(--card); font-weight: 600; }
+.theme-brand .acct-btn:hover, .theme-brand .acct-btn.open { border-color: var(--line-strong); background: var(--surface); }
+.avatar { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; flex: none; background: var(--accent); color: #fff;
+  font-family: var(--font-head); font-weight: 800; font-size: 13px; letter-spacing: .02em; }
+.avatar.lg { width: 42px; height: 42px; font-size: 15px; }
+.acct-text { display: flex; flex-direction: column; line-height: 1.15; text-align: left; }
+.acct-name { font-size: 14px; font-weight: 700; color: var(--text); max-width: 14ch; overflow: hidden; text-overflow: ellipsis; }
+.acct-role { font-size: 12px; font-weight: 500; color: var(--muted); }
+.caret { width: 8px; height: 8px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg) translateY(-2px); margin-left: 2px; transition: transform .15s; }
+.acct-btn.open .caret { transform: rotate(-135deg) translateY(-2px); }
+.acct-menu { position: absolute; right: 0; top: calc(100% + 8px); z-index: 40; min-width: 250px; padding: 6px; background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--r-md, 12px); box-shadow: var(--shadow-3); display: flex; flex-direction: column; gap: 2px; }
+.acct-head { display: flex; align-items: center; gap: 10px; padding: 10px 10px 12px; margin-bottom: 4px; border-bottom: 1px solid var(--line); }
+.acct-head b { display: block; font-size: 15px; }
+.acct-head .small { display: block; }
+.theme-brand .acct-menu button { justify-content: flex-start; width: 100%; min-height: 42px; border: 0; border-radius: var(--r-sm, 8px); background: none; font-weight: 600; font-size: 14px; padding: 0 10px; }
+.theme-brand .acct-menu button:hover, .theme-brand .acct-menu button:focus-visible { background: var(--surface); }
+.theme-brand .acct-menu .acct-out { color: var(--bad); }
+.theme-brand .acct-menu .acct-out:hover { background: var(--bad-soft); }
+
+/* Footer */
+.site-foot { background: #14224a; color: #c3cbe3; margin-top: var(--space-8); border-top: 4px solid #d71f2f; }
+.site-foot-in { max-width: 1200px; margin: 0 auto; padding: 40px var(--space-5) 28px; display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-6); align-items: start; }
+.site-foot .brand-name { color: #fff; }
+.site-foot .brand-sub { color: #9aa6c8; }
+.foot-col { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.foot-col h4 { margin: 0 0 4px; color: #fff; font-family: var(--font-head); font-size: 14px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.foot-col p { margin: 0; font-size: 14px; line-height: 1.6; }
+.foot-about p { max-width: 42ch; margin-top: 6px; }
+.site-foot .foot-link { justify-content: flex-start; min-height: 0; padding: 2px 0; border: 0; border-radius: 0; background: none; color: #c3cbe3;
+  font-size: 14px; font-weight: 500; text-align: left; }
+.site-foot .foot-link:hover { background: none; color: #fff; text-decoration: underline; text-underline-offset: 3px; }
+.foot-bottom { border-top: 1px solid rgb(255 255 255 / .1); }
+.foot-bottom-in { max-width: 1200px; margin: 0 auto; padding: 14px var(--space-5); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+  gap: var(--space-2); font-size: 13px; color: #9aa6c8; }
+
+/* Màn hẹp: header 2 hàng (logo + tài khoản / menu cuộn ngang), footer xếp dọc */
+@container app (max-width: 900px) {
+  .acct-text, .live-text, .brand-sub { display: none; }
+  .theme-brand .acct-btn { padding: 4px 10px 4px 4px; }
+  .live { width: 30px; padding: 0; justify-content: center; }
+  .site-foot-in { grid-template-columns: 1fr 1fr; }
+  .foot-about { grid-column: 1 / -1; }
+}
+@container app (max-width: 640px) {
+  .bar-in { flex-wrap: wrap; gap: 0 var(--space-3); padding: 0 var(--space-4); min-height: 0; }
+  .brand-btn { padding: 10px 0; }
+  .bar-right { margin-left: auto; }
+  .theme-brand .bar nav { order: 3; flex: 0 0 calc(100% + 2 * var(--space-4)); margin: 0 calc(-1 * var(--space-4)); padding: 0 var(--space-2);
+    border-top: 1px solid var(--line); -webkit-mask-image: linear-gradient(90deg, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%);
+    mask-image: linear-gradient(90deg, transparent 0, #000 16px, #000 calc(100% - 16px), transparent 100%); }
+  .theme-brand .bar nav .tab { min-height: 48px; font-size: 14px; padding: 0 12px; }
+  .site-foot-in { grid-template-columns: 1fr; gap: var(--space-5); padding: 28px var(--space-4) 20px; }
+  .foot-bottom-in { padding: 12px var(--space-4); }
+}
+@media (prefers-reduced-motion: reduce) { .live .dot { animation: none; } }

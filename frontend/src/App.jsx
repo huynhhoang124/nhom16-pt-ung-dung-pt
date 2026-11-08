@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { session, socket, toast } from './api.js';
 import Toaster from './Toaster.jsx';
-import { Icon } from './ui.jsx';
+import { SiteFooter, SiteHeader } from './Shell.jsx';
 import Login from './pages/Login.jsx';
 import Dashboard from './pages/Dashboard.jsx';
 import ParkingDetail from './pages/ParkingDetail.jsx';
@@ -13,7 +13,6 @@ import Stats from './pages/Stats.jsx';
 import Gate from './pages/Gate.jsx';
 import CommandStatus from './CommandStatus.jsx';
 
-const ROLE_LABEL = { USER: 'Người dùng', STAFF: 'Nhân viên', ADMIN: 'Quản trị' };
 
 // Trang mở đầu: nhân viên vào thẳng bãi mình phụ trách; người dùng/quản trị vào Tổng quan.
 const homeView = (u) => (u?.role === 'STAFF' && u.parkingId ? { page: 'parking', parkingId: u.parkingId } : { page: 'dashboard' });
@@ -92,25 +91,8 @@ export default function App() {
 
   return (
     <div className="app theme-brand">
-      <header className="bar">
-        <strong className="brand"><span className="brand-mark" aria-hidden="true">P</span> Smart Parking</strong>
-        <nav>
-          {tabs.map(([page, label]) => (
-            <button key={page} className={isActive(page) ? 'tab active' : 'tab'} aria-current={isActive(page) ? 'page' : undefined} onClick={() => go(page)}>{label}</button>
-          ))}
-        </nav>
-        <span className="who">
-          <span className={live ? 'rt' : 'rt off'} title={live ? 'Đang nhận realtime' : 'Mất kết nối realtime'}>
-            <span className={live ? 'dot on' : 'dot'} />
-            <span className="hide-sm">{live ? 'Đang nhận realtime' : 'Mất kết nối realtime'}</span>
-          </span>
-          <span>{user.username} <span className="role hide-sm">· {ROLE_LABEL[user.role]}{user.parkingId ? ` bãi ${user.parkingId}` : ''}</span></span>
-          <button className="link hide-sm" onClick={() => setView({ page: 'account' })}>Tài khoản</button>
-          <button className="link hide-sm" onClick={logout}>Đăng xuất</button>
-          <button className="show-sm" title="Tài khoản" aria-label="Tài khoản" onClick={() => setView({ page: 'account' })}><Icon name="user" /></button>
-          <button className="show-sm" title="Đăng xuất" aria-label="Đăng xuất" onClick={logout}><Icon name="logout" /></button>
-        </span>
-      </header>
+      <SiteHeader user={user} tabs={tabs} isActive={isActive} onGo={go} live={live}
+        onAccount={() => setView({ page: 'account' })} onLogout={logout} />
       <main className={user.role === 'USER' ? undefined : 'dense'}>
         <CommandStatus userId={user.id} />
         {view.page === 'dashboard' && <Dashboard hero={user.role === 'USER'} onOpen={(parkingId) => setView({ page: 'parking', parkingId })} />}
@@ -124,14 +106,7 @@ export default function App() {
         {view.page === 'history' && <History key={user.role} user={user}
           onOpenSlot={user.role === 'USER' ? undefined : (parkingId, slot) => setView({ page: 'parking', parkingId, slot })} />}
       </main>
-      {(
-        <footer className="site-foot">
-          <div className="site-foot-in">
-            <strong className="brand"><span className="brand-mark" aria-hidden="true">P</span> Smart Parking</strong>
-            <span>{user.role === 'USER' ? 'Hệ thống bãi đỗ xe liên kết nhiều bãi' : `Khu vực ${ROLE_LABEL[user.role].toLowerCase()}`} · Nhóm 16 – PTIT</span>
-          </div>
-        </footer>
-      )}
+      <SiteFooter user={user} tabs={tabs} onGo={go} />
       <Toaster />
     </div>
   );
