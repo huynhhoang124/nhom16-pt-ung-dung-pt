@@ -70,6 +70,39 @@ node tests/load/check-invariants.mjs                # GS-05/06 kiểm bất bi�
 node tests/chaos.mjs                                # GS-06 vừa tải vừa tắt/bật ngẫu nhiên (cần --profile ha)
 ```
 
+## PD-22 và PD-23
+
+Aggregator đọc lại tối đa 10 phút từ `events.stream` khi bắt đầu nhận sự kiện. Muốn bật thống kê CQRS, đặt `USE_STATS_SERVICE=true` trong `.env` và chạy `docker compose --profile stats up -d --build`. Dịch vụ lưu vị trí đọc trong Postgres và tiếp tục từ đó sau khi khởi động lại. Thống kê CQRS chỉ gồm dữ liệu nhận được qua stream. Với dữ liệu có từ trước khi bật stream, dùng chế độ thống kê trực tiếp mặc định.
+
+## PD-26 – kiểm thử Jepsen
+
+Harness mới ở `tests/jepsen/` chạy workload có seed, lưu history JSONL và kiểm sáu bất biến trên Docker Compose riêng, dùng cổng Aggregator/bãi `18000–18006` và cổng Toxiproxy `19474–19479` để không đụng stack phát triển:
+
+```powershell
+node --test tests/jepsen/*.test.mjs
+node tests/jepsen/run.mjs --scenario tc79 --seed 42 --time 60
+node tests/jepsen/run.mjs --nemesis loss --seed 42 --time 60
+```
+
+TC79 chạy workload trên ba bãi và cô lập một nút RabbitMQ. TC78 cần topology sáu bãi của PD-12:
+
+```powershell
+$env:JEPSEN_PARKING_IDS = 'A,B,C,D,E,F'
+node tests/jepsen/run.mjs --scenario tc78 --nemesis partition --seed 42 --time 120
+Remove-Item Env:JEPSEN_PARKING_IDS
+```
+
+`docker-compose.scale.yml` được dùng tự động cho sáu bãi. Các lựa chọn nemesis độc lập: `none`, `rabbitmq`, `loss` (mất 20% gói) và `partition` (cắt kết nối tới vùng Nam trong 30 giây). History nằm trong `tests/jepsen/results/`, có in seed và được Git bỏ qua. Mặc định runner tự dọn Docker project tạm sau khi chạy; đặt `JEPSEN_PROJECT` để giữ project phục vụ kiểm tra thủ công. Dùng `node tests/jepsen/run.mjs --help` để xem các tùy chọn.
+
+PD-26 bổ sung nemesis `db`, `leader`, và `random` cho topology sáu bãi. `db` dừng primary A để failover-manager promote replica; `leader` pause Aggregator leader 15 giây; `random` chạy cả hai theo lịch tái lập được từ seed trong cửa sổ ít nhất 300 giây. Bất biến 6 kiểm tra một primary đang hoạt động và đối chiếu `db_epoch` với epoch trong etcd. Chạy hai seed:
+
+```powershell
+$env:JEPSEN_PARKING_IDS = 'A,B,C,D,E,F'
+node tests/jepsen/run.mjs --nemesis random --seed 42 --time 300
+node tests/jepsen/run.mjs --nemesis random --seed 43 --time 300
+Remove-Item Env:JEPSEN_PARKING_IDS
+```
+
 ## Kiến trúc
 ```
 Trình duyệt ── Aggregator ── DB Aggregator

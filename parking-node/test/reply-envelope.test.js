@@ -11,3 +11,13 @@ test('business failure on malformed UUID does not abort transaction again',async
   const c={query:async()=>{throw new Error('must not issue invalid UUID SQL');}},payload={statusCode:404},properties={headers:{}};
   await enrichReply(c,{type:'cancel',payload:{reservationId:'bad'}},payload,properties,'key');assert.equal(payload.slot,undefined);assert.ok(properties.headers['x-reply-signature']);
 });
+
+test('reply signs the locked UPDATE snapshot without rereading the slot', async () => {
+  const c = { query: async () => assert.fail('snapshot already held under row lock') };
+  const slot = { slotCode: 'A01', status: 'RESERVED', version: 8 };
+  const payload = { type: 'COMMAND_RESULT' }, properties = { correlationId: 'user:key', headers: {} };
+  await enrichReply(c, { type: 'reserve', payload: { slotCode: 'A01' } }, payload, properties, 'key', slot);
+  assert.deepEqual(payload.slot, slot);
+  assert.ok(verifySignature('key', payload, { ...properties,
+    headers: { 'x-command-signature': properties.headers['x-reply-signature'] } }));
+});

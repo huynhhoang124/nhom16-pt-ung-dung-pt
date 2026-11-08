@@ -6,7 +6,7 @@ const { amqpPublisher, makeRelay } = require('./relay');
 const { expireDue, activateDue, warnExpiring } = require('./slots');
 const { makeRegistryClient } = require('./registry');
 const { log } = require('./log');
-const { startCommandConsumer, makeCommandProcessor, cleanupInbox } = require('./commands');
+const { startCommandConsumer, makeCommandProcessor, cleanupInbox, crashAfterCommitOnce } = require('./commands');
 const { makeReplyPublisher, makeReplyRelay } = require('./command-replies');
 const { withDeadline, makeRetryOrDead, testFailures } = require('./command-retry');
 const { makeRelayLagMetric } = require('./metrics');
@@ -28,6 +28,10 @@ async function main() {
   // DB khởi động lại / mất mạng: kết nối nhàn rỗi trong pool phát 'error'. Không bắt thì cả tiến trình sập (gặp khi tập
   // failover: stop db-a làm node A chết luôn, đọc bản sao cũng không được). Bắt rồi thì pool tự mở kết nối mới khi DB về.
   pool.on('error', (e) => log.error('mất kết nối DB chính', { error: e.message }));
+  // pg-pool only guards idle clients. A leased connection can emit between SQL statements.
+  const onClientError = (e) => log.error('mất kết nối DB trong lúc xử lý', { error: e.message });
+  pool.on('acquire', (client) => client.on('error', onClientError));
+  pool.on('release', (_error, client) => client.removeListener('error', onClientError));
   for (let i = 1; ; i++) {          // DB có thể khởi động chậm hơn node
     try { await init(pool, env('SLOT_PREFIX', parkingId), env('SLOTS') ?? Number(env('SLOT_COUNT', 20)), pricing); break; }
     catch (e) { if (i >= 30) throw e; log.info('DB chưa sẵn sàng, thử lại', { error: e.message }); await new Promise((r) => setTimeout(r, 2000)); }
@@ -113,8 +117,16 @@ async function main() {
 
   const replyPublisher = makeReplyPublisher(url);
   const replyOnce = makeReplyRelay(pool, replyPublisher.publishDetailed);
+  let replyOnCommit;
   const retryOrDead = makeRetryOrDead({ url, internalKey: env('INTERNAL_KEY', 'dev') });
-  const consumer = startCommandConsumer({ url, pool, parkingId, retryOrDead, internalKey: env('INTERNAL_KEY', 'dev'), log,
+  const consumer = startCommandConsumer({ url, pool, parkingId, retryOrDead, afterCommit(result) {
+    crashAfterCommitOnce(result);
+    const delivery = replyOnce()
+      .catch((error) => log.error('command reply relay failed', { error: error.message }));
+    if (!replyOnCommit) {
+      replyOnCommit = delivery.finally(() => { replyOnCommit = null; });
+    }
+  }, internalKey: env('INTERNAL_KEY', 'dev'), log,
     processCommand: withDeadline(makeCommandProcessor({ pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),
       adminEnabled: env('ADMIN_BROADCAST_ENABLED', 'true') === 'true',
       reservationMinutes: Number(env('RESERVATION_MINUTES', 15)), qrSecret: env('QR_SECRET', `${env('INTERNAL_KEY', 'dev')}:qr:${parkingId}`), beforeDispatch: testFailures() }),
@@ -167,6 +179,7 @@ async function main() {
       for (const job of jobs) clearInterval(job.timer);
       await consumer.stop();
       await retryOrDead.close();
+      await replyOnCommit;
       await Promise.allSettled(jobs.map((job) => job.running));
         // PD-13: Nhả advisory lock trước khi đóng pool database.
         await scheduledJobsLock.stop();

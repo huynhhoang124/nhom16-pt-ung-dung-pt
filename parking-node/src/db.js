@@ -49,14 +49,102 @@ async function init(pool, prefix, slots, pricing = DEFAULT_RULES) {
 // PT-02: "pool chỉ đọc" — đọc bản sao (replica); bản sao lỗi thì đọc bản chính và bỏ qua bản sao `backoffMs`.
 // CHỈ dùng cho truy vấn đọc không nằm trong luồng ghi: replica sao chép BẤT ĐỒNG BỘ nên có thể chậm vài trăm ms
 // (vừa đặt chỗ xong mà đọc replica có thể chưa thấy -> luồng ghi luôn đọc bản chính).
-function readThrough(replica, primary, { backoffMs = 10_000, onFallback } = {}) {
+
+function readThrough(replica, primary, {
+  backoffMs = 10_000,
+  maxStalenessMs = 1_000,
+  statusCacheMs = 200,
+  onFallback,
+  now = Date.now,
+} = {}) {
   let skipUntil = 0;
+  let statusCheckedAt = Number.NEGATIVE_INFINITY;
+  let replayAgeMs = null;
+
+  async function checkReplicaFreshness() {
+    const currentTime = now();
+
+    // Cache trạng thái replica trong 200 ms.
+    if (currentTime - statusCheckedAt < statusCacheMs) {
+      if (replayAgeMs === null) return false;
+
+      const estimatedAge = replayAgeMs + (currentTime - statusCheckedAt);
+      return estimatedAge >= 0 && estimatedAge <= maxStalenessMs;
+    }
+
+    try {
+      const result = await replica.query(`
+        SELECT CASE
+          WHEN pg_last_xact_replay_timestamp() IS NULL THEN NULL
+          ELSE EXTRACT(
+            EPOCH FROM (now() - pg_last_xact_replay_timestamp())
+          ) * 1000
+        END AS replay_age_ms
+      `);
+
+      const rawAge = result.rows?.[0]?.replay_age_ms;
+      const age = Number(rawAge);
+
+      statusCheckedAt = now();
+      replayAgeMs =
+        rawAge !== null &&
+        rawAge !== undefined &&
+        Number.isFinite(age) &&
+        age >= 0
+          ? age
+          : null;
+
+      return replayAgeMs !== null && replayAgeMs <= maxStalenessMs;
+    } catch (error) {
+      skipUntil = now() + backoffMs;
+      replayAgeMs = null;
+      statusCheckedAt = Number.NEGATIVE_INFINITY;
+      onFallback?.(error);
+      return false;
+    }
+  }
+
+  function fallbackToPrimary(error) {
+    skipUntil = now() + backoffMs;
+    replayAgeMs = null;
+    statusCheckedAt = Number.NEGATIVE_INFINITY;
+    onFallback?.(error);
+  }
+
   return {
-    async query(sql, params) {
-      if (Date.now() >= skipUntil) {
-        try { return await replica.query(sql, params); } catch (e) { skipUntil = Date.now() + backoffMs; onFallback?.(e); }
+    async query(sql, params, { minLSN } = {}) {
+      if (now() < skipUntil) {
+        return primary.query(sql, params);
       }
-      return primary.query(sql, params);
+
+      // Read-your-writes: kiểm tra WAL trước freshness.
+      if (minLSN !== undefined && minLSN !== null) {
+        try {
+          const result = await replica.query(
+            'SELECT pg_last_wal_replay_lsn() >= $1::pg_lsn AS caught_up',
+            [minLSN],
+          );
+
+          if (result.rows?.[0]?.caught_up !== true) {
+            return primary.query(sql, params);
+          }
+        } catch (error) {
+          fallbackToPrimary(error);
+          return primary.query(sql, params);
+        }
+      }
+
+      // Replica phải vừa đủ mới, vừa không bị lỗi.
+      if (!(await checkReplicaFreshness())) {
+        return primary.query(sql, params);
+      }
+
+      try {
+        return await replica.query(sql, params);
+      } catch (error) {
+        fallbackToPrimary(error);
+        return primary.query(sql, params);
+      }
     },
   };
 }

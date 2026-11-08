@@ -18,7 +18,7 @@ function routingKey(parkingId, type) {
   return `cmd.${parkingId}.${type}`;
 }
 
-function makeCommands(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000, signingKey = process.env.INTERNAL_KEY, config } = {}) {
+function makeCommands(url, { connect = amqp.connect, timeoutMs = 3000, signingKey = process.env.INTERNAL_KEY, config } = {}) {
   const connectAny = makeConnector(url, connect);
   let current;
   let opening;

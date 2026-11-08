@@ -56,8 +56,8 @@ test('one hundred unroutable rows cannot starve the next batch; infrastructure f
   let calls = 0;
   const unavailable = makeReplyRelay(pool, async () => { calls++; return { ok: false, scope: 'infrastructure', code: 'REPLY_NACKED' }; });
   assert.equal(await unavailable(), 0);
-  assert.equal(calls, 1);
-  assert.equal((await one(pool, "SELECT count(*)::int AS n FROM command_reply_outbox WHERE last_error='REPLY_NACKED'")).n, 1);
+  assert.equal(calls, 16);
+  assert.equal((await one(pool, "SELECT count(*)::int AS n FROM command_reply_outbox WHERE last_error='REPLY_NACKED'")).n, 16);
   assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 100);
 });
 
@@ -106,4 +106,79 @@ test('detailed publisher correlates concurrent returns/confirms and distinguishe
   assert.equal((await lost).scope, 'infrastructure');
   const circular = {}; circular.self = circular;
   assert.deepEqual(await publisher.publishDetailed('agg.1', circular, {}), { ok: false, scope: 'record', code: 'REPLY_INVALID_RECORD' });
+});
+
+test('reply committed while the relay is waiting for confirm triggers another pass', async t => {
+  const pool = await makePool();
+  t.after(() => pool.db.close());
+  const insert = id => pool.query(
+    "INSERT INTO command_reply_outbox(command_id,reply_to,payload,properties) VALUES ($1,'agg.1','{}','{}')",
+    [id],
+  );
+  await insert('first');
+  let confirm;
+  let started;
+  const publishing = new Promise(resolve => { started = resolve; });
+  const blocked = new Promise(resolve => { confirm = resolve; });
+  const delivered = [];
+  const relay = makeReplyRelay(pool, async () => {
+    delivered.push(delivered.length + 1);
+    if (delivered.length === 1) { started(); await blocked; }
+    return true;
+  });
+  const first = relay();
+  await publishing;
+  await insert('second');
+  await relay();
+  confirm();
+  assert.equal(await first, 2);
+  assert.equal(delivered.length, 2);
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 0);
+});
+
+test('reply relay pipelines confirms but never marks an unconfirmed row as published', async t => {
+  const pool = await makePool();
+  t.after(() => pool.db.close());
+  await pool.query(`INSERT INTO command_reply_outbox(command_id,reply_to,payload,properties)
+    VALUES ('first','agg.1','{}','{}'),('second','agg.2','{}','{}')`);
+  let confirm;
+  const blocked = new Promise(resolve => { confirm = resolve; });
+  const sent = [];
+  const relay = makeReplyRelay(pool, async key => {
+    sent.push(key);
+    if (key === 'agg.1') await blocked;
+    return true;
+  });
+  const active = relay();
+  try {
+    for (let i = 0; i < 50 && sent.length < 2; i++) await tick();
+    assert.deepEqual(sent, ['agg.1', 'agg.2']);
+    assert.equal((await one(pool, "SELECT published_at FROM command_reply_outbox WHERE command_id='first'")).published_at, null);
+  } finally {
+    confirm();
+    await active;
+  }
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 0);
+});
+
+test('database loss after a batch of broker confirms retains every reply for recovery', async t => {
+  const pool = await makePool();
+  t.after(() => pool.db.close());
+  await pool.query(`INSERT INTO command_reply_outbox(command_id,reply_to,payload,properties)
+    VALUES ('one','agg.1','{}','{}'),('two','agg.2','{}','{}')`);
+  const before = await one(pool, 'SHOW synchronous_commit');
+  let fail = true;
+  const guarded = { query: async (sql, params) => {
+    if (fail && sql.includes('SET published_at=now()')) throw new Error('lost DB connection');
+    return pool.query(sql, params);
+  } };
+  const sent = [];
+  const relay = makeReplyRelay(guarded, async key => { sent.push(key); return true; });
+  await assert.rejects(relay(), /lost DB connection/);
+  assert.deepEqual(sent, ['agg.1', 'agg.2']);
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 2);
+  fail = false;
+  assert.equal(await relay(), 2);
+  assert.deepEqual(await one(pool, 'SHOW synchronous_commit'), before, 'delivery setting cannot leak into the next business transaction');
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 0);
 });

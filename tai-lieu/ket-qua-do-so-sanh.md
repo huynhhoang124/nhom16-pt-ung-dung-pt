@@ -9,7 +9,7 @@
 - Đồng bộ và bất đồng bộ gần như bằng nhau ở p95 (đặt 4517 so với 4166 ms); riêng lượt đồng bộ có 1,56% trả 503, lượt bất đồng bộ 0%. Một lượt chưa đủ để kết luận nguyên nhân.
 - **TC80 chưa chứng minh được:** bản "trước" (`COMMAND_MODE=http`, B chậm 1500 ms) đã có 504 = 0%, nên không có mức giảm 504 để so sánh. Bản "sau" (`broker`) có đặt p95 8454 ms, vượt ngưỡng 3000 ms.
 
-Chưa đối chiếu được "SLO mục 3.3" của PLAN B15: trong repo không có tài liệu nào nêu mục này, nên chỉ so với ngưỡng mặc định của `tests/load/k6.js`.
+Đối chiếu mục 3.3 của kế hoạch mở rộng GĐ2 v1.4, p95 đặt chỗ qua broker phải ≤ 300 ms trong vùng và ≤ 450 ms liên vùng. p95 tra cứu tổng hợp sáu bãi phải ≤ 250 ms. Các lượt đo dưới đây vượt cả ngưỡng chạy k6 và SLO của kế hoạch.
 
 **Cấu hình thật của từng dòng**
 - `http`, `broker`: `docker-compose.yml`, 3 bãi, 1 Aggregator. Dòng "3 (A–C)" dùng lại số của `http`.
@@ -36,6 +36,89 @@ Chưa đối chiếu được "SLO mục 3.3" của PLAN B15: trong repo không 
 |---|---|---|---|---|---|---|
 | Trước | 3933 | 3092 | 0.00 | đọc 500, đặt 3000 | Chưa đạt | `tc80-truoc.json`, `tc80-truoc.log` |
 | Sau | 3187 | 8454 | 0.00 | đọc 500, đặt 3000 | Chưa đạt | `tc80-sau.json`, `tc80-sau.log` |
+
+## Đo lại trên GitHub Actions ngày 08/11
+
+Hai job dùng cùng loại runner Ubuntu và mỗi job dựng một stack riêng. Mỗi cấu hình chạy 2 phút, 300 VU, Toxiproxy làm chậm chiều phản hồi của bãi B 1,5 giây. Ngưỡng k6 lấy theo SLO, p95 đọc < 250 ms và đặt chỗ < 300 ms trong vùng.
+
+| Commit | Chế độ | Đọc p95 (ms) | Đặt p95 (ms) | 504 |
+|---|---|---:|---:|---:|
+| `7f58824` | HTTP | 1.603 | 1.596 | 0% |
+| `7f58824` | Broker | 1.609 | 1.706 | 0% |
+| `1180d79` | HTTP | 160 | 1.610 | 0% |
+| `1180d79` | Broker | 355 | 1.046 | 0% |
+| `c87eba8` | HTTP | 143 | 1.595 | 0% |
+| `c87eba8` | Broker | 355 | 870 | 0% |
+
+Bản `1180d79` dùng chung lượt làm mới thông tin chỗ trống giữa các yêu cầu và kích hoạt gửi phản hồi ngay sau khi node commit lệnh. p95 đặt qua broker giảm 38,7% so với lượt broker trước. TC80 vẫn chưa đạt. p95 của lượt broker mới vượt ngưỡng và tỷ lệ lỗi HTTP là 4,48%. Hai lượt HTTP đều đã có 0% lỗi 504. Bản `c87eba8` gộp thao tác nhận lệnh vào một truy vấn nguyên tử. p95 đặt qua broker giảm tiếp xuống 870 ms, vẫn vượt ngưỡng. [Log và JSON của lượt c87eba8](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42471813096). Chỉ tiêu tra cứu 250 ms trong kế hoạch áp dụng cho sáu bãi. Lượt TC80 trên đây chạy ba bãi. Log và JSON ở mục Artifacts của [lượt 7f58824](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42470803318) và [lượt 1180d79](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42471407708).
+
+## Nghiệm thu tối ưu ngày 08/11/2026
+
+Giữ nguyên workload TC80: 240 VU đọc + 60 VU đặt trong 2 phút, ba bãi A/B/C, broker, B chậm downstream 1500 ms bằng Toxiproxy. Mỗi lượt dùng một runner GitHub Actions Ubuntu riêng với Docker Compose; không quy đổi sang hiệu năng máy Windows hay triển khai liên vùng. Độ trễ đặt tính tới kết quả cuối, gồm polling nếu trả 202; 409 vẫn là tranh chấp hợp lệ. Không thay ngưỡng đọc <250 ms, đặt <300 ms, lỗi HTTP <1%, checks >99%, 503/504 bằng 0.
+
+Các sửa đổi: gửi lệnh theo lô có pipeline publisher confirm; ghi phản hồi bằng UPDATE nguyên tử và xử lý song song có giới hạn; thông báo kết quả ngay cho HTTP waiter; kích hoạt lại relay khi có commit mới; tái sử dụng kết nối Nginx và khóa ký đã phân tích. Thứ tự lệnh giữ bằng thời gian PostgreSQL với độ chính xác microsecond. Kết nối AMQP đặt TCP_NODELAY để các frame nhỏ không chờ gom gói và delayed ACK. Giao dịch node bớt lượt truy vấn kiểm tra, lấy giờ và ghi sự kiện; giờ nghiệp vụ vẫn lấy từ PostgreSQL. Xác nhận publisher được ghi bền một lần cho mỗi lô thay vì từng lệnh. RabbitMQ dùng hai scheduler và tắt busy waiting trên máy demo chạy chung; không tắt fsync hoặc publisher confirm.
+
+| Revision/lượt | Đọc p95 (ms) | Đặt p95 (ms) | Đặt p99 (ms) | Kết luận |
+|---|---:|---:|---:|---|
+| 5548730 / 42485402779 | 14,70 | 168 | 248 | Qua ngưỡng một lượt |
+| 5548730 / 42485729282 | 24,07 | 574 | 953 | Không đạt khi lặp lại; chưa dùng để nghiệm thu |
+| 87a9e9c / 42486133387 | 59,15 | 538 | 689,73 | TCP_NODELAY chưa đủ |
+| 87a9e9c / 42486162895 | 15,31 | 185 | 256 | Một lượt đạt, còn biến động |
+| 7e59039 / 42486490118 | 21,71 | 219 | 289 | Qua ngưỡng và bất biến |
+| 7e59039 / 42486516688 | 23,03 | 514 | 793,61 | Pipeline relay chưa đủ ổn định |
+| 383e53a / 42487186982 | 48,84 | 420,60 | 561,84 | Chưa đạt |
+| c13173a / 42487626315 | 43,46 | 401 | 534 | Giảm truy vấn node, chưa đạt |
+| c13173a / 42487674442 | 46,06 | 405,90 | 603,54 | Chưa đạt khi lặp |
+| d366438 / 42488122775 | 25,56 | 547,50 | 859,40 | Gộp xác nhận broker, chưa đạt |
+| 013a577 / 42488184397 | 54,17 | 396 | 528 | Chưa đạt |
+| 7b2e818 / 42490077058 | 45,56 | 371 | 496,86 | Cùng runtime 4bf3378, lượt bổ sung vẫn biến động |
+
+Lượt 5548730 đầu có 673,75 HTTP req/s, 82.292 HTTP workload, không có 503/504 hoặc trạng thái ngoài dự kiến. [Log/JSON lưu trong repo](ket-qua-do/tc80-5548730/tc80-acceptance.json). Hai lượt khác runner cho kết quả biến động, nên không chọn riêng lượt tốt để kết luận ổn định.
+
+### TC80 sau tối ưu giao dịch
+
+Runtime `4bf3378`; `7b2e818` chỉ tách test kết nối để mỗi image chạy độc lập. Hai runner riêng chạy đủ 300 VU trong 2 phút, cùng seed và cùng cấu hình broker/B chậm 1500 ms:
+
+| Lượt | Đọc p95 (ms) | Đặt p95/p99 (ms) | HTTP req/s | Lỗi HTTP | Checks | 503/504 |
+|---|---:|---:|---:|---:|---:|---:|
+| [42489837577](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42489837577) | 22,68 | 209 / 281 | 654,17 | 0% | 100% | 0% / 0% |
+| [42489834410](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42489834410) | 21,38 | 174 / 252 | 662,03 | 0% | 100% | 0% / 0% |
+
+Hai lượt này **đạt p95 đặt <300 ms** và toàn bộ ngưỡng k6. Lượt CI bổ sung 7b2e818 còn 371 ms (bảng trên), nên vẫn tiếp tục giảm tải kiểm tra sức khỏe RabbitMQ trước khi tích hợp. 12 kiểm tra bất biến trên ba DB đều đạt sau tải: không đặt chồng, không trùng request_id, không có hai phiên mở trên một slot, outbox sự kiện gửi hết. Lượt 1 có 103.919 checks và 79.953 HTTP; lượt 2 có 105.666 checks và 80.861 HTTP; không có check lỗi. HTTP count có setup theo quy ước k6, còn kiểm 503/504 chỉ tính workload.
+
+Bằng chứng đầy đủ: [lượt 1](ket-qua-do/tc80-4bf3378-r1/), [lượt 2](ket-qua-do/tc80-4bf3378-r2/), gồm JSON, log k6, log bất biến, thời gian các giai đoạn và Docker CPU. Khác biệt quyết định ở bản cuối: gộp inbox/result/reply outbox trong một câu SQL, dùng snapshot từ dòng slot đang khóa để ký phản hồi và tạo reservation trực tiếp từ CTE giữ slot. Vẫn giữ commit bền, outbox, xác thực chữ ký, idempotency, SAVEPOINT và thứ tự xử lý consumer.
+
+Đây là hai phép đo trên runner Ubuntu với stack cùng máy. Kết quả cũ biến động được giữ ở bảng trên; không dùng số này để cam kết mọi phần cứng hoặc đường truyền liên vùng. 504 đã bằng 0 trong cả một số lượt trước, nên không khẳng định có mức giảm 504 từ số 0.
+
+### PD-20: p99 trên hai replica thật
+
+Dựng bằng `tests/pd20.compose.yml`: hai node B cùng dữ liệu PostgreSQL, đăng ký qua etcd; node primary qua proxy chậm 1500 ms, secondary đi trực tiếp. Chạy 100 VU đọc đầy đủ `/api/parkings/B` trong 2 phút mỗi vế, lần lượt `HEDGE_ENABLED=false/true`; mỗi yêu cầu kiểm HTTP 200, snapshot đủ slot và không stale. Luồng đọc học replica phản hồi nhanh sau lần hedge thắng và tiếp tục dùng replica đó khi đang cooldown; không tăng thêm request trong cooldown.
+
+| Revision/lượt | p99 tắt hedge (ms) | p99 bật hedge (ms) | Mức giảm |
+|---|---:|---:|---:|
+| a1051aa / 42485002101 | 1.602,67 | 107,36 | 93,30% |
+| 5548730 / 42485402779 | 1.602,21 | 58,82 | 96,33% |
+| 4bf3378 / 42489837577 | 1.601,84 | 35,19 | 97,80% |
+| 4bf3378 / 42489834410 | 1.641,52 | 103,08 | 93,72% |
+
+Mọi vế đều qua kiểm tra HTTP/checks. Hai lượt runtime cuối đều vượt mục tiêu giảm p99 30%. Lượt 42489837577 có 7.524 checks baseline và 114.084 checks khi bật hedge; checks 100%, HTTP error 0%. [JSON runtime cuối lượt 1](ket-qua-do/pd20-4bf3378-r1/), [lượt 2](ket-qua-do/pd20-4bf3378-r2/). JSON gốc: [tắt hedge](ket-qua-do/pd20-5548730/hedge-false.json), [bật hedge](ket-qua-do/pd20-5548730/hedge-true.json). Đây là kết quả của cấu hình hai replica có một replica chậm; chưa chứng minh mọi phân bố độ trễ hoặc tải liên vùng.
+
+Workflow `Performance acceptance` buộc k6 thất bại khi vượt ngưỡng, kiểm tra bất biến sau tải và lưu artifacts. Các job TC80 cũ trong GĐ2 integration có chế độ cảnh báo nên không thay thế gate này. Chưa chụp thêm ảnh Grafana.
+
+## Kết quả trên bản tối ưu cuối
+
+Commit ứng dụng `faf490c` chạy trên hai runner GitHub Ubuntu độc lập. TC80 giữ 300 VU trong hai phút, lệnh qua broker và bãi B trễ phản hồi 1.500 ms. p95 đặt chỗ tính đến kết quả cuối, kể cả lần phải poll sau HTTP 202.
+
+| Lượt | Đọc p95 | Đặt p95 / p99 | Lỗi HTTP / 503 / 504 | Bất biến sau tải |
+|---|---:|---:|---:|---|
+| [42496634085](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42496634085) | 14,23 ms | 139 / 212 ms | 0% / 0% / 0% | 12/12 |
+| [42496629219](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42496629219) | 23,86 ms | 254 / 400,77 ms | 0% / 0% / 0% | 12/12 |
+
+Hai lượt đều dưới ngưỡng p95 300 ms và checks đạt 100%. Trên bản trước khi gom các commit đồng thời, một lượt còn 323 ms. [Kết quả bản trước](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42494036003).
+
+PD-20 đo với 100 VU, mỗi vế hai phút, hai replica B và một replica trễ 1.500 ms. Lượt 1 giảm p99 từ 1.600,68 xuống 27,03 ms (98,31%). Lượt 2 giảm từ 1.604,78 xuống 90,45 ms (94,36%). JSON và log kiểm tra sau tải nằm trong `tai-lieu/ket-qua-do/*-faf490c-r*`. Log CPU, thông tin phần cứng và số liệu WAL đầy đủ nằm trong Artifacts của các lượt chạy.
+
+PostgreSQL ở Aggregator gom các commit đồng thời trong tối đa 500 µs. Intent, giao dịch đặt chỗ, inbox và kết quả cuối vẫn chờ ghi bền. Chỉ dấu giao tin đã được RabbitMQ xác nhận dùng commit bất đồng bộ. Nếu mất dấu khi sập, hệ thống phát lại cùng ID và bên nhận xử lý trùng. [Tài liệu PostgreSQL về commit_delay](https://www.postgresql.org/docs/16/runtime-config-wal.html#GUC-COMMIT-DELAY).
 
 ## Cách chạy lại
 
