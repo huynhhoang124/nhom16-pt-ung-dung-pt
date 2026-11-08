@@ -304,3 +304,12 @@ tr.clickable { cursor: pointer; }
 .pw { display: flex; gap: var(--space-2); }
 .pw input { flex: 1; min-width: 0; }
 .pw-toggle { white-space: nowrap; }
+
+/* QR: nút mở + chế độ "đưa vào máy quét" toàn màn hình (dùng chung mọi vai trò) */
+.qr-btn { padding: 0; border: 0; background: none; min-height: 0; cursor: zoom-in; border-radius: var(--r-sm, 0); }
+.qr-btn:hover { background: none; }
+.qr-full { position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 16px; padding: 16px; background: #1b1d24; color: #e8eaf0; }
+.qr-full-img { width: min(92vw, calc(100vh - 190px)); height: auto; aspect-ratio: 1; image-rendering: pixelated; background: #fff; border-radius: 12px; }
+.qr-full-tip { margin: 0; max-width: 34ch; text-align: center; font-size: 14px; line-height: 1.45; color: #c3c8d6; }
+.qr-full-close { background: #fff; color: #1b1d24; border: 0; border-radius: 999px; min-height: 44px; padding: 0 28px; font-weight: 700; }

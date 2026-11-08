@@ -47,6 +47,17 @@ cd frontend && npm run dev         # http://localhost:3000 (cổng 3000 bận th
 ```
 Bản này không có bãi D, không có RabbitMQ; khoá nội bộ là `dev` (khác Docker) nên không trộn với container Docker. Dữ liệu mất khi tắt.
 
+## Test quét QR bằng điện thoại
+Trình duyệt **chỉ cho dùng camera trên HTTPS hoặc `localhost`**. Điện thoại vào `http://<IP-máy>:3000` vẫn **hiện** mã QR được nhưng **không quét** được (iPhone: mọi trình duyệt, kể cả Chrome, đều chặn).
+- **Điện thoại hiện QR, laptop quét:** điện thoại mở `http://<IP-máy>:3000` → `user1` đặt chỗ "Ngay bây giờ" ở bãi A → *Đặt chỗ của tôi* → chạm mã QR (mở toàn màn hình, giữ màn hình sáng). Laptop mở `http://localhost:3000` → `staff-a` → *Cổng* → *Quét mã QR*. Máy quét không đọc được: giảm độ sáng điện thoại, đưa cách 15–25 cm, nghiêng nhẹ cho đỡ loá.
+- **Điện thoại làm máy quét (cần HTTPS):** chạy hệ thống (Docker hoặc `dev-no-docker`), rồi
+  ```bash
+  node scripts/dev-cert.mjs          # chứng chỉ tự ký cho các IP của máy (frontend/.cert, ngoài git)
+  cd frontend && npm run dev:https   # https://<IP-máy>:5173, proxy /api tới Aggregator :8000
+  ```
+  Điện thoại mở `https://<IP-máy>:5173` → cảnh báo chứng chỉ → *Hiện chi tiết → Truy cập trang web này* → `staff-a` → *Cổng* → *Quét mã QR*. Trên chính máy tính dùng `https://127.0.0.1:5173`.
+- Điện thoại không vào được: cùng Wi-Fi chưa; Windows để mạng Wi-Fi ở chế độ **Private** hoặc mở cổng (PowerShell Admin: `New-NetFirewallRule -DisplayName "Nhom16 dev" -Direction Inbound -Protocol TCP -LocalPort 3000,5173 -Action Allow`); Wi-Fi công cộng hay chặn thiết bị nói chuyện với nhau → dùng hotspot của điện thoại.
+
 ## Giao diện (nhánh personal/luan-ui)
 - Một giao diện chung đỏ–navy cho mọi vai trò (`frontend/src/theme.css`), có chế độ tối; mỗi màn có URL riêng (`#/mine`, `#/parking/A/A05`...).
 - Người dùng: chọn nhanh giờ đến, tóm tắt giờ ra / hạn giữ chỗ / phí ước tính trước khi đặt, "Xe của tôi", vé chia nhóm (đang trong bãi / đang giữ / sắp tới) kèm chỉ đường.
