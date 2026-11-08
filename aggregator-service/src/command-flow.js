@@ -172,23 +172,23 @@ function makeCommandFlow({
   }
 
   // Nhận một lệnh để gửi: khoá dòng (SKIP LOCKED) và đặt lease để bản Aggregator khác không gửi trùng
-  async function claim(owner) {
+  async function claimBatch(owner) {
     const { rows } = await pool.query(
       `WITH next_command AS (
          SELECT id FROM commands
          WHERE status='PENDING' AND publish_state<>'CONFIRMED' AND next_publish_at <= now()
            AND (publish_lease_until IS NULL OR publish_lease_until < now())
            AND (envelope->>'deadlineAt')::bigint > $1
-         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
+         ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT $4
        )
        UPDATE commands c
        SET uncertain = c.uncertain OR c.publish_state IN ('SENDING','UNKNOWN'), publish_state='SENDING',
            publish_owner=$2, publish_lease_until=now() + ($3 * interval '1 millisecond'),
            attempts=c.attempts+1, updated_at=now()
        FROM next_command n WHERE c.id=n.id RETURNING c.*`,
-      [now(), owner, leaseMs],
+      [now(), owner, leaseMs, PUBLISH_BATCH],
     );
-    return rows[0];
+    return rows.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
   }
 
   async function publishOne(row, owner) {
@@ -224,12 +224,13 @@ function makeCommandFlow({
     publishing = true;
     try {
       await expireUnsent();
-      for (let n = 0; n < PUBLISH_BATCH && !stopped && replyReady; n++) {
-        const owner = randomUUID();
-        const row = await claim(owner);
-        if (!row) break;
-        await publishOne(row, owner);
-      }
+      const owner = randomUUID();
+      const rows = await claimBatch(owner);
+      // Pipeline confirms on the same channel. Waiting per command serializes the broker's disk flushes.
+      const sent = await Promise.allSettled(rows.map((row) => publishOne(row, owner)));
+      if (rows.length === PUBLISH_BATCH) setImmediate(() => pump().catch(() => {}));
+      const failed = sent.find((result) => result.status === 'rejected');
+      if (failed) throw failed.reason;
     } finally {
       publishing = false;
     }
@@ -272,7 +273,7 @@ function makeCommandFlow({
     while (publishing || scanning) await new Promise((r) => setTimeout(r, 10));
   }
 
-  return { execute, get, pump, scan, start, stop, signal, markFailed, pending, setReady(v) { replyReady = v; } };
+  return { execute, get, pump, scan, start, stop, signal, settle, markFailed, pending, setReady(v) { replyReady = v; } };
 }
 
 module.exports = { makeCommandFlow, response, terminal };

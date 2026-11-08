@@ -1,0 +1,41 @@
+name: Performance acceptance
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [dev, main]
+    paths:
+      - '.github/workflows/performance.yml'
+      - 'aggregator-service/**'
+      - 'parking-node/**'
+      - 'tests/load/**'
+      - 'frontend/nginx.conf'
+jobs:
+  tc80:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      COMPOSE_PROJECT_NAME: perf-acceptance
+      COMPOSE_FILE: docker-compose.yml:docker-compose.chaos.yml
+      COMPOSE_PROFILES: chaos
+      COMMAND_MODE: broker
+      K6_NETWORK: perf-acceptance_default
+      LOOKUP_P95_MS: '250'
+      RESERVE_P95_MS: '300'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: cp .env.example .env && node scripts/gen-keys.mjs
+      - run: |
+          docker compose up -d --build --wait
+          curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
+          sleep 10
+          node scripts/net.mjs B latency 1500
+      - run: bash scripts/do-so-sanh.sh tc80-acceptance
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tc80-acceptance
+          path: tai-lieu/ket-qua-do/tc80-acceptance.*
+      - if: failure()
+        run: docker compose logs --no-color --tail 70

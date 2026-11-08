@@ -13,6 +13,7 @@ const POLL_TIMEOUT_MS = Number(__ENV.POLL_TIMEOUT_MS || 30000);
 const POLL_INTERVAL_MS = Number(__ENV.POLL_INTERVAL_MS || 500);
 const DEBUG_SLOW_MS = Number(__ENV.DEBUG_SLOW_MS || 0);
 const json = { headers: { 'Content-Type': 'application/json' } };
+const httpStatuses = new Rate('unexpected_status');
 const status503 = new Rate('response_503');
 const status504 = new Rate('response_504');
 const lookupDuration = new Trend('lookup_duration_ms', true);
@@ -41,6 +42,10 @@ function body(response) {
 
 // Mọi HTTP của workload (kể cả poll/huỷ) cùng mẫu số; setup không tính vào hai tỉ lệ này.
 function record(response, operation) {
+  httpStatuses.add(![200, 201, 202, 409].includes(response.status), { status: String(response.status) });
+  if (![200, 201, 202, 409].includes(response.status) && __ITER === 0) {
+    console.error(`${operation}: status=${response.status} body=${response.body}`);
+  }
   status503.add(response.status === 503);
   status504.add(response.status === 504);
   if (DEBUG_SLOW_MS && (response.timings.duration >= DEBUG_SLOW_MS || response.status >= 500)) {

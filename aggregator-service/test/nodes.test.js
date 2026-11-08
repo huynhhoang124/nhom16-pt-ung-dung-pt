@@ -402,12 +402,13 @@ test('PD-20 hedged GET: vượt tỷ lệ request bổ sung 5% thì tạm ngừn
   assert.ok(stats.additionalRatio > 0.05);
   assert.equal(stats.hedgingDisabled, true);
 
-  // Trong thời gian tạm ngừng, chỉ gọi replica chính.
-  await reg.hedgedGet(n, '/api/slots');
+  // During cooldown, use the known fast replica without launching a second request.
+  const preferred = await reg.hedgedGet(n, '/api/slots');
+  assert.deepEqual(await preferred.json(), { replica: 2 });
 
   stats = reg.getHedgeStats();
 
-  assert.equal(secondHits, 1);
+  assert.equal(secondHits, 2);
   assert.equal(stats.additionalRequests, 1);
   assert.equal(stats.hedgingDisabled, true);
 
