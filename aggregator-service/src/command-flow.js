@@ -201,9 +201,7 @@ function makeCommandFlow({
         ...row.envelope, actor: row.actor, messageId: row.id, correlationId: row.correlation_id, replyTo: row.reply_to,
       });
       await afterPublish(row);
-      await pool.query(
-        `UPDATE commands SET publish_state='CONFIRMED', publish_lease_until=NULL, updated_at=now()
-         WHERE id=$1 AND publish_owner=$2 AND status='PENDING'`, [row.id, owner]);
+      return row.id;
     } catch (e) {
       if (!uncertain && DEFINITE_SEND_ERRORS.includes(e.code)) {
         const r = await pool.query(
@@ -234,6 +232,11 @@ function makeCommandFlow({
         const rows = await claimBatch(owner);
         // Pipeline confirms on the same channel. Waiting per command serializes the broker's disk flushes.
         const sent = await Promise.allSettled(rows.map((row) => publishOne(row, owner)));
+        const confirmed = sent.filter(result => result.status === 'fulfilled' && result.value).map(result => result.value);
+        // One durable update per batch avoids competing with replies for twenty pool connections/commits.
+        if (confirmed.length) await pool.query(
+          `UPDATE commands SET publish_state='CONFIRMED', publish_lease_until=NULL, updated_at=now()
+           WHERE id=ANY($1::text[]) AND publish_owner=$2 AND status='PENDING'`, [confirmed, owner]);
         if (rows.length === PUBLISH_BATCH) publishRequested = true;
         const failed = sent.find((result) => result.status === 'rejected');
         if (failed) throw failed.reason;
