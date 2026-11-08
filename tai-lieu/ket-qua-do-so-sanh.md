@@ -105,6 +105,21 @@ Mọi vế đều qua kiểm tra HTTP/checks. Hai lượt runtime cuối đều 
 
 Workflow `Performance acceptance` buộc k6 thất bại khi vượt ngưỡng, kiểm tra bất biến sau tải và lưu artifacts. Các job TC80 cũ trong GĐ2 integration có chế độ cảnh báo nên không thay thế gate này. Chưa chụp thêm ảnh Grafana.
 
+## Kết quả trên bản tối ưu cuối
+
+Commit ứng dụng `faf490c` chạy trên hai runner GitHub Ubuntu độc lập. TC80 giữ 300 VU trong hai phút, lệnh qua broker và bãi B trễ phản hồi 1.500 ms. p95 đặt chỗ tính đến kết quả cuối, kể cả lần phải poll sau HTTP 202.
+
+| Lượt | Đọc p95 | Đặt p95 / p99 | Lỗi HTTP / 503 / 504 | Bất biến sau tải |
+|---|---:|---:|---:|---|
+| [42496634085](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42496634085) | 14,23 ms | 139 / 212 ms | 0% / 0% / 0% | 12/12 |
+| [42496629219](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42496629219) | 23,86 ms | 254 / 400,77 ms | 0% / 0% / 0% | 12/12 |
+
+Hai lượt đều dưới ngưỡng p95 300 ms và checks đạt 100%. Trên bản trước khi gom các commit đồng thời, một lượt còn 323 ms. [Kết quả bản trước](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42494036003).
+
+PD-20 đo với 100 VU, mỗi vế hai phút, hai replica B và một replica trễ 1.500 ms. Lượt 1 giảm p99 từ 1.600,68 xuống 27,03 ms (98,31%). Lượt 2 giảm từ 1.604,78 xuống 90,45 ms (94,36%). JSON và log kiểm tra sau tải nằm trong `tai-lieu/ket-qua-do/*-faf490c-r*`. Log CPU, thông tin phần cứng và số liệu WAL đầy đủ nằm trong Artifacts của các lượt chạy.
+
+PostgreSQL ở Aggregator gom các commit đồng thời trong tối đa 500 µs. Intent, giao dịch đặt chỗ, inbox và kết quả cuối vẫn chờ ghi bền. Chỉ dấu giao tin đã được RabbitMQ xác nhận dùng commit bất đồng bộ. Nếu mất dấu khi sập, hệ thống phát lại cùng ID và bên nhận xử lý trùng. [Tài liệu PostgreSQL về commit_delay](https://www.postgresql.org/docs/16/runtime-config-wal.html#GUC-COMMIT-DELAY).
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).
