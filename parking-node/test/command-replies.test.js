@@ -160,3 +160,23 @@ test('reply relay pipelines confirms but never marks an unconfirmed row as publi
   }
   assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 0);
 });
+
+test('database loss after a batch of broker confirms retains every reply for recovery', async t => {
+  const pool = await makePool();
+  t.after(() => pool.db.close());
+  await pool.query(`INSERT INTO command_reply_outbox(command_id,reply_to,payload,properties)
+    VALUES ('one','agg.1','{}','{}'),('two','agg.2','{}','{}')`);
+  let fail = true;
+  const guarded = { query: async (sql, params) => {
+    if (fail && sql.includes('SET published_at=now()')) throw new Error('lost DB connection');
+    return pool.query(sql, params);
+  } };
+  const sent = [];
+  const relay = makeReplyRelay(guarded, async key => { sent.push(key); return true; });
+  await assert.rejects(relay(), /lost DB connection/);
+  assert.deepEqual(sent, ['agg.1', 'agg.2']);
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 2);
+  fail = false;
+  assert.equal(await relay(), 2);
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 0);
+});

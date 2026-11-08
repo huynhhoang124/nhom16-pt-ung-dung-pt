@@ -120,6 +120,7 @@ function makeReplyRelay(pool, publish) {
         // Confirm independent replies concurrently; stop taking batches after an infrastructure failure.
         for (let offset = 0; offset < rows.length; offset += 16) {
           let infrastructureFailed = false;
+          const confirmed = [];
           const results = await Promise.allSettled(rows.slice(offset, offset + 16).map(async (r) => {
             const outcome = await publish(r.reply_to, r.payload, r.properties);
             if (outcome !== true && outcome?.ok !== true) {
@@ -133,10 +134,14 @@ function makeReplyRelay(pool, publish) {
               if (!recordError) infrastructureFailed = true;
               return; // Keep failed rows durable; finish other confirms already in flight.
             }
-            await pool.query(`UPDATE command_reply_outbox SET published_at=now(),attempts=attempts+1,
-              last_attempt_at=now(),last_error=NULL,next_attempt_at=NULL WHERE id=$1`, [r.id]);
-            count++;
+            confirmed.push(r.id);
           }));
+          if (confirmed.length) {
+            await pool.query(`UPDATE command_reply_outbox SET published_at=now(),attempts=attempts+1,
+              last_attempt_at=now(),last_error=NULL,next_attempt_at=NULL
+              WHERE id=ANY($1::bigint[]) AND published_at IS NULL`, [confirmed]);
+            count += confirmed.length;
+          }
           const failed = results.find(result => result.status === 'rejected');
           if (failed) throw failed.reason;
           if (infrastructureFailed) return count;
