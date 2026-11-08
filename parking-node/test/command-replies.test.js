@@ -56,8 +56,8 @@ test('one hundred unroutable rows cannot starve the next batch; infrastructure f
   let calls = 0;
   const unavailable = makeReplyRelay(pool, async () => { calls++; return { ok: false, scope: 'infrastructure', code: 'REPLY_NACKED' }; });
   assert.equal(await unavailable(), 0);
-  assert.equal(calls, 1);
-  assert.equal((await one(pool, "SELECT count(*)::int AS n FROM command_reply_outbox WHERE last_error='REPLY_NACKED'")).n, 1);
+  assert.equal(calls, 16);
+  assert.equal((await one(pool, "SELECT count(*)::int AS n FROM command_reply_outbox WHERE last_error='REPLY_NACKED'")).n, 16);
   assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 100);
 });
 
@@ -133,5 +133,30 @@ test('reply committed while the relay is waiting for confirm triggers another pa
   confirm();
   assert.equal(await first, 2);
   assert.equal(delivered.length, 2);
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 0);
+});
+
+test('reply relay pipelines confirms but never marks an unconfirmed row as published', async t => {
+  const pool = await makePool();
+  t.after(() => pool.db.close());
+  await pool.query(`INSERT INTO command_reply_outbox(command_id,reply_to,payload,properties)
+    VALUES ('first','agg.1','{}','{}'),('second','agg.2','{}','{}')`);
+  let confirm;
+  const blocked = new Promise(resolve => { confirm = resolve; });
+  const sent = [];
+  const relay = makeReplyRelay(pool, async key => {
+    sent.push(key);
+    if (key === 'agg.1') await blocked;
+    return true;
+  });
+  const active = relay();
+  try {
+    for (let i = 0; i < 50 && sent.length < 2; i++) await tick();
+    assert.deepEqual(sent, ['agg.1', 'agg.2']);
+    assert.equal((await one(pool, "SELECT published_at FROM command_reply_outbox WHERE command_id='first'")).published_at, null);
+  } finally {
+    confirm();
+    await active;
+  }
   assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 0);
 });

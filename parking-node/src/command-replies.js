@@ -117,7 +117,10 @@ function makeReplyRelay(pool, publish) {
         requested = false;
         const { rows } = await pool.query(`SELECT id, reply_to, payload, properties FROM command_reply_outbox
           WHERE published_at IS NULL AND (next_attempt_at IS NULL OR next_attempt_at<=now()) ORDER BY id LIMIT 100`);
-        for (const r of rows) {
+        // Confirm independent replies concurrently; stop taking batches after an infrastructure failure.
+        for (let offset = 0; offset < rows.length; offset += 16) {
+          let infrastructureFailed = false;
+          const results = await Promise.allSettled(rows.slice(offset, offset + 16).map(async (r) => {
           const outcome = await publish(r.reply_to, r.payload, r.properties);
           if (outcome !== true && outcome?.ok !== true) {
             const recordError = outcome?.scope === 'record';
@@ -127,12 +130,16 @@ function makeReplyRelay(pool, publish) {
               : (outcome?.code === 'REPLY_NACKED' ? 'REPLY_NACKED' : 'REPLY_BROKER_UNAVAILABLE');
             await pool.query(`UPDATE command_reply_outbox SET attempts=attempts+1,last_attempt_at=now(),last_error=$2,
               next_attempt_at=now()+interval '30 seconds' WHERE id=$1 AND published_at IS NULL`, [r.id, code]);
-            if (recordError) continue;
-            return count; // The connection/broker affects the whole turn, not just this record.
+            if (!recordError) infrastructureFailed = true;
+            return; // Keep failed rows durable; finish other confirms already in flight.
           }
           await pool.query(`UPDATE command_reply_outbox SET published_at=now(),attempts=attempts+1,
             last_attempt_at=now(),last_error=NULL,next_attempt_at=NULL WHERE id=$1`, [r.id]);
           count++;
+          }));
+          const failed = results.find(result => result.status === 'rejected');
+          if (failed) throw failed.reason;
+          if (infrastructureFailed) return count;
         }
       } while (requested);
       return count;
