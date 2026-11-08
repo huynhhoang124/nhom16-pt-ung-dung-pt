@@ -9,6 +9,9 @@ on:
       - 'parking-node/**'
       - 'tests/load/**'
       - 'frontend/nginx.conf'
+defaults:
+  run:
+    shell: bash
 jobs:
   tc80:
     runs-on: ubuntu-latest
