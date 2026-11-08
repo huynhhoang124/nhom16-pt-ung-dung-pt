@@ -10,9 +10,9 @@ const LOTS = [
   { id: 'A', zone: 'bac', base: true },
   { id: 'B', zone: 'bac', base: true },
   { id: 'C', zone: 'bac', base: true },
-  { id: 'D', zone: 'nam', port: 8004, slots: 'CAR:1:10,CAR:2:10' },
-  { id: 'E', zone: 'nam', port: 8005, slots: 'CAR:1:10,MOTO:1:10' },
-  { id: 'F', zone: 'nam', port: 8006, slots: 'CAR:1:10,MOTO:1:10' },
+  { id: 'D', zone: 'nam', port: 8004, slots: 'CAR:1:5,CAR:2:5' },
+  { id: 'E', zone: 'nam', port: 8005, slots: 'CAR:1:8,MOTO:1:2' },
+  { id: 'F', zone: 'nam', port: 8006, slots: 'CAR:1:8,MOTO:1:2' },
 ];
 const NEW_LOTS = LOTS.filter((lot) => !lot.base);
 const DB_LIMITS = { command: ['postgres', '-c', 'shared_buffers=32MB'], mem_limit: '192m', shm_size: '64m' };

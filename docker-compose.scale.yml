@@ -344,7 +344,7 @@
         "PARKING_ID": "D",
         "PORT": 8004,
         "NODE_URL": "http://toxiproxy:18004",
-        "SLOTS": "CAR:1:10,CAR:2:10",
+        "SLOTS": "CAR:1:5,CAR:2:5",
         "DATABASE_URL": "postgres://postgres:dev@db-d/parking",
         "READ_DATABASE_URL": "postgres://postgres:dev@db-d-replica/parking"
       },
@@ -448,7 +448,7 @@
         "PARKING_ID": "E",
         "PORT": 8005,
         "NODE_URL": "http://toxiproxy:18005",
-        "SLOTS": "CAR:1:10,MOTO:1:10",
+        "SLOTS": "CAR:1:8,MOTO:1:2",
         "DATABASE_URL": "postgres://postgres:dev@db-e/parking",
         "READ_DATABASE_URL": "postgres://postgres:dev@db-e-replica/parking"
       },
@@ -548,7 +548,7 @@
         "PARKING_ID": "F",
         "PORT": 8006,
         "NODE_URL": "http://toxiproxy:18006",
-        "SLOTS": "CAR:1:10,MOTO:1:10",
+        "SLOTS": "CAR:1:8,MOTO:1:2",
         "DATABASE_URL": "postgres://postgres:dev@db-f/parking",
         "READ_DATABASE_URL": "postgres://postgres:dev@db-f-replica/parking"
       },

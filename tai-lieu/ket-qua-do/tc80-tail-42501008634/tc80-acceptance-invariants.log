@@ -1,0 +1,14 @@
+ĐẠT  db-a: đặt chồng giờ = 0
+ĐẠT  db-a: request_id trùng = 0
+ĐẠT  db-a: slot có 2 phiên mở = 0
+ĐẠT  db-a: outbox chưa gửi = 0
+ĐẠT  db-b: đặt chồng giờ = 0
+ĐẠT  db-b: request_id trùng = 0
+ĐẠT  db-b: slot có 2 phiên mở = 0
+ĐẠT  db-b: outbox chưa gửi = 0
+ĐẠT  db-c: đặt chồng giờ = 0
+ĐẠT  db-c: request_id trùng = 0
+ĐẠT  db-c: slot có 2 phiên mở = 0
+ĐẠT  db-c: outbox chưa gửi = 0
+
+Mọi bất biến đều đạt

@@ -1,0 +1,11 @@
+# Fixed seed capacity for comparable TC80 and PD-20 runs.
+services:
+  parking-a:
+    environment:
+      SLOTS: CAR:1:10,CAR:2:10,MOTO:1:20
+  parking-b:
+    environment:
+      SLOTS: CAR:1:10,CAR:2:10,CAR:3:10,MOTO:1:30
+  parking-c:
+    environment:
+      SLOTS: CAR:1:10,CAR:2:5,MOTO:1:15

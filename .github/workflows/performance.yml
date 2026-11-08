@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 15
     env:
       COMPOSE_PROJECT_NAME: perf-acceptance
-      COMPOSE_FILE: docker-compose.yml:docker-compose.chaos.yml
+      COMPOSE_FILE: docker-compose.yml:docker-compose.chaos.yml:tests/load/benchmark-slots.compose.yml
       COMPOSE_PROFILES: chaos
       COMMAND_MODE: broker
       K6_NETWORK: perf-acceptance_default
@@ -59,7 +59,7 @@ jobs:
     timeout-minutes: 15
     env:
       COMPOSE_PROJECT_NAME: pd20-perf
-      COMPOSE_FILE: docker-compose.yml:docker-compose.chaos.yml:tests/pd20.compose.yml
+      COMPOSE_FILE: docker-compose.yml:docker-compose.chaos.yml:tests/load/benchmark-slots.compose.yml:tests/pd20.compose.yml
       COMPOSE_PROFILES: chaos
       COMMAND_MODE: http
     steps:

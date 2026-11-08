@@ -90,9 +90,8 @@ test('cô lập dữ liệu: node bãi A không biết địa chỉ DB của bã
 
 test('TC01 tra cứu tổng hợp các bãi theo cấu hình', T, async () => {
   const r = await agg('/api/parkings/availability');
-  const totals = { A: 40, B: 60, C: 30, D: 20, E: 20, F: 20 };
   const availability = r.body.map((p) => [p.parkingId, p.status, p.total]).sort(([a], [b]) => a.localeCompare(b));
-  assert.deepEqual(availability, PARKING_IDS.map((id) => [id, 'ONLINE', totals[id]]).sort(([a], [b]) => a.localeCompare(b)));
+  assert.deepEqual(availability, PARKING_IDS.map((id) => [id, 'ONLINE', 10]).sort(([a], [b]) => a.localeCompare(b)));
 });
 
 test('PD-12 etcd gắn nhãn vùng Bắc/Nam và registry trả đủ sáu bãi', { ...T, skip: !SCALE }, async () => {
