@@ -4,7 +4,7 @@ const path = require('node:path');
 const { Pool } = require('pg');
 const { Server } = require('socket.io');
 const { makeRegistry } = require('./nodes');
-const { applyEvent, reconcile, startConsumer } = require('./events');
+const { applyEvent, createReconcileQueue, replayRecentEvents, startConsumer } = require('./events');
 const { makeAuth, seedUsers } = require('./auth');
 const { makeUserShards } = require('./ring');
 const { makeApp } = require('./routes');
@@ -195,8 +195,16 @@ async function main() {
   }, log, { exchange: 'user.notifications', queue: `aggregator.notifications.${instance}`, pattern: '#' });
 
   const push = (e, parent) => emitSocket(io, 'SLOT_UPDATED', e, parent);
+  const reconcileQueue = createReconcileQueue(reg, cache, push, log, 500, leader);
   // PT-01: mỗi bản Aggregator một queue riêng -> bản nào cũng nhận đủ sự kiện, đẩy cho client đang nối với nó
   // (không cần Redis adapter). Queue durable: bản này tắt thì tin chờ, bật lại xử lý tiếp.
+  let replayStarted = false;
+  const onEventConsumerReady = () => {
+    if (replayStarted) return;
+    replayStarted = true;
+    void replayRecentEvents(env('RABBITMQ_URL', 'amqp://localhost'), cache, push, log)
+      .catch((error) => log.warn('Replay events.stream failed', { error: error.message }));
+  };
   const eventTracer = trace.getTracer('aggregator/events');
   startConsumer(env('RABBITMQ_URL', 'amqp://localhost'), (e, parent) => {
     eventTracer.startActiveSpan('event.process', { kind: SpanKind.CONSUMER,
@@ -212,20 +220,11 @@ async function main() {
         throw error;
       } finally { span.end(); }
     });
-  }, log, { queue: `aggregator.slot-updates.${instance}` });
+  }, log, { queue: `aggregator.slot-updates.${instance}`, onReady: onEventConsumerReady });
 
   const onChange = (n, prev) => {
     log.info(`Bãi ${n.id}: ${prev} -> ${n.status}`);
     emitSocket(io, 'NODE_STATUS', { parkingId: n.id, status: n.status });
-    // PD-10: Chỉ Leader mới chạy đối soát (reconcile)
-    if (n.status === 'ONLINE' && leader.isLeader()) {
-      reconcile(reg, cache, n, push)
-        .then((k) => log.info(`Đối soát bãi ${n.id}: cập nhật ${k} slot`))
-        .catch((e) => {
-          if (e.message?.includes('STALE_LEADER')) leader.demote();
-          log.error(`Đối soát bãi ${n.id} lỗi`, { error: e.message });
-        });
-    }
   };
   const check = () => {
     const p = hasEtcd
@@ -234,6 +233,9 @@ async function main() {
           .then(({ rows }) => reg.sync(rows).forEach((id) => log.info(`Nạp bãi mới ${id} (do bản Aggregator khác thêm)`)));
     return p
       .then(() => reg.check(onChange))
+      .then(() => {
+        reg.all().filter((n) => n.status === 'ONLINE').forEach(reconcileQueue.enqueue);
+      })
       .catch((e) => log.error('health check lỗi', { error: e.message }));
   };
 

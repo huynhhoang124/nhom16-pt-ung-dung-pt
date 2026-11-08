@@ -4,8 +4,8 @@ const { readFileSync } = require('node:fs');
 const path = require('node:path');
 
 const root = path.resolve(__dirname, '../..');
-const base = readFileSync(path.join(root, 'docker-compose.yml'), 'utf8');
-const ha = readFileSync(path.join(root, 'docker-compose.ha.yml'), 'utf8');
+const base = readFileSync(path.join(root, 'docker-compose.yml'), 'utf8').replaceAll('\r\n', '\n');
+const ha = readFileSync(path.join(root, 'docker-compose.ha.yml'), 'utf8').replaceAll('\r\n', '\n');
 const service = (text, name) => text.match(new RegExp(`^  ${name}:\\n([\\s\\S]*?)(?=^  [\\w-]+:|^volumes:|$(?![\\s\\S]))`, 'm'))?.[1];
 
 test('PD-14a bỏ HA không bị giá trị đồng bộ cũ trong volume chặn ghi A/D', () => {

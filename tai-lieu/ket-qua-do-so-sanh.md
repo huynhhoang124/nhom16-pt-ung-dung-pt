@@ -9,7 +9,7 @@
 - Đồng bộ và bất đồng bộ gần như bằng nhau ở p95 (đặt 4517 so với 4166 ms); riêng lượt đồng bộ có 1,56% trả 503, lượt bất đồng bộ 0%. Một lượt chưa đủ để kết luận nguyên nhân.
 - **TC80 chưa chứng minh được:** bản "trước" (`COMMAND_MODE=http`, B chậm 1500 ms) đã có 504 = 0%, nên không có mức giảm 504 để so sánh. Bản "sau" (`broker`) có đặt p95 8454 ms, vượt ngưỡng 3000 ms.
 
-Chưa đối chiếu được "SLO mục 3.3" của PLAN B15: trong repo không có tài liệu nào nêu mục này, nên chỉ so với ngưỡng mặc định của `tests/load/k6.js`.
+Đối chiếu mục 3.3 của kế hoạch mở rộng GĐ2 v1.4, p95 đặt chỗ qua broker phải ≤ 300 ms trong vùng và ≤ 450 ms liên vùng. p95 tra cứu tổng hợp sáu bãi phải ≤ 250 ms. Các lượt đo dưới đây vượt cả ngưỡng chạy k6 và SLO của kế hoạch.
 
 **Cấu hình thật của từng dòng**
 - `http`, `broker`: `docker-compose.yml`, 3 bãi, 1 Aggregator. Dòng "3 (A–C)" dùng lại số của `http`.
@@ -36,6 +36,21 @@ Chưa đối chiếu được "SLO mục 3.3" của PLAN B15: trong repo không 
 |---|---|---|---|---|---|---|
 | Trước | 3933 | 3092 | 0.00 | đọc 500, đặt 3000 | Chưa đạt | `tc80-truoc.json`, `tc80-truoc.log` |
 | Sau | 3187 | 8454 | 0.00 | đọc 500, đặt 3000 | Chưa đạt | `tc80-sau.json`, `tc80-sau.log` |
+
+## Đo lại trên GitHub Actions ngày 08/11
+
+Hai job dùng cùng loại runner Ubuntu và mỗi job dựng một stack riêng. Mỗi cấu hình chạy 2 phút, 300 VU, Toxiproxy làm chậm chiều phản hồi của bãi B 1,5 giây. Ngưỡng k6 lấy theo SLO, p95 đọc < 250 ms và đặt chỗ < 300 ms trong vùng.
+
+| Commit | Chế độ | Đọc p95 (ms) | Đặt p95 (ms) | 504 |
+|---|---|---:|---:|---:|
+| `7f58824` | HTTP | 1.603 | 1.596 | 0% |
+| `7f58824` | Broker | 1.609 | 1.706 | 0% |
+| `1180d79` | HTTP | 160 | 1.610 | 0% |
+| `1180d79` | Broker | 355 | 1.046 | 0% |
+| `c87eba8` | HTTP | 143 | 1.595 | 0% |
+| `c87eba8` | Broker | 355 | 870 | 0% |
+
+Bản `1180d79` dùng chung lượt làm mới thông tin chỗ trống giữa các yêu cầu và kích hoạt gửi phản hồi ngay sau khi node commit lệnh. p95 đặt qua broker giảm 38,7% so với lượt broker trước. TC80 vẫn chưa đạt. p95 của lượt broker mới vượt ngưỡng và tỷ lệ lỗi HTTP là 4,48%. Hai lượt HTTP đều đã có 0% lỗi 504. Bản `c87eba8` gộp thao tác nhận lệnh vào một truy vấn nguyên tử. p95 đặt qua broker giảm tiếp xuống 870 ms, vẫn vượt ngưỡng. [Log và JSON của lượt c87eba8](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42471813096). Chỉ tiêu tra cứu 250 ms trong kế hoạch áp dụng cho sáu bãi. Lượt TC80 trên đây chạy ba bãi. Log và JSON ở mục Artifacts của [lượt 7f58824](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42470803318) và [lượt 1180d79](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42471407708).
 
 ## Cách chạy lại
 
