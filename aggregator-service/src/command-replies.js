@@ -3,12 +3,12 @@ const {randomUUID,createHash}=require('node:crypto');
 const {makeConnector}=require('./amqp-connect');
 const {canonical,verifySignature}=require('./command-signature');
 const {applyEvent}=require('./events');
-const {propagation,ROOT_CONTEXT,SpanKind,SpanStatusCode,trace}=require('@opentelemetry/api');
+const {context,propagation,ROOT_CONTEXT,SpanKind,SpanStatusCode,trace}=require('@opentelemetry/api');
 const replyTracer=trace.getTracer('aggregator/replies');
 const INSTANCE_QUEUE_ARGS={'x-queue-type':'quorum','x-message-ttl':60000};
 const RECOVERY='agg.replies.recovery';
 
-function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{}}){
+function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{},source=null}){
   return async m=>{
     let b;try{if(m.content.length>65536)return false;b=JSON.parse(m.content);}catch{return false;}
     const p=m.properties;
@@ -24,15 +24,24 @@ function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{}})
     const slot=b.slot&&typeof b.slot.slotCode==='string'&&['AVAILABLE','RESERVED','OCCUPIED','MAINTENANCE','HIDDEN'].includes(b.slot.status)&&Number.isSafeInteger(b.slot.version)&&b.slot.version>=0?b.slot:null;
     const identity=[b.commandId,p.correlationId,b.parkingId,b.commandType,b.actor];
     const match='id=$1 AND correlation_id=$2 AND parking_id=$3 AND type=$4 AND actor=$5::jsonb';
-    const updated=await pool.query(`UPDATE commands SET status=$6,result=$7,status_code=$8,reply_hash=$9,slot=$10,
-      updated_at=now(),failure_phase=NULL,publish_state='CONFIRMED',publish_lease_until=NULL
-      WHERE ${match} AND status='PENDING' RETURNING *`,
-      [...identity,b.statusCode<400?'DONE':'FAILED',b.result,b.statusCode,hash,slot]);
-    const row=updated.rows[0]??(await pool.query(
+    const carrier={};
+    propagation.inject(context.active(),carrier);
+    // Notify other instances in the result transaction. The local instance already has the returned row.
+    const updated=await pool.query(`WITH updated AS (
+      UPDATE commands SET status=$6,result=$7,status_code=$8,reply_hash=$9,slot=$10,
+        updated_at=now(),failure_phase=NULL,publish_state='CONFIRMED',publish_lease_until=NULL
+        WHERE ${match} AND status='PENDING' RETURNING *
+    )
+    SELECT updated.* FROM updated CROSS JOIN LATERAL pg_notify('command_results',
+      json_build_object('id',updated.id,'source',$11::text,
+        'traceparent',COALESCE($12::text,updated.envelope->>'traceparent'))::text)`,
+      [...identity,b.statusCode<400?'DONE':'FAILED',b.result,b.statusCode,hash,slot,source,carrier.traceparent??traceparent??null]);
+    const changed=updated.rows[0];
+    const row=changed??(await pool.query(
       `SELECT * FROM commands WHERE ${match} AND reply_hash=$6`,[...identity,hash])).rows[0];
     if(!row)return false;
     if(row.slot)applyEvent(cache,{parkingId:row.parking_id,slot:row.slot.slotCode,status:row.slot.status,version:row.slot.version});
-    if(updated.rowCount)await signal(row); // durable update and notify precede broker ack.
+    if(changed)await signal(row,{notified:true}); // durable update and notify precede broker ack.
     return true;
     }catch(error){span.recordException(error);span.setStatus({code:SpanStatusCode.ERROR,message:error.message});throw error;}
     finally{span.end();}
@@ -46,7 +55,11 @@ async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onR
     ON CONFLICT(id) DO UPDATE SET owner=EXCLUDED.owner,lease_until=EXCLUDED.lease_until
     WHERE aggregator_instances.lease_until<now() RETURNING id`,[instanceId,owner]);
   if(!claim.rowCount)throw new Error('DUPLICATE_AGGREGATOR_ID');
-  const connectAny=makeConnector(url,connect),handle=makeReplyHandler({pool,internalKey,cache,signal:flow.signal});
+  const connectAny=makeConnector(url,connect);
+  const handle=makeReplyHandler({pool,internalKey,cache,source:owner,async signal(row,options){
+    await flow.signal(row,options);
+    onResult?.(row,context.active());
+  }});
   let stopped=false,state,listener,notifyTimer,wake,retryTimer;
   const reconnectListener=()=>{clearTimeout(notifyTimer);if(!stopped)notifyTimer=setTimeout(listen,retryMs);};
   const heartbeat=setInterval(async()=>{
@@ -63,6 +76,7 @@ async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onR
         if(n.channel!=='command_results')return;
         try{
           let notice;try{notice=JSON.parse(n.payload);}catch{/* Legacy instances notify with a raw commandId. */}
+          if(notice?.source===owner)return;
           const id=typeof notice?.id==='string'?notice.id:n.payload;
           const row=await flow.get(id);
           if(row&&row.status!=='PENDING'){

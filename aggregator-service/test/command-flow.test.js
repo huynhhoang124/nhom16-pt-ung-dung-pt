@@ -16,14 +16,14 @@ function reply(opts,result={id:'reservation'},code=201){
 }
 async function setup(t,options={}){
   const db=new PGlite();await db.exec(fs.readFileSync(path.join(__dirname,'../src/schema.sql'),'utf8'));
-  const query=async(s,p)=>{if(s.includes('pg_notify'))return {rows:[],rowCount:1};const r=await db.query(s,p);return {...r,rowCount:r.affectedRows??r.rows.length};};
+  const query=async(s,p)=>{const r=await db.query(s,p);return {...r,rowCount:r.affectedRows??r.rows.length};};
   const pool={query,connect:async()=>({query,release(){}})},calls=[],cache=new Map();let behaviour;
   const publisher={send:async(_p,_t,_b,opts)=>{calls.push(opts);return behaviour(opts);}};
   const flow=makeCommandFlow({pool,publisher,instanceId:'1',waitMs:3000,...options});
   const handle=makeReplyHandler({pool,cache,internalKey:'key',signal:flow.signal});
   behaviour=opts=>handle(reply(opts));flow.setReady(true);flow.start();
   t.after(async()=>{await flow.stop();await db.close();});
-  return {pool,flow,handle,calls,cache,set(fn){behaviour=fn;}};
+  return {db,pool,flow,handle,calls,cache,set(fn){behaviour=fn;}};
 }
 test('reply before publisher confirm releases request; same key yields same command and result, mismatch 422',async t=>{
   const {flow,calls,cache}=await setup(t);
@@ -164,4 +164,18 @@ test('batch persistence confirms only successful publishes and retains uncertain
   assert.equal(unknown.publish_state, 'UNKNOWN');
   assert.equal(unknown.uncertain, true);
   assert.equal(unknown.status, 'PENDING');
+});
+
+test('the committed reply notifies peers once; a redelivery only acknowledges the existing result', async t => {
+  const f = await setup(t);
+  const received = [];
+  await f.db.listen('command_results', payload => received.push(JSON.parse(payload)));
+  assert.equal((await f.flow.execute(request)).code, 201);
+  const deadline = Date.now() + 1000;
+  while (!received.length && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 10));
+  assert.equal(received.length, 1);
+  assert.equal(received[0].id, 'user:key');
+  assert.equal((await f.flow.get(received[0].id)).status, 'DONE');
+  assert.equal(await f.handle(reply(f.calls[0])), true);
+  assert.equal(received.length, 1);
 });

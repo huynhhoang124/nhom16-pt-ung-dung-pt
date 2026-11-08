@@ -35,6 +35,7 @@ function makeCommandFlow({
   let publishing = false;
   let publishRequested = false;
   let scanning = false;
+  let expiring = false;
   let replyReady = false;
   let timer;
 
@@ -63,14 +64,15 @@ function makeCommandFlow({
     return (await pool.query('SELECT * FROM commands WHERE id=$1', [id])).rows[0];
   }
 
-  async function signal(row) {
+  async function signal(row, { notified = false } = {}) {
     if (!terminal(row)) return;
     require('./metrics').observeCommand(row);   // PD-25: command_duration_seconds
     settle(row.id, row);
+    onResult(row, context.active());
+    if (notified) return;
     const carrier = {};
     propagation.inject(context.active(), carrier);
     const traceparent = carrier.traceparent ?? row.envelope?.traceparent;
-    onResult(row, context.active());
     await pool.query("SELECT pg_notify('command_results',$1)", [JSON.stringify({ id: row.id, traceparent })]);
   }
 
@@ -225,7 +227,6 @@ function makeCommandFlow({
     if (publishing) return;
     publishing = true;
     try {
-      await expireUnsent();
       do {
         publishRequested = false;
         const owner = randomUUID();
@@ -271,8 +272,16 @@ function makeCommandFlow({
     }
   }
 
+  async function sweepExpired() {
+    if (stopped || !replyReady || expiring) return;
+    expiring = true;
+    try { await expireUnsent(); } finally { expiring = false; }
+  }
+
   function start() {
     timer = setInterval(() => {
+      // Claim already filters deadlines. Sweep expired intents outside the publish path.
+      sweepExpired().catch(() => {});
       scan().catch(() => {});
       pump().catch(() => {});
     }, 100);
@@ -282,7 +291,7 @@ function makeCommandFlow({
     stopped = true;
     clearInterval(timer);
     for (const id of pending.keys()) settle(id, { id, status: 'PENDING', publish_state: 'AWAITING_RESULT' });
-    while (publishing || scanning) await new Promise((r) => setTimeout(r, 10));
+    while (publishing || scanning || expiring) await new Promise((r) => setTimeout(r, 10));
   }
 
   return { execute, get, pump, scan, start, stop, signal, settle, markFailed, pending, setReady(v) { replyReady = v; } };
