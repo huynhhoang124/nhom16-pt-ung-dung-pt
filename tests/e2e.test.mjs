@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { registerCommandInboxTests } from './command-inbox.e2e.mjs';
 import './command-inbox-http.test.mjs';
+import { registerTc60Pd05Tests } from './tc60.pd05.test.mjs';
 
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -609,7 +610,59 @@ test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), o
   }
 );
 
+test('PD-23: CQRS agrees with parking nodes and resumes after restart', {
+  timeout: 180_000,
+  skip: process.env.STATS_E2E !== '1',
+}, async () => {
+  const token = await login('admin');
+  const from = new Date(Date.now() - 3 * 3600_000).toISOString();
+  const to = new Date(Date.now() + 3600_000).toISOString();
+  const query = new URLSearchParams({ from, to });
+  const ids = ['A', 'B', 'C'];
+  const plateStart = Date.now() % 99_800;
+  const counts = {};
+  for (const [index, parkingId] of ids.entries()) {
+    const slotCode = await freeSlot(parkingId);
+    for (let trip = 0; trip < 50; trip++) {
+      const digits = String(plateStart + index * 50 + trip).padStart(5, '0');
+      const path = `/api/slots/${slotCode}`;
+      const entered = await node(parkingId, `${path}/enter`, {
+        method: 'POST',
+        body: { licensePlate: `30A-${digits.slice(0, 3)}.${digits.slice(3)}` },
+      });
+      assert.equal(entered.status, 200);
+      if (parkingId === 'A' && trip === 0) {
+        const id = entered.body.session.id;
+        assert.match(id, /^[0-9a-f-]{36}$/i);
+        sql('db-a', `UPDATE parking_sessions SET entered_at=now()-interval '90 minutes' WHERE id='${id}'`);
+      }
+      const exited = await node(parkingId, `${path}/exit`, { method: 'POST', body: { cash: true } });
+      assert.equal(exited.status, 200);
+    }
+    const direct = await node(parkingId, `/api/stats?${query}`);
+    assert.equal(direct.status, 200);
+    assert.equal(direct.body.sessions, 50);
+    counts[parkingId] = direct.body;
+  }
+  assert.ok(counts.A.revenue > 0);
+  const read = async () => {
+    const response = await agg(`/api/admin/stats?${query}`, { token });
+    if (response.status !== 200) return false;
+    return ids.every((id) => {
+      const parking = response.body.parkings?.find((p) => p.parkingId === id);
+      if (!parking) return false;
+      return ['sessions', 'exited', 'revenue', 'occupied', 'total', 'avgMinutes']
+        .every((key) => parking[key] === counts[id][key])
+        && parking.byHour.every((count, hour) => count === counts[id].byHour[hour]);
+    });
+  };
+  await until('CQRS projection', read, 30_000);
+  compose('restart stats-service');
+  await until('CQRS projection after restart', read, 30_000);
+});
+
 registerCommandInboxTests({ ROOT, compose, sh, sql, KEY, until, agg, node, login, freeSlot });
+registerTc60Pd05Tests({ ROOT, sh, sql, KEY, node, login, freeSlot });
 
 // --- PD-09: Khám phá dịch vụ qua etcd (COORD=1 node --test tests/e2e.test.mjs) ---
 test('TC63 etcd service discovery: khởi động bãi mới có đăng ký etcd -> tự động hiện trên API danh sách bãi trong <= 2s',

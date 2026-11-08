@@ -1,6 +1,7 @@
 // Nghiệp vụ của một bãi. Mọi thay đổi trạng thái slot đi kèm 1 dòng parking_events (outbox)
 // trong CÙNG giao dịch => có sự kiện khi và chỉ khi DB đã commit.
 
+const { randomUUID } = require('node:crypto');
 const { calcFee, fromRow } = require('./pricing');
 const { requestId } = require('./log');
 const hlc = require('./hlc');
@@ -49,7 +50,8 @@ async function tx(pool, fn) {
 async function emit(c, parkingId, type, slotCode, status, version, plate,extra = {}, eventHlc = null) {
   const occ = (await c.query(
     `SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available,
-            count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total
+            count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total,
+            count(*) FILTER (WHERE status='OCCUPIED')::int AS occupied
      FROM parking_slots`
   )).rows[0];
 
@@ -57,6 +59,8 @@ async function emit(c, parkingId, type, slotCode, status, version, plate,extra =
 
   const payload = {
     event: 'SLOT_UPDATED',
+    eventId: randomUUID(),
+    occurredAt: new Date().toISOString(),
     type,
     parkingId,
     slot: slotCode,
@@ -76,6 +80,7 @@ async function emit(c, parkingId, type, slotCode, status, version, plate,extra =
     [type, slotCode, plate ?? null, payload, timestamp, carrier.traceparent ?? null],
   );
 }
+
 
 const findByRequest = (pool, requestId) =>
   pool.query(
@@ -237,7 +242,16 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
       to,
       s.rows[0].version,
       plate,
-      eventExtra,
+      {
+        ...eventExtra,
+        ...(session && {
+          enteredAt: session.enteredAt,
+          exitedAt: session.exitedAt,
+          fee: Number(session.fee || 0),
+          paidAt: session.paidAt,
+          paymentMethod: session.paymentMethod,
+        }),
+      },
       sessionHlc,
     );
     return { code: 200, body: { slot: slotCode, status: to, version: Number(s.rows[0].version), ...(session && { session }) } };
@@ -267,7 +281,7 @@ const listPricing = async (pool) => (await pool.query('SELECT * FROM pricing_rul
 
 // NV-04: thanh toán (giả lập). paymentKey = "<userId>:<Idempotency-Key>": bấm lại / retry trả lại kết quả cũ,
 // không ghi nhận lần hai. Trả khi xe còn trong bãi thì khoá số tiền theo phí tạm tính lúc trả.
-async function payIn(c, { sessionId, method, paymentKey, userId }) {
+async function payIn(c, { sessionId, method, paymentKey, userId, parkingId }) {
   const replay = async (fallback) => {
     const r = (await c.query(`SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
       WHERE ps.payment_key=$1 AND ps.id=$2 AND ($3::text IS NULL OR ps.user_id=$3)`, [paymentKey, sessionId, userId ?? null])).rows[0];
@@ -284,8 +298,18 @@ async function payIn(c, { sessionId, method, paymentKey, userId }) {
     if (q.fee <= 0) throw new Abort(409, { error: 'NOTHING_TO_PAY' });
     await c.query(
       `UPDATE parking_sessions SET paid_at=now(), payment_method=$2, payment_key=$3, fee=$4 WHERE id=$1`,
-      [sessionId, method, paymentKey, q.fee]);
-    return { code: 200, body: await getSession(c, sessionId) };
+      [sessionId, method, paymentKey, q.fee],
+    );
+    const session = await getSession(c, sessionId);
+    if (parkingId) {
+      await emit(c, parkingId, 'PAYMENT_COMPLETED', session.slotCode, undefined, 0, null, {
+        event: 'PAYMENT_COMPLETED',
+        sessionId,
+        fee: Number(session.fee),
+        occurredAt: session.paidAt,
+      });
+    }
+    return { code: 200, body: session };
   }, (e) => {
     if (e instanceof Abort) {
       const out = { code: e.code, body: e.body };

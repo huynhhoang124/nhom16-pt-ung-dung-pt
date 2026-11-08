@@ -287,8 +287,8 @@ Nhánh này đã gộp #80, #81 và sửa lỗi tích hợp với PD-06. Chỉ s
 
 ### B12 – PD-15 ra 6 bãi – sau PR PD-15 của Loan, B3
 
-- [ ] Bật đọc replica (`READ_DATABASE_URL`) cho mọi bãi trong mẫu `gen-lots.mjs`.
-- [ ] Kiểm tra: TC71 trên bãi A và một bãi vùng Nam (E).
+- [x] Bật đọc replica (`READ_DATABASE_URL`) cho cả sáu bãi trong mẫu `gen-lots.mjs`.
+- [x] TC71 đạt trên bãi A và E trong [CI ngày 08/11](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42471407708/job/128702782509).
 - [ ] PR, merge.
 
 ### B13 – PD-24 trace lệnh qua broker – sau PR PD-24 của Hiệp, B2
@@ -335,9 +335,9 @@ Chỉ sửa file, không chạy lệnh shell, không commit.
 
 ### B14 – PD-26 nemesis failover DB, treo leader – sau PR PD-26 của Hiệp, B8
 
-- [ ] `tests/jepsen/nemesis.mjs` thêm nemesis `db` (`docker compose stop db-x`, failover tự động) và `leader` (`docker pause` leader 15 s).
-- [ ] Bất biến 6 đọc epoch từ etcd và `db_epoch`.
-- [ ] Kiểm tra: `--nemesis random --time 300` với 2 seed khác nhau, đạt 6/6 bất biến. Lưu bảng vào `tai-lieu/ket-qua-jepsen.md`.
+- [x] `tests/jepsen/nemesis.mjs` thêm nemesis `db` (`docker compose stop db-x`, failover tự động) và `leader` (`docker pause` leader 15 s).
+- [x] Bất biến 6 đọc epoch từ etcd và `db_epoch`.
+- [x] Jepsen 300 giây với seed 42 và 43 đạt 6/6 bất biến. Xem [kết quả Jepsen](tai-lieu/ket-qua-jepsen.md).
 - [ ] PR, merge.
 
 ---
@@ -349,7 +349,7 @@ Chỉ sửa file, không chạy lệnh shell, không commit.
 - [x] `tests/load/k6.js`: kịch bản 300 người dùng ảo; `node scripts/net.mjs B latency 1500`.
 - [x] 4 cặp so sánh: `COMMAND_MODE` http/broker; 3/6 bãi; 2/4 Aggregator; bãi A đồng bộ/bất đồng bộ.
 - [x] Mỗi lần ghi p50, p95, p99, tỉ lệ 504/503, thông lượng; lưu log k6. Chưa có ảnh Grafana.
-- [x] `tai-lieu/ket-qua-do-so-sanh.md`: bảng số liệu, không có số ước lượng. Chưa đối chiếu SLO mục 3.3 vì không thấy mục này trong repo.
+- [x] `tai-lieu/ket-qua-do-so-sanh.md`: bảng số liệu, không có số ước lượng. Đã đối chiếu SLO mục 3.3 theo bản kế hoạch v1.4.
 - [ ] (Đã đo, chưa đạt, xem kết quả) TC80: 300 người dùng ảo, bãi chậm 1,5 s → tỉ lệ 504 về 0, p95 trong ngưỡng.
 - [ ] PR, merge.
 

@@ -275,3 +275,18 @@ Lý do không chạy được:
 - TC43 viết cứng cổng 3000. Nên đọc từ biến `FRONTEND_URL`.
 - Windows: cổng 2379 có thể bị hệ điều hành giữ. Khi đó đổi cổng host trong `docker-compose.override.yml`.
 - Máy 16 GB: chạy `node --test --test-concurrency=2 test/*.test.js`.
+
+
+## Cập nhật tích hợp ngày 08/11
+
+Giữ bảng điểm 01/11 làm mốc lịch sử. Bảng dưới ghi tiến độ của từng phần theo bản tích hợp, gồm cả sửa đổi thực hiện sau PR của thành viên.
+
+| Thành viên | Kết quả kiểm chứng |
+|---|---|
+| Vũ Văn Hùng | PD-02 và PD-08 đã có bản thay cho #66 và #49. PD-04 và PD-08 đã lên main qua #89. |
+| Nguyễn Văn Luận | Các phần etcd, fencing, saga và failover đã lên main. Jepsen kiểm lại một primary ghi được và epoch khớp etcd. |
+| Trịnh Kim Loan | TC60 xử lý đủ 100 lệnh, giữ FIFO, chỉ tạo một lượt đặt và chuyển consumer sau 4,84 giây. TC71 đạt ở A và E. |
+| Đỗ Huyền Trang | PD-22 có kiểm tra replay và giãn cách đối soát. PD-23 cho kết quả khớp trên 150 phiên, có kiểm tra sau khi khởi động lại. PD-20 qua kiểm tra hedged request và ETag. |
+| Phạm Sỹ Hiệp | TC78, TC79 và hai lượt failover Jepsen đạt. PD-27 được đánh giá theo số đo ở [bảng tải](ket-qua-do-so-sanh.md). |
+
+Nguồn kiểm chứng [PR tích hợp #96](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/pull/96) và [CI ngày 08/11](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42471407708).

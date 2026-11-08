@@ -50,7 +50,8 @@ test('đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện', async ()
   assert.match(ev.hlc, /^\d{13}-\d{4}$/);
   assert.equal(ev.payload.hlc, ev.hlc);
 
-  const { hlc: payloadHlc, ...payload } = ev.payload;
+  const { hlc: payloadHlc, eventId, occurredAt, ...payload } = ev.payload;
+  assert.ok(eventId && Number.isFinite(Date.parse(occurredAt)));
   assert.match(payloadHlc, /^\d{13}-\d{4}$/);
 
   assert.deepEqual(payload, {
@@ -62,6 +63,7 @@ test('đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện', async ()
     version: 1,
     available: 4,
     total: 5,
+    occupied: 0,
     userId: 'u1',
     reservationId: r.body.id,
   });
@@ -379,10 +381,12 @@ test('UX-02 thống kê: lượt xe, doanh thu đã trả, TG gửi TB, lượt 
   await pool.query(`UPDATE parking_sessions SET entered_at = '2026-10-05T08:30:00+07:00' WHERE license_plate='30A11111'`);
   await pool.query(`UPDATE parking_sessions SET entered_at = now() - interval '150 minutes' WHERE license_plate='30A22222'`);
   await s.moveSlot(pool, P, 'A02', ['OCCUPIED'], 'AVAILABLE', 'CAR_EXIT', undefined, { cash: true });
+  await pool.query(`UPDATE parking_sessions SET entered_at = '2026-10-05T09:30:00+07:00', exited_at = '2026-10-05T12:00:00+07:00' WHERE license_plate='30A22222'`);
   const st = await s.stats(pool, new Date('2026-01-01'), new Date('2100-01-01'));
   assert.deepEqual([st.sessions, st.exited, st.revenue, st.occupied, st.total], [2, 1, 35000, 1, 5]);
   assert.ok(st.avgMinutes >= 150 && st.avgMinutes <= 151);
   assert.equal(st.byHour[8], 1);
+  assert.equal(st.byHour[9], 1);
   assert.equal(st.byHour.reduce((a, b) => a + b), 2);
   assert.equal((await s.stats(pool, new Date('2020-01-01'), new Date('2020-02-01'))).sessions, 0);
 });
