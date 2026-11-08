@@ -62,7 +62,7 @@ test('PostgreSQL: concurrent duplicate transactions, same-slot contention, SQL f
   const brokenPool = { connect: async () => {
     const c = await pool.connect();
     return { release: () => c.release(), query: (sql, params) => {
-      if (sql.startsWith('INSERT INTO command_reply_outbox')) throw new Error('injected outbox error');
+      if (sql.includes('INSERT INTO command_reply_outbox')) throw new Error('injected outbox error');
       return c.query(sql, params);
     } };
   } };

@@ -442,3 +442,25 @@ test('NV-08 warnExpiring: báo 1 lần khi lượt đang giữ chỗ sắp hết
   const ev = (await one(pool, `SELECT payload FROM parking_events ORDER BY id DESC LIMIT 1`)).payload;
   assert.deepEqual([ev.type, ev.userId, ev.reservationId, ev.version], ['RESERVATION_EXPIRING', 'u1', r.body.id, 1]);
 });
+
+test('immediate broker reservation retains the database transaction clock and expiry', async t => {
+  const pool = await makePool();
+  t.after(() => pool.db.close());
+  const c = await pool.connect();
+  await c.query('BEGIN');
+  try {
+    const { now } = await one(c, 'SELECT now() AS now');
+    await new Promise(resolve => setTimeout(resolve, 25));
+    const result = await s.reserveIn(c, P, req('clock'), 15);
+    assert.equal(result.code, 201);
+    assert.equal(new Date(result.body.start_time).getTime(), now.getTime());
+    assert.equal(new Date(result.body.expire_time) - now, 15 * 60000);
+    assert.equal(new Date(result.body.end_time) - now, 120 * 60000);
+    await c.query('COMMIT');
+  } catch (error) {
+    await c.query('ROLLBACK');
+    throw error;
+  } finally {
+    c.release();
+  }
+});
