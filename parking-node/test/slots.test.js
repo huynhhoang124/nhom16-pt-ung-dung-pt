@@ -72,12 +72,13 @@ test('đặt chỗ: 201, slot RESERVED, version 1, sinh 1 sự kiện', async ()
 test('TC08 gửi lại cùng requestId: trả bản cũ, vẫn 1 reservation, không thêm sự kiện', async () => {
   const pool = await makePool();
   const a = await s.reserve(pool, P, req('r1'));
-  const b = await s.reserve(pool, P, req('r1'));
+  const b = await s.reserve(pool, P, req('r1', 'A02'));
   assert.equal(b.code, 200);
   assert.equal(b.replayed, true);
   assert.equal(b.body.id, a.body.id);
   assert.equal(await count(pool, 'reservations'), 1);
   assert.equal(await count(pool, 'parking_events'), 1);
+  assert.equal((await slot(pool, 'A02')).status, 'AVAILABLE');
 });
 
 test('TC03 người thứ hai đặt cùng slot: 409, không sinh reservation/sự kiện', async () => {

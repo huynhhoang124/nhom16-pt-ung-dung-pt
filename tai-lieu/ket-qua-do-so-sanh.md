@@ -134,6 +134,8 @@ Aggregator chuyển quét hết hạn sang nhịp bảo trì, gộp thông báo 
 
 Ba lượt chạy 300 VU trong hai phút, B chậm 1.500 ms và đạt cả 12 bất biến sau tải. Mọi ngưỡng k6 đều qua, 503/504 bằng 0. Dữ liệu demo mới dùng 10 slot/bãi. Overlay `tests/load/benchmark-slots.compose.yml` giữ A/B/C ở 40/60/30 slot khi chạy TC80 và PD-20 để so sánh với kết quả cũ.
 
+Sau khi tách seed demo, lượt `eb19475` đạt 283 ms. Lượt `0e31bd5` chỉ đổi test TC01 và có p95 353 ms, chạy lại 301 ms. Lượt 353 ms có WAL sync trung bình ở DB bãi B khoảng 0,99 ms/lần, so với 0,26–0,41 ms/lần ở ba lượt đạt. Bản sửa kế tiếp đưa kiểm tra request ID vào câu giữ slot, và chỉ lấy khóa quản trị khi thao tác cần kiểm tra chính sách đặt chỗ. [Lượt 283 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42501525189) · [Lượt 353 và 301 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42502224604).
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).

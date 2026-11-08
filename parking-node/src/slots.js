@@ -92,8 +92,8 @@ const findByRequest = (pool, requestId) =>
 // expire_time = giờ đến + `minutes`: quá giờ này chưa đến thì hết hạn (no-show).
 // Mốc thời gian lấy theo now() của DB bãi.
 // Bodies below use the caller's transaction; no BEGIN/COMMIT inside inbox processing.
-async function business(c, fn, recover) {
-  await c.query('SAVEPOINT business_operation; ' + ADMIN_GATE_SQL);
+async function business(c, fn, recover, { lockAdmin = false } = {}) {
+  await c.query(lockAdmin ? 'SAVEPOINT business_operation; ' + ADMIN_GATE_SQL : 'SAVEPOINT business_operation');
   try {
     // The transaction owner commits/rolls back after this operation, releasing the savepoint there.
     return await fn();
@@ -111,8 +111,6 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     const prior = await findByRequest(c, requestId);
     return prior.rowCount ? { code: 200, body: prior.rows[0], replayed: true } : fallback;
   };
-  const prior = await replayOr(null);
-  if (prior) return prior;
   return business(c, async () => {
     const denied = await checkAdminIn(c, { slotCode, licensePlate });
     if (denied) return replayOr(denied);
@@ -124,8 +122,10 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     // The held row feeds the INSERT: a losing CAS creates no reservation, and a failed INSERT rolls back the CAS.
     const hold = instant
       ? `UPDATE parking_slots SET status='RESERVED',version=version+1,updated_at=now()
-         WHERE slot_code=$3 AND status='AVAILABLE' RETURNING id,version`
-      : `SELECT id,version FROM parking_slots WHERE slot_code=$3 AND status NOT IN ('MAINTENANCE','HIDDEN')`;
+         WHERE slot_code=$3 AND status='AVAILABLE'
+           AND NOT EXISTS (SELECT 1 FROM reservations WHERE request_id=$1) RETURNING id,version`
+      : `SELECT id,version FROM parking_slots WHERE slot_code=$3 AND status NOT IN ('MAINTENANCE','HIDDEN')
+         AND NOT EXISTS (SELECT 1 FROM reservations WHERE request_id=$1)`;
     const r = await c.query(
       `WITH held AS (${hold})
        INSERT INTO reservations(request_id,user_id,slot_id,license_plate,start_time,end_time,expire_time,status)
@@ -141,11 +141,10 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     return { code: 201, body: { ...reservation, slot_code: slotCode },
       ...(instant && { replySlot: { slotCode, status: 'RESERVED', version: Number(version) } }) };
   }, async (e) => {
-    if (e instanceof Abort) return replayOr({ code: e.code, body: e.body });
     if (e.code === '23P01') return replayOr({ code: 409, body: { error: 'TIME_CONFLICT' } });
     if (e.code === '23505') return replayOr({ code: 409, body: { error: 'SLOT_TAKEN' } });
     throw e;
-  });
+  }, { lockAdmin: true });
 }
 
 function reserve(pool, parkingId, input, minutes = 15) {
