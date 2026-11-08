@@ -35,3 +35,7 @@ for (const [service, port] of [['parking-a',8001], ['parking-b',8002], ['parking
     "fetch('http://localhost:"+port+"/metrics').then(r=>r.text()).then(console.log)"], { encoding: 'utf8' });
   console.log(service, metrics.split('\n').filter(line => line.startsWith('command_consumer_stage_seconds')).join('\n'));
 }
+
+for (const service of ['db-a','db-b','db-c','db-agg']) {
+  console.log(service, read(service, `SELECT row_to_json(w) FROM pg_stat_wal w`));
+}
