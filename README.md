@@ -49,6 +49,10 @@ node tests/load/check-invariants.mjs                # GS-05/06 kiểm bất bi�
 node tests/chaos.mjs                                # GS-06 vừa tải vừa tắt/bật ngẫu nhiên (cần --profile ha)
 ```
 
+## PD-22 và PD-23
+
+Aggregator đọc lại tối đa 10 phút từ `events.stream` khi bắt đầu nhận sự kiện. Muốn bật thống kê CQRS, đặt `USE_STATS_SERVICE=true` trong `.env` và chạy `docker compose --profile stats up -d --build`. Dịch vụ lưu vị trí đọc trong Postgres và tiếp tục từ đó sau khi khởi động lại. Thống kê CQRS chỉ gồm dữ liệu nhận được qua stream. Với dữ liệu có từ trước khi bật stream, dùng chế độ thống kê trực tiếp mặc định.
+
 ## PD-26 – kiểm thử Jepsen
 
 Harness mới ở `tests/jepsen/` chạy workload có seed, lưu history JSONL và kiểm sáu bất biến trên Docker Compose riêng, dùng cổng Aggregator/bãi `18000–18006` và cổng Toxiproxy `19474–19479` để không đụng stack phát triển:
