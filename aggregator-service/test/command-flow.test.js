@@ -112,18 +112,18 @@ test('publisher sends the next command before an earlier broker confirm arrives'
   const f = await setup(t, { waitMs: 1000 });
   f.flow.setReady(false);
   // Prepare queued durable rows without starting the worker.
-  const create = (id) => f.pool.query(
-    `INSERT INTO commands(id, parking_id, type, user_id, request_hash, payload, actor, envelope, correlation_id, reply_to)
+  const create = (id, createdAt) => f.pool.query(
+    `INSERT INTO commands(id, parking_id, type, user_id, request_hash, payload, actor, envelope, correlation_id, reply_to, created_at)
      VALUES ($1, 'A', 'reserve', 'user', 'hash', '{}', '{"userId":"user","role":"USER"}',
-             $2, $1, 'agg.1')`,
-    [id, { issuedAt: Date.now(), deadlineAt: Date.now() + 10000 }],
+             $2, $1, 'agg.1', $3)`,
+    [id, { issuedAt: Date.now(), deadlineAt: Date.now() + 10000 }, createdAt],
   );
-  await create('user:batch-1');
-  await create('user:batch-2');
+  await create('user:batch-z', '2026-11-08T00:00:00.000001Z');
+  await create('user:batch-a', '2026-11-08T00:00:00.000002Z');
   let release;
   const blocked = new Promise(resolve => { release = resolve; });
   f.set(async opts => {
-    if (opts.messageId === 'user:batch-1') await blocked;
+    if (opts.messageId === 'user:batch-z') await blocked;
     await f.handle(reply(opts));
   });
   f.flow.setReady(true);
@@ -133,12 +133,12 @@ test('publisher sends the next command before an earlier broker confirm arrives'
     while (f.calls.length < 2 && Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 10));
     }
-    assert.deepEqual(f.calls.map(call => call.messageId), ['user:batch-1', 'user:batch-2']);
-    assert.equal((await f.flow.get('user:batch-1')).status, 'PENDING');
+    assert.deepEqual(f.calls.map(call => call.messageId), ['user:batch-z', 'user:batch-a']);
+    assert.equal((await f.flow.get('user:batch-z')).status, 'PENDING');
   } finally {
     release();
     await pumping;
   }
-  assert.equal((await f.flow.get('user:batch-1')).status, 'DONE');
-  assert.equal((await f.flow.get('user:batch-2')).status, 'DONE');
+  assert.equal((await f.flow.get('user:batch-z')).status, 'DONE');
+  assert.equal((await f.flow.get('user:batch-a')).status, 'DONE');
 });

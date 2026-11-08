@@ -181,15 +181,16 @@ function makeCommandFlow({
            AND (publish_lease_until IS NULL OR publish_lease_until < now())
            AND (envelope->>'deadlineAt')::bigint > $1
          ORDER BY created_at, id FOR UPDATE SKIP LOCKED LIMIT $4
-       )
+       ), claimed AS (
        UPDATE commands c
        SET uncertain = c.uncertain OR c.publish_state IN ('SENDING','UNKNOWN'), publish_state='SENDING',
            publish_owner=$2, publish_lease_until=now() + ($3 * interval '1 millisecond'),
            attempts=c.attempts+1, updated_at=now()
-       FROM next_command n WHERE c.id=n.id RETURNING c.*`,
+       FROM next_command n WHERE c.id=n.id RETURNING c.*
+       ) SELECT * FROM claimed ORDER BY created_at, id`,
       [now(), owner, leaseMs, PUBLISH_BATCH],
     );
-    return rows.sort((a, b) => a.created_at - b.created_at || a.id.localeCompare(b.id));
+    return rows;
   }
 
   async function publishOne(row, owner) {
