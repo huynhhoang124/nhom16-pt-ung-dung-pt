@@ -223,7 +223,7 @@ function crashAfterCommitOnce(result) {
 }
 
 function startCommandConsumer({ url, pool, parkingId, internalKey, log = console,
-  connect = (u) => amqp.connect(u, { timeout: 2000 }), retryMs = 5000, timers = { setTimeout, clearTimeout },
+  connect = amqp.connect, retryMs = 5000, timers = { setTimeout, clearTimeout },
   processCommand = makeCommandProcessor({ pool, parkingId, internalKey }), afterCommit = crashAfterCommitOnce, retryOrDead }) {
   const connectAny = makeConnector(url, connect);
   let stopped = false;

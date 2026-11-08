@@ -10,7 +10,8 @@ function makeConnector(urls, connect = amqp.connect) {
     for (let i = 0; i < list.length; i++) {
       const k = (start + i) % list.length;
       try {
-        const conn = await connect(list[k]);
+        // Small command/reply frames must not wait for Nagle's algorithm and delayed TCP ACKs.
+        const conn = await connect(list[k], { timeout: 2000, noDelay: true });
         start = k;
         return conn;
       } catch (e) { last = e; }

@@ -6,7 +6,7 @@ const replyTracer = trace.getTracer('parking-node/replies');
 const EXCHANGE = 'parking.replies';
 const unavailable = () => ({ ok: false, scope: 'infrastructure', code: 'REPLY_BROKER_UNAVAILABLE' });
 
-function makeReplyPublisher(url, { connect = (u) => amqp.connect(u, { timeout: 2000 }), timeoutMs = 3000 } = {}) {
+function makeReplyPublisher(url, { connect = amqp.connect, timeoutMs = 3000 } = {}) {
   const connectAny = makeConnector(url, connect);
   let current;
   let opening;

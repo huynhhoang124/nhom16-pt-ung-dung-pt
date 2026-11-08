@@ -40,7 +40,7 @@ function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{}})
   };
 }
 
-async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onResult,connect=u=>amqp.connect(u,{timeout:2000}),log=console,retryMs=1000}){
+async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onResult,connect=amqp.connect,log=console,retryMs=1000}){
   const owner=randomUUID();
   const claim=await pool.query(`INSERT INTO aggregator_instances(id,owner,lease_until) VALUES($1,$2,now()+interval '15 seconds')
     ON CONFLICT(id) DO UPDATE SET owner=EXCLUDED.owner,lease_until=EXCLUDED.lease_until

@@ -32,11 +32,12 @@ jobs:
           sleep 10
           node scripts/net.mjs B latency 1500
       - run: bash scripts/do-so-sanh.sh tc80-acceptance
+      - run: node tests/load/check-invariants.mjs | tee tai-lieu/ket-qua-do/tc80-acceptance-invariants.log
       - if: always()
         uses: actions/upload-artifact@v4
         with:
           name: tc80-acceptance
-          path: tai-lieu/ket-qua-do/tc80-acceptance.*
+          path: tai-lieu/ket-qua-do/tc80-acceptance*
       - if: failure()
         run: docker compose logs --no-color --tail 70
   pd20:

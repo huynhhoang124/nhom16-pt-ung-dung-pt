@@ -17,3 +17,17 @@ test('PT-03 nối cụm RabbitMQ: nút đầu chết thì sang nút kế; lần 
   assert.ok(await c());
   assert.deepEqual(await makeConnector('amqp://one', async (u) => ({ u }))(), { u: 'amqp://one' });   // 1 nút như cũ
 });
+
+test('all broker connection attempts disable Nagle and retain the connection timeout', async () => {
+  for (const root of ['parking-node', 'aggregator-service']) {
+    const { makeConnector: connector } = require('../../' + root + '/src/amqp-connect');
+    const options = [];
+    const connect = connector('amqp://one,amqp://two', async (url, socketOptions) => {
+      options.push(socketOptions);
+      if (url.endsWith('one')) throw new Error('offline');
+      return {};
+    });
+    await connect();
+    assert.deepEqual(options, [{ timeout: 2000, noDelay: true }, { timeout: 2000, noDelay: true }]);
+  }
+});
