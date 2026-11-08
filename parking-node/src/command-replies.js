@@ -121,21 +121,21 @@ function makeReplyRelay(pool, publish) {
         for (let offset = 0; offset < rows.length; offset += 16) {
           let infrastructureFailed = false;
           const results = await Promise.allSettled(rows.slice(offset, offset + 16).map(async (r) => {
-          const outcome = await publish(r.reply_to, r.payload, r.properties);
-          if (outcome !== true && outcome?.ok !== true) {
-            const recordError = outcome?.scope === 'record';
-            // Persist only bounded error codes, never payloads, credentials or raw broker errors.
-            const code = recordError
-              ? (outcome.code === 'REPLY_INVALID_RECORD' ? 'REPLY_INVALID_RECORD' : 'REPLY_UNROUTABLE')
-              : (outcome?.code === 'REPLY_NACKED' ? 'REPLY_NACKED' : 'REPLY_BROKER_UNAVAILABLE');
-            await pool.query(`UPDATE command_reply_outbox SET attempts=attempts+1,last_attempt_at=now(),last_error=$2,
-              next_attempt_at=now()+interval '30 seconds' WHERE id=$1 AND published_at IS NULL`, [r.id, code]);
-            if (!recordError) infrastructureFailed = true;
-            return; // Keep failed rows durable; finish other confirms already in flight.
-          }
-          await pool.query(`UPDATE command_reply_outbox SET published_at=now(),attempts=attempts+1,
-            last_attempt_at=now(),last_error=NULL,next_attempt_at=NULL WHERE id=$1`, [r.id]);
-          count++;
+            const outcome = await publish(r.reply_to, r.payload, r.properties);
+            if (outcome !== true && outcome?.ok !== true) {
+              const recordError = outcome?.scope === 'record';
+              // Persist only bounded error codes, never payloads, credentials or raw broker errors.
+              const code = recordError
+                ? (outcome.code === 'REPLY_INVALID_RECORD' ? 'REPLY_INVALID_RECORD' : 'REPLY_UNROUTABLE')
+                : (outcome?.code === 'REPLY_NACKED' ? 'REPLY_NACKED' : 'REPLY_BROKER_UNAVAILABLE');
+              await pool.query(`UPDATE command_reply_outbox SET attempts=attempts+1,last_attempt_at=now(),last_error=$2,
+                next_attempt_at=now()+interval '30 seconds' WHERE id=$1 AND published_at IS NULL`, [r.id, code]);
+              if (!recordError) infrastructureFailed = true;
+              return; // Keep failed rows durable; finish other confirms already in flight.
+            }
+            await pool.query(`UPDATE command_reply_outbox SET published_at=now(),attempts=attempts+1,
+              last_attempt_at=now(),last_error=NULL,next_attempt_at=NULL WHERE id=$1`, [r.id]);
+            count++;
           }));
           const failed = results.find(result => result.status === 'rejected');
           if (failed) throw failed.reason;
