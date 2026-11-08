@@ -3,3 +3,6 @@ dist/
 .env
 .claude/
 .playwright-mcp/
+
+# chứng chỉ HTTPS tự ký cho bản dev (scripts/dev-cert.mjs)
+frontend/.cert/

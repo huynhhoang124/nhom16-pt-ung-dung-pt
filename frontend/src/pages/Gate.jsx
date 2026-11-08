@@ -35,29 +35,48 @@ export default function Gate({ parkingId }) {
     let stop = false;
     (async () => {
       try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+          throw Object.assign(new Error('insecure'), { name: 'InsecureContext' });
+        }
+        // Xin độ phân giải cao (mặc định nhiều webcam chỉ trả 640x480 -> mã QR dày bị nhoè, không đọc được).
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: { ideal: 1920 }, height: { ideal: 1080 } },
+        });
+        const track = stream.getVideoTracks()[0];
+        // Lấy nét liên tục nếu camera hỗ trợ (điện thoại); webcam không hỗ trợ thì bỏ qua.
+        if (track?.getCapabilities?.().focusMode?.includes('continuous')) track.applyConstraints({ advanced: [{ focusMode: 'continuous' }] }).catch(() => {});
         video.current.srcObject = stream;
         await video.current.play();
         const detector = 'BarcodeDetector' in window ? new window.BarcodeDetector({ formats: ['qr_code'] }) : null;
         const jsQR = detector ? null : (await import('jsqr')).default;
         const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        // jsQR: luân phiên quét cả khung hình và VÙNG GIỮA phóng to gấp đôi — mã nhỏ trong khung (đưa điện thoại hơi xa
+        // webcam) vẫn đủ điểm ảnh để đọc. Ảnh to quá thì thu lại cho nhanh.
+        const decode = (crop) => {
+          const v = video.current;
+          const [w, h] = [v.videoWidth, v.videoHeight];
+          if (!w) return null;
+          const side = Math.min(w, h) * (crop ? 0.6 : 1);
+          const [sx, sy, sw, sh] = crop ? [(w - side) / 2, (h - side) / 2, side, side] : [0, 0, w, h];
+          const scale = crop ? Math.min(2, 1000 / side) : Math.min(1, 1280 / w);
+          [canvas.width, canvas.height] = [Math.round(sw * scale), Math.round(sh * scale)];
+          ctx.imageSmoothingEnabled = false;
+          ctx.drawImage(v, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+          return jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, { inversionAttempts: 'dontInvert' })?.data;
+        };
+        let n = 0;
         while (!stop) {
-          let text = null;
-          if (detector) {
-            text = (await detector.detect(video.current))[0]?.rawValue;
-          } else {
-            const v = video.current;
-            [canvas.width, canvas.height] = [v.videoWidth, v.videoHeight];
-            const ctx = canvas.getContext('2d', { willReadFrequently: true });
-            ctx.drawImage(v, 0, 0);
-            text = canvas.width && jsQR(ctx.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height)?.data;
-          }
+          const text = detector ? (await detector.detect(video.current))[0]?.rawValue : decode(n++ % 2 === 1);
           if (text) { setToken(text); setScanning(false); auto(text); break; }
-          await new Promise((r) => setTimeout(r, 250));
+          await new Promise((r) => setTimeout(r, 120));
         }
       } catch (e) {
         setScanning(false);
-        setResult({ ok: false, verdict: 'Không mở được camera', title: 'Kiểm tra quyền dùng camera của trình duyệt', detail: e.message });
+        const insecure = e.name === 'InsecureContext';
+        setResult({ ok: false, verdict: 'Không mở được camera',
+          title: insecure ? 'Trình duyệt chỉ cho dùng camera trên HTTPS hoặc localhost' : e.name === 'NotAllowedError' ? 'Bạn chưa cho phép dùng camera' : 'Kiểm tra quyền dùng camera của trình duyệt',
+          detail: insecure ? 'Mở trang bằng địa chỉ https://… (xem README, mục "Test quét QR bằng điện thoại"), hoặc dán mã QR vào ô bên dưới.' : e.message });
       }
     })();
     return () => { stop = true; stream?.getTracks().forEach((t) => t.stop()); };
@@ -118,7 +137,13 @@ export default function Gate({ parkingId }) {
         <button onClick={toggleKiosk}><Icon name={kiosk ? 'x' : 'layers'} /> {kiosk ? 'Thoát chế độ cổng' : 'Chế độ cổng (toàn màn hình)'}</button>
       </div>
       {scanning
-        ? <div className="cam"><video ref={video} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} /></div>
+        ? <>
+            <div className="cam"><video ref={video} muted playsInline style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }} /></div>
+            <div className="row">
+              <span className="muted small"><Icon name="loader" spin /> Đang tìm mã… Đưa mã vào giữa khung, cách 15–25 cm. Màn điện thoại loá thì giảm độ sáng.</span>
+              <button onClick={() => setScanning(false)}>Dừng quét</button>
+            </div>
+          </>
         : <button className="big-btn" onClick={() => { setResult(null); setScanning(true); }} disabled={busy}><Icon name="camera" /> Quét mã QR</button>}
       <p className="muted small" style={{ margin: 0 }}>Quét bằng camera: hệ thống tự biết xe đang vào hay ra.</p>
       <textarea placeholder="…hoặc dán mã QR vào đây rồi chọn Xe vào / Xe ra" aria-label="Mã QR" value={token} onChange={(e) => setToken(e.target.value)} rows="2" />
