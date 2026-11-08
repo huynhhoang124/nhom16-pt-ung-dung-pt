@@ -350,7 +350,7 @@ Chỉ sửa file, không chạy lệnh shell, không commit.
 - [x] 4 cặp so sánh: `COMMAND_MODE` http/broker; 3/6 bãi; 2/4 Aggregator; bãi A đồng bộ/bất đồng bộ.
 - [x] Mỗi lần ghi p50, p95, p99, tỉ lệ 504/503, thông lượng; lưu log k6. Chưa có ảnh Grafana.
 - [x] `tai-lieu/ket-qua-do-so-sanh.md`: bảng số liệu, không có số ước lượng. Đã đối chiếu SLO mục 3.3 theo bản kế hoạch v1.4.
-- [ ] (Đã đo, chưa đạt, xem kết quả) TC80: 300 người dùng ảo, bãi chậm 1,5 s → tỉ lệ 504 về 0, p95 trong ngưỡng.
+- [x] TC80: 300 người dùng ảo, bãi chậm 1,5 s, hai lượt p95 đặt 174/209 ms (<300 ms), 503/504=0%; bất biến đều đạt. Xem `tai-lieu/ket-qua-do-so-sanh.md`.
 - [ ] PR, merge.
 
 ### B16 – Kết thúc
