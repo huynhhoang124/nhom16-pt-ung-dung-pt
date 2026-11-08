@@ -48,13 +48,6 @@ async function tx(pool, fn) {
 // Ghi HLC cùng sự kiện outbox trong giao dịch nghiệp vụ.
 // HLC chỉ sắp thứ tự nhân quả, không dùng để tính phí hay hết hạn.
 async function emit(c, parkingId, type, slotCode, status, version, plate,extra = {}, eventHlc = null) {
-  const occ = (await c.query(
-    `SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available,
-            count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total,
-            count(*) FILTER (WHERE status='OCCUPIED')::int AS occupied
-     FROM parking_slots`
-  )).rows[0];
-
   const timestamp = eventHlc ?? hlc.now();
 
   const payload = {
@@ -66,7 +59,6 @@ async function emit(c, parkingId, type, slotCode, status, version, plate,extra =
     slot: slotCode,
     status,
     version: Number(version),
-    ...occ,
     ...extra,
     hlc: timestamp,
     requestId: requestId(),
@@ -75,8 +67,14 @@ async function emit(c, parkingId, type, slotCode, status, version, plate,extra =
   const carrier = {};
   propagation.inject(context.active(), carrier);
   return c.query(
-    `INSERT INTO parking_events(event_type, slot_code, license_plate, payload, hlc, traceparent)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
+    `WITH occupancy AS (
+       SELECT count(*) FILTER (WHERE status='AVAILABLE')::int AS available,
+              count(*) FILTER (WHERE status <> 'HIDDEN')::int AS total,
+              count(*) FILTER (WHERE status='OCCUPIED')::int AS occupied
+       FROM parking_slots
+     )
+     INSERT INTO parking_events(event_type, slot_code, license_plate, payload, hlc, traceparent)
+     SELECT $1, $2, $3, to_jsonb(occupancy) || $4::jsonb, $5, $6 FROM occupancy`,
     [type, slotCode, plate ?? null, payload, timestamp, carrier.traceparent ?? null],
   );
 }
@@ -120,9 +118,10 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
   return business(c, async () => {
     const denied = await guardAdminIn(c, { slotCode, licensePlate });
     if (denied) throw new Abort(denied.code, denied.body);
-    const now = (await c.query('SELECT now() AS now')).rows[0].now;
-    const start = startTime && new Date(startTime) > now ? new Date(startTime) : now;
-    const instant = start - now <= minutes * 60_000;
+    // An immediate reservation uses the transaction clock in INSERT, avoiding a separate round trip.
+    const now = startTime ? (await c.query('SELECT now() AS now')).rows[0].now : null;
+    const start = startTime ? (new Date(startTime) > now ? new Date(startTime) : now) : null;
+    const instant = !startTime || start - now <= minutes * 60_000;
     let slot;
     if (instant) {
       // compare-and-swap nguyên tử: chỉ một request thấy 1 dòng bị ảnh hưởng
@@ -135,7 +134,7 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     if (!slot) throw new Abort(409, { error: 'SLOT_TAKEN' });
     const r = await c.query(
       `INSERT INTO reservations(request_id, user_id, slot_id, license_plate, start_time, end_time, expire_time, status)
-       VALUES ($1,$2,$3,$4, $5::timestamptz, $5::timestamptz + make_interval(mins => $6), $5::timestamptz + make_interval(mins => $7), $8) RETURNING *`,
+       VALUES ($1,$2,$3,$4, COALESCE($5::timestamptz,now()), COALESCE($5::timestamptz,now()) + make_interval(mins => $6), COALESCE($5::timestamptz,now()) + make_interval(mins => $7), $8) RETURNING *`,
       [requestId, userId, slot.id, licensePlate, start, durationMinutes, minutes, input.sagaId ? 'PENDING_SAGA' : 'ACTIVE']);
     if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', slot.version, licensePlate, { userId, reservationId: r.rows[0].id });
     return { code: 201, body: { ...r.rows[0], slot_code: slotCode } };
