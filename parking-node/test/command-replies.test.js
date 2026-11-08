@@ -107,3 +107,31 @@ test('detailed publisher correlates concurrent returns/confirms and distinguishe
   const circular = {}; circular.self = circular;
   assert.deepEqual(await publisher.publishDetailed('agg.1', circular, {}), { ok: false, scope: 'record', code: 'REPLY_INVALID_RECORD' });
 });
+
+test('reply committed while the relay is waiting for confirm triggers another pass', async t => {
+  const pool = await makePool();
+  t.after(() => pool.db.close());
+  const insert = id => pool.query(
+    "INSERT INTO command_reply_outbox(command_id,reply_to,payload,properties) VALUES ($1,'agg.1','{}','{}')",
+    [id],
+  );
+  await insert('first');
+  let confirm;
+  let started;
+  const publishing = new Promise(resolve => { started = resolve; });
+  const blocked = new Promise(resolve => { confirm = resolve; });
+  const delivered = [];
+  const relay = makeReplyRelay(pool, async () => {
+    delivered.push(delivered.length + 1);
+    if (delivered.length === 1) { started(); await blocked; }
+    return true;
+  });
+  const first = relay();
+  await publishing;
+  await insert('second');
+  await relay();
+  confirm();
+  assert.equal(await first, 2);
+  assert.equal(delivered.length, 2);
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox WHERE published_at IS NULL')).n, 0);
+});

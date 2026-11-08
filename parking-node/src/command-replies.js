@@ -106,30 +106,35 @@ function makeReplyPublisher(url, { connect = (u) => amqp.connect(u, { timeout: 2
 
 function makeReplyRelay(pool, publish) {
   let running = false;
+  let requested = false;
   return async function relayOnce() {
+    requested = true;
     if (running) return 0;
     running = true;
     let count = 0;
     try {
-      const { rows } = await pool.query(`SELECT id, reply_to, payload, properties FROM command_reply_outbox
-        WHERE published_at IS NULL AND (next_attempt_at IS NULL OR next_attempt_at<=now()) ORDER BY id LIMIT 100`);
-      for (const r of rows) {
-        const outcome = await publish(r.reply_to, r.payload, r.properties);
-        if (outcome !== true && outcome?.ok !== true) {
-          const recordError = outcome?.scope === 'record';
-          // Persist only bounded error codes, never payloads, credentials or raw broker errors.
-          const code = recordError
-            ? (outcome.code === 'REPLY_INVALID_RECORD' ? 'REPLY_INVALID_RECORD' : 'REPLY_UNROUTABLE')
-            : (outcome?.code === 'REPLY_NACKED' ? 'REPLY_NACKED' : 'REPLY_BROKER_UNAVAILABLE');
-          await pool.query(`UPDATE command_reply_outbox SET attempts=attempts+1,last_attempt_at=now(),last_error=$2,
-            next_attempt_at=now()+interval '30 seconds' WHERE id=$1 AND published_at IS NULL`, [r.id, code]);
-          if (recordError) continue;
-          break; // The connection/broker affects the whole turn, not just this record.
+      do {
+        requested = false;
+        const { rows } = await pool.query(`SELECT id, reply_to, payload, properties FROM command_reply_outbox
+          WHERE published_at IS NULL AND (next_attempt_at IS NULL OR next_attempt_at<=now()) ORDER BY id LIMIT 100`);
+        for (const r of rows) {
+          const outcome = await publish(r.reply_to, r.payload, r.properties);
+          if (outcome !== true && outcome?.ok !== true) {
+            const recordError = outcome?.scope === 'record';
+            // Persist only bounded error codes, never payloads, credentials or raw broker errors.
+            const code = recordError
+              ? (outcome.code === 'REPLY_INVALID_RECORD' ? 'REPLY_INVALID_RECORD' : 'REPLY_UNROUTABLE')
+              : (outcome?.code === 'REPLY_NACKED' ? 'REPLY_NACKED' : 'REPLY_BROKER_UNAVAILABLE');
+            await pool.query(`UPDATE command_reply_outbox SET attempts=attempts+1,last_attempt_at=now(),last_error=$2,
+              next_attempt_at=now()+interval '30 seconds' WHERE id=$1 AND published_at IS NULL`, [r.id, code]);
+            if (recordError) continue;
+            return count; // The connection/broker affects the whole turn, not just this record.
+          }
+          await pool.query(`UPDATE command_reply_outbox SET published_at=now(),attempts=attempts+1,
+            last_attempt_at=now(),last_error=NULL,next_attempt_at=NULL WHERE id=$1`, [r.id]);
+          count++;
         }
-        await pool.query(`UPDATE command_reply_outbox SET published_at=now(),attempts=attempts+1,
-          last_attempt_at=now(),last_error=NULL,next_attempt_at=NULL WHERE id=$1`, [r.id]);
-        count++;
-      }
+      } while (requested);
       return count;
     } finally { running = false; }
   };
