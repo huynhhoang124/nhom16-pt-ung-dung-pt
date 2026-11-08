@@ -142,3 +142,24 @@ test('publisher sends the next command before an earlier broker confirm arrives'
   assert.equal((await f.flow.get('user:batch-z')).status, 'DONE');
   assert.equal((await f.flow.get('user:batch-a')).status, 'DONE');
 });
+
+test('batch persistence confirms only successful publishes and retains uncertain attempts', async t => {
+  const f = await setup(t);
+  f.flow.setReady(false);
+  await f.pool.query(`INSERT INTO commands(id,parking_id,type,user_id,request_hash,payload,actor,envelope,correlation_id,reply_to)
+    SELECT id,'A','reserve','user','hash','{}','{"userId":"user","role":"USER"}',$1,id,'agg.1'
+    FROM unnest(ARRAY['user:good','user:unknown']) id`,
+    [{ issuedAt: Date.now(), deadlineAt: Date.now() + 10000 }]);
+  f.set(async opts => {
+    if (opts.messageId === 'user:unknown') throw Object.assign(new Error('lost confirm'), { code: 'PUBLISH_UNKNOWN_RESULT' });
+  });
+  f.flow.setReady(true);
+  await f.flow.pump();
+  const good = await f.flow.get('user:good'), unknown = await f.flow.get('user:unknown');
+  assert.equal(good.publish_state, 'CONFIRMED');
+  assert.equal(good.publish_lease_until, null);
+  assert.equal(good.status, 'PENDING', 'publisher confirm is not a business result');
+  assert.equal(unknown.publish_state, 'UNKNOWN');
+  assert.equal(unknown.uncertain, true);
+  assert.equal(unknown.status, 'PENDING');
+});
