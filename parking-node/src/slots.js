@@ -98,8 +98,7 @@ async function business(c, fn, recover) {
     // The transaction owner commits/rolls back after this operation, releasing the savepoint there.
     return await fn();
   } catch (e) {
-    await c.query('ROLLBACK TO SAVEPOINT business_operation');
-    await c.query('RELEASE SAVEPOINT business_operation');
+    await c.query('ROLLBACK TO SAVEPOINT business_operation; RELEASE SAVEPOINT business_operation');
     if (recover) return recover(e);
     if (e instanceof Abort) return { code: e.code, body: e.body };
     throw e;
@@ -116,7 +115,7 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
   if (prior) return prior;
   return business(c, async () => {
     const denied = await checkAdminIn(c, { slotCode, licensePlate });
-    if (denied) throw new Abort(denied.code, denied.body);
+    if (denied) return replayOr(denied);
     // An immediate reservation uses the transaction clock in INSERT, avoiding a separate round trip.
     const now = startTime ? (await c.query('SELECT now() AS now')).rows[0].now : null;
     const start = startTime ? (new Date(startTime) > now ? new Date(startTime) : now) : null;
@@ -135,7 +134,8 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
          COALESCE($5::timestamptz,now()) + make_interval(mins => $7),$8 FROM held
        RETURNING *, (SELECT version FROM held) AS slot_version`,
       [requestId,userId,slotCode,licensePlate,start,durationMinutes,minutes,input.sagaId ? 'PENDING_SAGA' : 'ACTIVE']);
-    if (!r.rowCount) throw new Abort(409, { error: 'SLOT_TAKEN' });
+    // No row held means no writes to roll back. Still check for an idempotent winner.
+    if (!r.rowCount) return replayOr({ code: 409, body: { error: 'SLOT_TAKEN' } });
     const { slot_version: version, ...reservation } = r.rows[0];
     if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', version, licensePlate, { userId, reservationId: reservation.id });
     return { code: 201, body: { ...reservation, slot_code: slotCode },
