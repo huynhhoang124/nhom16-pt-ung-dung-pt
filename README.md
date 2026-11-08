@@ -18,7 +18,9 @@ docker compose up -d --build
 ```
 - Web: http://localhost:3000. Tự đăng ký tài khoản người dùng, hoặc dùng tài khoản demo (mật khẩu `123456`): `user1`, `user2`, `staff-a`/`staff-b`/`staff-c` (nhân viên từng bãi), `admin`.
 - RabbitMQ: http://localhost:15672 (parking / parking) · Aggregator: :8000 · Parking A/B/C: :8001/:8002/:8003
-- Thêm bãi D để demo mở rộng: `docker compose --profile extra up -d`, rồi đăng ký trên trang Quản trị với `http://parking-d:8004`.
+- Thêm bãi D để demo mở rộng: xem [Kịch bản demo: thêm bãi mới](#kịch-bản-demo-thêm-bãi-mới) bên dưới.
+- Cổng 3000 / 8000 đã có chương trình khác chiếm (container của project khác, hoặc bản dev không Docker đang chạy) thì web/Aggregator không lên: kiểm tra `netstat -ano | findstr :3000` rồi tắt chương trình đó trước.
+- `ETCD_ENDPOINTS` trong `.env` chỉ bật khi chạy kèm `--profile coord` (cụm etcd). Bật mà không chạy etcd thì các bãi kẹt lúc khởi động ("Không thể đọc etcd ban đầu") và luôn hiện mất kết nối.
 - Mở rộng PD-12 thành 6 bãi ở 2 vùng: `node scripts/gen-lots.mjs`, rồi `docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord up -d --build`. A–C thuộc vùng Bắc; D–F thuộc vùng Nam, đăng ký lease qua cụm etcd và đi qua Toxiproxy với độ trễ 40 ± 10 ms. Kiểm tra: `$env:SCALE='1'; $env:COORD='1'; node --test tests/e2e.test.mjs` (PowerShell). Không dùng `--wait`: service `region-latency` chạy xong thì thoát nên `--wait` báo lỗi. Aggregator đặt `ZONE` thì gọi bãi cùng vùng trước.
 - Giả lập barrier gọi thẳng bãi: `node scripts/barrier.mjs A A05 enter 30A-123.45` (đọc khoá từ `.env`)
 - Sinh dữ liệu mẫu trang Thống kê: `node scripts/du-lieu-mau.mjs [số_lượt]` (mặc định 150 lượt xe vào/ra ngẫu nhiên trên 3 bãi; đặt `SCALE=1` để chạy trên cả 6)
@@ -29,11 +31,30 @@ docker compose up -d --build
 - Lần theo một request qua mọi dịch vụ (log JSON, mã ở header `X-Request-Id` của response): `docker compose logs | grep <mã>`
 - Dừng: `docker compose down` (giữ dữ liệu) · `docker compose down -v` (xoá sạch)
 
+## Kịch bản demo: thêm bãi mới
+Bãi A, B, C nạp sẵn; bãi D có sẵn máy chủ (`parking-d`) nhưng **chưa đăng ký** — dùng để demo mở rộng không sửa code, không khởi động lại trung tâm.
+1. `.env` để `ETCD_ENDPOINTS=` (rỗng). Nếu bật etcd, bãi D **tự đăng ký** và hiện trong bảng, chỉ còn bước "Sửa" tên/vị trí.
+2. `docker compose up -d --build`, vào http://localhost:3000, đăng nhập `admin` → **Quản trị**.
+3. Bật máy chủ bãi D: `docker compose --profile extra up -d`. Đợi đến khi `docker compose logs parking-d` có dòng "Parking D chạy ở cổng 8004".
+4. Form **Thêm bãi mới**: gõ mã `D` → địa chỉ máy chủ tự gợi ý `http://parking-d:8004` → **Kiểm tra kết nối** (phải ✅ "máy chủ bãi D") → đặt tên → chọn vị trí trên bản đồ (bấm / kéo ghim / tìm địa chỉ) → **Thêm bãi**.
+5. Vài giây sau bãi D "Đang kết nối"; Tổng quan và Bản đồ có bãi D; `user1` đặt chỗ được ở D.
+6. (Tuỳ chọn) chịu lỗi: `docker compose stop parking-d` → sau ~15 s bãi D "Mất kết nối", khách thấy dữ liệu cũ và không đặt được; `docker compose start parking-d` để bật lại.
+
+Địa chỉ máy chủ của bãi là nơi service `parking-node` của bãi đó chạy (biến `NODE_URL`), **trung tâm phải gọi tới được**: trong Docker dùng tên service (`http://parking-d:8004`), không dùng `localhost`. Bãi chỉ gỡ được khi đang mất kết nối (thêm nhầm / đã ngừng chạy).
+
 ## Làm giao diện không cần Docker
 ```bash
 node scripts/dev-no-docker.cjs     # 3 bãi + Aggregator bằng PGlite trong 1 tiến trình (dữ liệu trong RAM)
-cd frontend && npm run dev         # http://localhost:3000
+cd frontend && npm run dev         # http://localhost:3000 (cổng 3000 bận thì: npm run dev -- --port 5173)
 ```
+Bản này không có bãi D, không có RabbitMQ; khoá nội bộ là `dev` (khác Docker) nên không trộn với container Docker. Dữ liệu mất khi tắt.
+
+## Giao diện (nhánh personal/luan-ui)
+- Một giao diện chung đỏ–navy cho mọi vai trò (`frontend/src/theme.css`), có chế độ tối; mỗi màn có URL riêng (`#/mine`, `#/parking/A/A05`...).
+- Người dùng: chọn nhanh giờ đến, tóm tắt giờ ra / hạn giữ chỗ / phí ước tính trước khi đặt, "Xe của tôi", vé chia nhóm (đang trong bãi / đang giữ / sắp tới) kèm chỉ đường.
+- Thanh toán trong bãi: trả xong có **15 phút** để ra; ra muộn hơn mà phí đã tăng thì trả thêm phần chênh (ứng dụng hoặc tiền mặt ở cổng).
+- Nhân viên: vào thẳng bãi mình, thông tin xe trong ô, đối chiếu biển số với vé, bước thu tiền mặt riêng, cảnh báo vé khi khoá bảo trì, màn Cổng tự nhận vào/ra + chế độ toàn màn hình, làm việc thẳng với bãi khi trung tâm sập.
+- Quản trị: sửa/gỡ bãi, kiểm tra kết nối trước khi thêm, chọn vị trí trên bản đồ, Thống kê lọc theo bãi.
 
 ## Kiểm thử
 ```bash

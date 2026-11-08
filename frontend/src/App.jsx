@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { session, socket, toast } from './api.js';
 import Toaster from './Toaster.jsx';
 import { Icon } from './ui.jsx';
@@ -15,15 +15,49 @@ import CommandStatus from './CommandStatus.jsx';
 
 const ROLE_LABEL = { USER: 'Người dùng', STAFF: 'Nhân viên', ADMIN: 'Quản trị' };
 
+// Trang mở đầu: nhân viên vào thẳng bãi mình phụ trách; người dùng/quản trị vào Tổng quan.
+const homeView = (u) => (u?.role === 'STAFF' && u.parkingId ? { page: 'parking', parkingId: u.parkingId } : { page: 'dashboard' });
+
+// Mỗi màn có địa chỉ riêng trên thanh URL (#/mine, #/parking/A/A05...): F5 giữ nguyên màn, nút Back của trình duyệt
+// quay lại màn trước, và gửi được link một bãi cho người khác.
+const toHash = (v) => `#/${v.page === 'parking' ? `parking/${v.parkingId}${v.slot ? `/${v.slot}` : ''}` : v.page}`;
+function fromHash() {
+  const [page, a, b] = decodeURIComponent(location.hash.replace(/^#\/?/, '')).split('/');
+  if (!page) return null;
+  return page === 'parking' ? (a ? { page, parkingId: a, ...(b && { slot: b }) } : null) : { page };
+}
+// Màn này vai trò này có được vào không (gõ tay #/admin khi là người dùng -> về trang đầu).
+const ALLOWED = {
+  USER: ['dashboard', 'parking', 'mine', 'history', 'account'],
+  STAFF: ['dashboard', 'parking', 'history', 'gate', 'stats', 'account'],
+  ADMIN: ['dashboard', 'parking', 'history', 'stats', 'admin', 'account'],
+};
+const resolveView = (u) => { const v = fromHash(); return v && u && ALLOWED[u.role]?.includes(v.page) ? v : homeView(u); };
+
 export default function App() {
   const [user, setUser] = useState(() => session.get()?.user ?? null);
-  const [view, setView] = useState({ page: 'dashboard' });
+  const [view, setViewRaw] = useState(() => resolveView(session.get()?.user));
+  const setView = (v) => { setViewRaw(v); const h = toHash(v); if (location.hash !== h) location.hash = h; };
+  useEffect(() => {
+    const onHash = () => setViewRaw(resolveView(session.get()?.user));
+    window.addEventListener('hashchange', onHash);
+    if (user && location.hash !== toHash(view)) history.replaceState(null, '', toHash(view));   // đồng bộ URL lúc mở trang
+    return () => window.removeEventListener('hashchange', onHash);
+  }, [user]);
   const [live, setLive] = useState(socket.connected);
+  const userRef = useRef(user);
+  userRef.current = user;
 
   useEffect(() => {
     const on = () => setLive(true);
     const off = () => setLive(false);
-    const node = (e) => toast(
+    const node = (e) => {
+      // Nhân viên chỉ cần biết về bãi mình; trạng thái bãi khác là nhiễu.
+      const u = userRef.current;
+      if (u?.role === 'STAFF' && e.parkingId !== u.parkingId) return;
+      notifyNode(e);
+    };
+    const notifyNode = (e) => toast(
       e.status === 'ONLINE' ? `Bãi ${e.parkingId} đã hoạt động lại.`
         : e.status === 'DEGRADED' ? `Bãi ${e.parkingId} kết nối một phần (mất lease etcd).`
         : `Bãi ${e.parkingId} mất kết nối.`,
@@ -40,7 +74,7 @@ export default function App() {
 
   // đổi người dùng -> nối lại socket để gửi token mới (vào đúng phòng thông báo)
   const relogin = () => { socket.disconnect(); socket.connect(); };
-  if (!user) return <><Login onLogin={(s) => { session.set(s); setUser(s.user); relogin(); }} /><Toaster /></>;
+  if (!user) return <><Login onLogin={(s) => { session.set(s); setUser(s.user); setView(resolveView(s.user)); relogin(); }} /><Toaster /></>;
 
   const tabs = [
     ['dashboard', 'Tổng quan'],
@@ -49,16 +83,20 @@ export default function App() {
     ...(user.role !== 'USER' ? [['stats', 'Thống kê']] : []),
     ...(user.role === 'ADMIN' ? [['admin', 'Quản trị']] : []),
   ];
+  // Tab "Bãi X" chỉ sáng khi đang ở đúng bãi mình; xem bãi khác (mở từ Tổng quan) thì "Tổng quan" sáng.
+  const isActive = (page) => (page === 'parking' ? view.page === 'parking' && view.parkingId === user.parkingId
+    : page === 'dashboard' ? view.page === 'dashboard' || (view.page === 'parking' && view.parkingId !== user.parkingId)
+    : view.page === page);
   const go = (page) => setView(page === 'parking' ? { page, parkingId: user.parkingId } : { page });
-  const logout = () => { session.set(null); setUser(null); relogin(); setView({ page: 'dashboard' }); };
+  const logout = () => { session.set(null); setUser(null); relogin(); setViewRaw({ page: 'dashboard' }); history.replaceState(null, '', location.pathname); };
 
   return (
-    <div className="app">
+    <div className="app theme-brand">
       <header className="bar">
         <strong className="brand"><span className="brand-mark" aria-hidden="true">P</span> Smart Parking</strong>
         <nav>
           {tabs.map(([page, label]) => (
-            <button key={page} className={view.page === page ? 'tab active' : 'tab'} onClick={() => go(page)}>{label}</button>
+            <button key={page} className={isActive(page) ? 'tab active' : 'tab'} aria-current={isActive(page) ? 'page' : undefined} onClick={() => go(page)}>{label}</button>
           ))}
         </nav>
         <span className="who">
@@ -75,15 +113,25 @@ export default function App() {
       </header>
       <main className={user.role === 'USER' ? undefined : 'dense'}>
         <CommandStatus userId={user.id} />
-        {view.page === 'dashboard' && <Dashboard onOpen={(parkingId) => setView({ page: 'parking', parkingId })} />}
-        {view.page === 'parking' && <ParkingDetail key={view.parkingId} parkingId={view.parkingId} user={user} onBack={() => go('dashboard')} />}
-        {view.page === 'mine' && <MyReservations />}
-        {view.page === 'admin' && <Admin />}
+        {view.page === 'dashboard' && <Dashboard hero={user.role === 'USER'} onOpen={(parkingId) => setView({ page: 'parking', parkingId })} />}
+        {view.page === 'parking' && <ParkingDetail key={`${view.parkingId}:${view.slot ?? ''}`} parkingId={view.parkingId} initialSlot={view.slot} user={user} onBack={() => go('dashboard')}
+          onMine={user.role === 'USER' ? () => go('mine') : undefined} />}
+        {view.page === 'mine' && <MyReservations onGo={go} />}
+        {view.page === 'admin' && <Admin onOpenLot={(parkingId) => setView({ page: 'parking', parkingId })} />}
         {view.page === 'account' && <Account user={user} />}
         {view.page === 'stats' && <Stats />}
         {view.page === 'gate' && <Gate parkingId={user.parkingId} />}
-        {view.page === 'history' && <History key={user.role} user={user} />}
+        {view.page === 'history' && <History key={user.role} user={user}
+          onOpenSlot={user.role === 'USER' ? undefined : (parkingId, slot) => setView({ page: 'parking', parkingId, slot })} />}
       </main>
+      {(
+        <footer className="site-foot">
+          <div className="site-foot-in">
+            <strong className="brand"><span className="brand-mark" aria-hidden="true">P</span> Smart Parking</strong>
+            <span>{user.role === 'USER' ? 'Hệ thống bãi đỗ xe liên kết nhiều bãi' : `Khu vực ${ROLE_LABEL[user.role].toLowerCase()}`} · Nhóm 16 – PTIT</span>
+          </div>
+        </footer>
+      )}
       <Toaster />
     </div>
   );
