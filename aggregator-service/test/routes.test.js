@@ -61,6 +61,65 @@ test('TC04 bãi OFFLINE: ghi bị từ chối ngay (503); chi tiết bãi trả 
   assert.equal(online.body.slots.length, 3);
 });
 
+test('PD-20 reuses a recent availability snapshot while one refresh runs', async (t) => {
+  const { agg } = await system(t);
+  let calls = 0;
+  let finishRefresh;
+  const refresh = new Promise((resolve) => { finishRefresh = resolve; });
+  agg.reg.hedgedGet = async (n) => {
+    if (n.id !== 'A') return Response.json({ parkingId: n.id, available: 1, total: 1 });
+    calls += 1;
+    if (calls > 1) await refresh;
+    return Response.json({ parkingId: 'A', available: 1, total: 1 });
+  };
+  try {
+    assert.equal((await agg.call('/api/parkings/availability')).body[0].available, 1);
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    const results = await Promise.all([
+      agg.call('/api/parkings/availability'),
+      agg.call('/api/parkings/availability'),
+    ]);
+    assert.ok(results.every(({ body }) => body.find((p) => p.parkingId === 'A')?.stale));
+    assert.equal(calls, 2);
+  } finally {
+    finishRefresh();
+  }
+});
+
+test('PD-20 ETag: version không đổi trả 304, version thay đổi trả 200', async (t) => {
+  const { agg } = await system(t);
+
+  applyEvent(agg.cache, { parkingId: 'A', slot: 'A01', status: 'AVAILABLE', version: 1 });
+  applyEvent(agg.cache, { parkingId: 'A', slot: 'A02', status: 'OCCUPIED', version: 2 });
+
+  agg.reg.get('A').status = 'OFFLINE';
+  const url = `http://127.0.0.1:${agg.server.address().port}/api/parkings/A`;
+
+  const first = await fetch(url);
+  assert.equal(first.status, 200);
+
+  const etag = first.headers.get('etag');
+  assert.ok(etag, 'Response phải có ETag');
+
+  const unchanged = await fetch(url, {
+    headers: { 'If-None-Match': etag },
+  });
+  assert.equal(unchanged.status, 304);
+
+  applyEvent(agg.cache, {
+    parkingId: 'A',
+    slot: 'A02',
+    status: 'OCCUPIED',
+    version: 3,
+  });
+
+  const changed = await fetch(url, {
+    headers: { 'If-None-Match': etag },
+  });
+  assert.equal(changed.status, 200);
+  assert.notEqual(changed.headers.get('etag'), etag);
+});
+
 test('TC12 node treo khi đang ghi: 504 TIMEOUT_UNKNOWN_RESULT (không biết đã đặt hay chưa)', async (t) => {
   const { agg, tokens } = await system(t);
   const r = await agg.call('/api/parkings/S/reservations', { method: 'POST', token: tokens.user1, key: 'k', body: reserveBody('S01') });

@@ -71,6 +71,42 @@ function mountMetrics(app, { reg, leader, pool, instance = process.env.INSTANCE_
     collect() { for (const n of reg.all()) this.set({ node: n.id }, Math.min(n.fails, 99)); },
   });
 
+  // PD-20: Theo dõi hiệu quả Hedged Requests
+  const hedgeMetrics = [
+    {
+      name: 'hedge_total_get_requests',
+      help: 'Tổng số GET request gốc trong cửa sổ thống kê',
+      value: (s) => s.totalGetRequests,
+    },
+    {
+      name: 'hedge_additional_requests_total',
+      help: 'Số request bổ sung do Hedging',
+      value: (s) => s.additionalRequests,
+    },
+    {
+      name: 'hedge_additional_ratio',
+      help: 'Tỷ lệ request bổ sung trên tổng GET request gốc',
+      value: (s) => s.additionalRatio,
+    },
+    {
+      name: 'hedge_disabled',
+      help: '1 nếu Hedging đang tạm tắt, 0 nếu đang bật',
+      value: (s) => s.hedgingDisabled ? 1 : 0,
+    },
+  ];
+
+  for (const metric of hedgeMetrics) {
+    new client.Gauge({
+      name: metric.name,
+      help: metric.help,
+      registers: [registry],
+      collect() {
+        const stats = reg.getHedgeStats?.();
+        this.set(stats ? metric.value(stats) : 0);
+      },
+    });
+  }
+
   app.use((req, res, next) => {
     const end = http.startTimer();
     res.on('finish', () => end({ method: req.method, route: req.route?.path ?? 'other', code: res.statusCode }));

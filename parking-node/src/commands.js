@@ -100,7 +100,13 @@ async function dispatch(c, env, { parkingId, reservationMinutes, qrSecret }) {
   if (!['USER', 'ADMIN'].includes(actor.role)) return error(403, 'FORBIDDEN');
   if (!UUID.test(b.sessionId ?? '')) return error(404, 'SESSION_NOT_FOUND');
   if (b.method !== undefined && b.method !== 'ONLINE') return error(400, 'INVALID_PAYMENT_METHOD');
-  return payIn(c, { sessionId: b.sessionId, method: 'ONLINE', paymentKey: env.messageId, userId: actor.userId });
+  return payIn(c, {
+    sessionId: b.sessionId,
+    method: 'ONLINE',
+    paymentKey: env.messageId,
+    userId: actor.userId,
+    parkingId
+  });
 }
 
 // PD-14b: DB lệch epoch etcd (primary cũ) hoặc mất etcd quá lâu -> trả mã lỗi, không ghi. Không lưu inbox để gửi lại được.
