@@ -65,7 +65,7 @@ function makeRegistry({
     }
 
     if (
-      totalGetRequests > 0 &&
+      isAdditional && totalGetRequests > 0 &&
       additionalRequests / totalGetRequests > HEDGE_RATIO_LIMIT
     ) {
       hedgingDisabledUntil = Date.now() + HEDGE_DISABLE_MS;
@@ -230,6 +230,7 @@ function makeRegistry({
   // PD-20: Hedged GET - gửi request dự phòng sau 120 ms nếu replica đầu chưa phản hồi.
   const HEDGE_MS = 120;
   const HEDGE_ENABLED = process.env.HEDGE_ENABLED !== 'false';
+  const preferredReadUrl = new WeakMap();
 
   async function hedgedGet(n, path, { ms, ...opts } = {}) {
     if (!HEDGE_ENABLED) {
@@ -244,17 +245,12 @@ function makeRegistry({
       return call(n, path, { ...opts, method: 'GET', ms });
     }
 
-    // Tạm ngừng Hedging khi tỷ lệ request bổ sung vượt 5%.
-    if (Date.now() < hedgingDisabledUntil) {
-      return call(n, path, { ...opts, method: 'GET', ms, retry: false });
-    }
-
+    // Prefer the replica that most recently won. Keep it only while discovery still lists it.
+    if (replicas[1].url === preferredReadUrl.get(n)) replicas.reverse();
     recordGetRequest();
 
     const effectiveMs = ms ?? getTimeout();
-
-    const firstEndpoint = await resolveUrl(replicas[0].url);
-    const secondEndpointPromise = resolveUrl(replicas[1].url);
+    const endpoint = (replica) => replica.url === n.url && n.target ? n.target : replica.url;
 
     const controllers = [new AbortController(), new AbortController()];
 
@@ -279,7 +275,10 @@ function makeRegistry({
         });
 
         if (error) reject(error);
-        else resolve(response);
+        else {
+          if (winnerIndex === 1) preferredReadUrl.set(n, replicas[1].url);
+          resolve(response);
+        }
       };
 
       const launch = (index, isHedge = false) => {
@@ -298,18 +297,19 @@ function makeRegistry({
           recordGetRequest(true);
         }
 
-        (index === 0
-          ? Promise.resolve(firstEndpoint)
-          : secondEndpointPromise
-        ).then((baseUrl) => raw(n, path, {
+        raw(n, path, {
           ...opts,
           method: 'GET',
           ms: effectiveMs,
           signal: controllers[index].signal,
-          baseUrl,
-        })).then(
-          (response) => finish(null, response, index),
-          (error) => {
+          baseUrl: endpoint(replicas[index]),
+        }).then((response) => {
+          if (response.status >= 500) {
+            void response.body?.cancel().catch(() => {});
+            throw new Error(`Replica returned HTTP ${response.status}`);
+          }
+          finish(null, response, index);
+        }).catch((error) => {
             completed++;
 
             // Replica đầu lỗi trước 120 ms hoặc hedge đã bị chặn:
@@ -321,8 +321,7 @@ function makeRegistry({
             } else if (completed === 2) {
               finish(error);
             }
-          },
-        );
+        });
       };
 
       launch(0);

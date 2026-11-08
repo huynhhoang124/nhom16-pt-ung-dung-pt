@@ -104,7 +104,7 @@ test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, re
       const c = await pool.connect();
       return { release: c.release, query: async (sql, params) => {
         seen.push(sql);
-        if (fail && sql.startsWith('INSERT INTO command_reply_outbox')) throw new Error('simulated DB outage');
+        if (fail && sql.includes('INSERT INTO command_reply_outbox')) throw new Error('simulated DB outage');
         return c.query(sql, params);
       } };
     } };

@@ -1,5 +1,6 @@
 // Xác thực và phân quyền tập trung ở Aggregator (điểm vào duy nhất). Node chỉ tin khoá nội bộ.
 const jwt = require('jsonwebtoken');
+const { createPrivateKey, createPublicKey, createSecretKey, KeyObject } = require('node:crypto');
 const bcrypt = require('bcryptjs');
 
 const DEMO_USERS = [
@@ -53,7 +54,17 @@ function makeLoginBuckets({ max = 5, windowMs = 15 * 60_000 } = {}) {
 
 // Có cặp khoá RSA -> ký RS256 (node chỉ cần khoá công khai để tự kiểm, PT-05); không có -> HS256 bằng secret như cũ.
 function makeAuth(secret, { privateKey, publicKey } = {}) {
-  const [signKey, verifyKey, algorithm] = privateKey ? [privateKey, publicKey, 'RS256'] : [secret, secret, 'HS256'];
+  // Parse key material once. Every request still verifies the signature and JWT expiry.
+  let signKey;
+  let verifyKey;
+  const algorithm = privateKey ? 'RS256' : 'HS256';
+  if (privateKey) {
+    signKey = privateKey instanceof KeyObject ? privateKey : createPrivateKey(privateKey);
+    verifyKey = publicKey instanceof KeyObject ? publicKey : createPublicKey(publicKey);
+  } else {
+    signKey = secret instanceof KeyObject ? secret : createSecretKey(Buffer.from(secret));
+    verifyKey = signKey;
+  }
   const sign = (u) => jwt.sign(
     { sub: u.id, username: u.username, role: u.role, parkingId: u.parking_id ?? null }, signKey, { expiresIn: '8h', algorithm });
 

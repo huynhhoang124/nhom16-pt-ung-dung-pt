@@ -308,7 +308,7 @@ function startDlq({
   url,
   dlq,
   log = console,
-  connect = (u) => amqp.connect(u, { timeout: 2000 }),
+  connect = amqp.connect,
   intervalMs = 500,
   timers = { setInterval, clearInterval },
 }) {

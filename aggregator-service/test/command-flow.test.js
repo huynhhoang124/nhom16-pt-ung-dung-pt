@@ -107,3 +107,61 @@ test('reply topology not ready prevents publish; retry after recovery retains th
   const rejected=await f.flow.execute(request);assert.equal(rejected.code,503);assert.equal(rejected.body.sendStatus,'FAILED_TO_SEND');assert.equal(f.calls.length,0);
   f.flow.setReady(true);const done=await f.flow.execute(request);assert.equal(done.code,201);assert.equal(done.body.commandId,rejected.body.commandId);
 });
+
+test('publisher sends the next command before an earlier broker confirm arrives', async t => {
+  const f = await setup(t, { waitMs: 1000 });
+  f.flow.setReady(false);
+  // Prepare queued durable rows without starting the worker.
+  const create = (id, createdAt) => f.pool.query(
+    `INSERT INTO commands(id, parking_id, type, user_id, request_hash, payload, actor, envelope, correlation_id, reply_to, created_at)
+     VALUES ($1, 'A', 'reserve', 'user', 'hash', '{}', '{"userId":"user","role":"USER"}',
+             $2, $1, 'agg.1', $3)`,
+    [id, { issuedAt: Date.now(), deadlineAt: Date.now() + 10000 }, createdAt],
+  );
+  await create('user:batch-z', '2026-11-08T00:00:00.000001Z');
+  await create('user:batch-a', '2026-11-08T00:00:00.000002Z');
+  let release;
+  const blocked = new Promise(resolve => { release = resolve; });
+  f.set(async opts => {
+    if (opts.messageId === 'user:batch-z') await blocked;
+    await f.handle(reply(opts));
+  });
+  f.flow.setReady(true);
+  const pumping = f.flow.pump();
+  try {
+    const deadline = Date.now() + 1000;
+    while (f.calls.length < 2 && Date.now() < deadline) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.deepEqual(f.calls.map(call => call.messageId), ['user:batch-z', 'user:batch-a']);
+    assert.equal((await f.flow.get('user:batch-z')).status, 'PENDING');
+  } finally {
+    release();
+    await pumping;
+  }
+  assert.equal((await f.flow.get('user:batch-z')).status, 'DONE');
+  assert.equal((await f.flow.get('user:batch-a')).status, 'DONE');
+});
+
+test('batch persistence confirms only successful publishes and retains uncertain attempts', async t => {
+  const f = await setup(t);
+  f.flow.setReady(false);
+  const before = (await f.pool.query('SHOW synchronous_commit')).rows;
+  await f.pool.query(`INSERT INTO commands(id,parking_id,type,user_id,request_hash,payload,actor,envelope,correlation_id,reply_to)
+    SELECT id,'A','reserve','user','hash','{}','{"userId":"user","role":"USER"}',$1,id,'agg.1'
+    FROM unnest(ARRAY['user:good','user:unknown']) id`,
+    [{ issuedAt: Date.now(), deadlineAt: Date.now() + 10000 }]);
+  f.set(async opts => {
+    if (opts.messageId === 'user:unknown') throw Object.assign(new Error('lost confirm'), { code: 'PUBLISH_UNKNOWN_RESULT' });
+  });
+  f.flow.setReady(true);
+  await f.flow.pump();
+  const good = await f.flow.get('user:good'), unknown = await f.flow.get('user:unknown');
+  assert.deepEqual((await f.pool.query('SHOW synchronous_commit')).rows, before);
+  assert.equal(good.publish_state, 'CONFIRMED');
+  assert.equal(good.publish_lease_until, null);
+  assert.equal(good.status, 'PENDING', 'publisher confirm is not a business result');
+  assert.equal(unknown.publish_state, 'UNKNOWN');
+  assert.equal(unknown.uncertain, true);
+  assert.equal(unknown.status, 'PENDING');
+});

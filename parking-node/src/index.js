@@ -121,10 +121,10 @@ async function main() {
   const retryOrDead = makeRetryOrDead({ url, internalKey: env('INTERNAL_KEY', 'dev') });
   const consumer = startCommandConsumer({ url, pool, parkingId, retryOrDead, afterCommit(result) {
     crashAfterCommitOnce(result);
+    const delivery = replyOnce()
+      .catch((error) => log.error('command reply relay failed', { error: error.message }));
     if (!replyOnCommit) {
-      replyOnCommit = replyOnce()
-        .catch((error) => log.error('command reply relay failed', { error: error.message }))
-        .finally(() => { replyOnCommit = null; });
+      replyOnCommit = delivery.finally(() => { replyOnCommit = null; });
     }
   }, internalKey: env('INTERNAL_KEY', 'dev'), log,
     processCommand: withDeadline(makeCommandProcessor({ pool, parkingId, internalKey: env('INTERNAL_KEY', 'dev'),

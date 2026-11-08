@@ -6,7 +6,7 @@ const { makeConnector } = require("./amqp-connect");
 function makeTransfer(
   url,
   {
-    connect = (u) => amqp.connect(u, { timeout: 2000 }),
+    connect = amqp.connect,
     timeoutMs = 3000,
   } = {},
 ) {
