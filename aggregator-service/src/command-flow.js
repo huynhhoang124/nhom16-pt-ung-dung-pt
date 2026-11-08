@@ -33,6 +33,7 @@ function makeCommandFlow({
   const pending = new Map();   // commandId -> Set các request HTTP đang chờ kết quả
   let stopped = false;
   let publishing = false;
+  let publishRequested = false;
   let scanning = false;
   let replyReady = false;
   let timer;
@@ -220,17 +221,22 @@ function makeCommandFlow({
   }
 
   async function pump() {
-    if (stopped || publishing || !replyReady) return;
+    if (stopped || !replyReady) return;
+    publishRequested = true;
+    if (publishing) return;
     publishing = true;
     try {
       await expireUnsent();
-      const owner = randomUUID();
-      const rows = await claimBatch(owner);
-      // Pipeline confirms on the same channel. Waiting per command serializes the broker's disk flushes.
-      const sent = await Promise.allSettled(rows.map((row) => publishOne(row, owner)));
-      if (rows.length === PUBLISH_BATCH) setImmediate(() => pump().catch(() => {}));
-      const failed = sent.find((result) => result.status === 'rejected');
-      if (failed) throw failed.reason;
+      do {
+        publishRequested = false;
+        const owner = randomUUID();
+        const rows = await claimBatch(owner);
+        // Pipeline confirms on the same channel. Waiting per command serializes the broker's disk flushes.
+        const sent = await Promise.allSettled(rows.map((row) => publishOne(row, owner)));
+        if (rows.length === PUBLISH_BATCH) publishRequested = true;
+        const failed = sent.find((result) => result.status === 'rejected');
+        if (failed) throw failed.reason;
+      } while (publishRequested && !stopped && replyReady);
     } finally {
       publishing = false;
     }
