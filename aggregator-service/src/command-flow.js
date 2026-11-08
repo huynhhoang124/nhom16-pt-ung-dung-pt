@@ -116,11 +116,11 @@ function makeCommandFlow({
     const waiter = wait(id);   // phải đăng ký chờ TRƯỚC khi ghi ý định, vì worker có thể gửi ngay sau đó
 
     try {
-      await pool.query(
+      const inserted = await pool.query(
         `INSERT INTO commands(id, parking_id, type, user_id, request_hash, payload, actor, envelope, correlation_id, reply_to)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$1,$9) ON CONFLICT (id) DO NOTHING`,
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$1,$9) ON CONFLICT (id) DO NOTHING RETURNING *`,
         [id, parkingId, type, user.sub, hash, payload, actor, envelope, `agg.${instanceId}`]);
-      let row = await get(id);
+      let row = inserted.rows[0] ?? await get(id);
       if (row.request_hash !== hash) throw fail('IDEMPOTENCY_KEY_REUSED', 422);
       // Leader mới phát lại cùng ID với token mới; inbox của node bảo đảm không ghi hai lần.
       if (sagaId && row.status === 'PENDING' && replyReady &&
@@ -173,34 +173,26 @@ function makeCommandFlow({
 
   // Nhận một lệnh để gửi: khoá dòng (SKIP LOCKED) và đặt lease để bản Aggregator khác không gửi trùng
   async function claim(owner) {
-    const c = await pool.connect();
-    try {
-      await c.query('BEGIN');
-      const row = (await c.query(
-        `SELECT * FROM commands
+    const { rows } = await pool.query(
+      `WITH next_command AS (
+         SELECT id FROM commands
          WHERE status='PENDING' AND publish_state<>'CONFIRMED' AND next_publish_at <= now()
            AND (publish_lease_until IS NULL OR publish_lease_until < now())
            AND (envelope->>'deadlineAt')::bigint > $1
-         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`, [now()])).rows[0];
-      if (row) {
-        await c.query(
-          `UPDATE commands SET uncertain = uncertain OR publish_state IN ('SENDING','UNKNOWN'), publish_state='SENDING',
-             publish_owner=$2, publish_lease_until=now() + ($3 * interval '1 millisecond'),
-             attempts=attempts+1, updated_at=now()
-           WHERE id=$1`, [row.id, owner, leaseMs]);
-      }
-      await c.query('COMMIT');
-      return row;
-    } catch (e) {
-      await c.query('ROLLBACK').catch(() => {});
-      throw e;
-    } finally {
-      c.release();
-    }
+         ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1
+       )
+       UPDATE commands c
+       SET uncertain = c.uncertain OR c.publish_state IN ('SENDING','UNKNOWN'), publish_state='SENDING',
+           publish_owner=$2, publish_lease_until=now() + ($3 * interval '1 millisecond'),
+           attempts=c.attempts+1, updated_at=now()
+       FROM next_command n WHERE c.id=n.id RETURNING c.*`,
+      [now(), owner, leaseMs],
+    );
+    return rows[0];
   }
 
   async function publishOne(row, owner) {
-    const uncertain = row.uncertain || ['SENDING', 'UNKNOWN'].includes(row.publish_state);
+    const uncertain = row.uncertain;
     await afterClaim(row);
     try {
       await publisher.send(row.parking_id, row.type, row.payload, {
