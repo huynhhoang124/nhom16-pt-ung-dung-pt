@@ -1,5 +1,5 @@
 const express = require('express');
-const { randomUUID } = require('node:crypto');
+const { randomUUID, createHash } = require('node:crypto');
 const { slotsFromCache } = require('./events');
 const { mountSessions } = require('./sessions-routes');
 const { log, withRequestId } = require('./log');
@@ -281,12 +281,23 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
     const n = reg.get(req.params.id);
     if (!n) return res.status(404).json({ error: 'PARKING_NOT_FOUND' });
 
+    const send = (body) => {
+      const hash = createHash('sha256').update(JSON.stringify(body)).digest('base64url');
+      const etag = `"${hash}"`;
+      res.set('ETag', etag);
+      if (req.get('If-None-Match')?.split(',').some((tag) => {
+        const value = tag.trim().replace(/^W\//, '');
+        return value === etag || value === '*';
+      })) return res.status(304).end();
+      return res.json(body);
+    };
+
     if (n.status !== 'OFFLINE') {
       try {
         const response = await reg.hedgedGet(n, '/api/slots');
         if (!response.ok) throw new Error(`Node trả về ${response.status}`);
 
-        return res.json({
+        return send({
           ...info(n),
           stale: false,
           slots: await response.json(),
@@ -296,7 +307,7 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
       }
     }
 
-    return res.json({
+    return send({
       ...info(n),
       status: n.status,
       stale: true,
