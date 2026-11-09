@@ -96,9 +96,13 @@ function makeFailoverManager({
     if (!state.replicaUrl) return true;
     let client = null;
     try {
-      client = await pgClientFactory(state.replicaUrl, 1000, 500);
+      // Ask a synchronous primary about its replication connection, avoiding DNS probes of a stopped standby.
+      client = await pgClientFactory(state.sync ? state.primaryUrl : state.replicaUrl, 1000, 1000);
       await client.connect();
-      await client.query('SELECT 1');
+      const result = await client.query(state.sync
+        ? "SELECT 1 FROM pg_stat_replication WHERE state='streaming' LIMIT 1"
+        : 'SELECT 1');
+      if (state.sync && !result.rows.length) throw new Error('Primary has no streaming standby');
       state.replicaFailures = 0;
       state.replicaDownSince = null;
       return true;

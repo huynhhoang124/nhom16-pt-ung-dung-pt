@@ -159,6 +159,17 @@ export function makeScaleCompose() {
     restart: 'on-failure',
   };
 
+  for (const manager of ['failover-manager-1', 'failover-manager-2']) {
+    services[manager].depends_on = Object.fromEntries(LOTS.flatMap(({ id }) => {
+      const db = `db-${id.toLowerCase()}`;
+      return [[db, { condition: 'service_healthy' }], [`${db}-replica`, { condition: 'service_healthy' }]];
+    }));
+  }
+  // Bound failed container lookups so they cannot occupy every libuv DNS worker during failover.
+  for (const name of ['failover-manager-1', 'failover-manager-2', ...LOTS.map(({ id }) => `parking-${id.toLowerCase()}`)]) {
+    services[name].dns_opt = ['timeout:1', 'attempts:1'];
+    services[name].environment.UV_THREADPOOL_SIZE = '16';
+  }
   return { services, volumes };
 }
 

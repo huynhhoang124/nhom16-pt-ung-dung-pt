@@ -2,13 +2,99 @@
   "services": {
     "failover-manager-1": {
       "environment": {
-        "PARKINGS": "[{\"parkingId\":\"A\",\"primaryUrl\":\"postgres://postgres:dev@db-a/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-a-replica/parking\",\"sync\":true},{\"parkingId\":\"B\",\"primaryUrl\":\"postgres://postgres:dev@db-b/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-b-replica/parking\",\"sync\":false},{\"parkingId\":\"C\",\"primaryUrl\":\"postgres://postgres:dev@db-c/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-c-replica/parking\",\"sync\":false},{\"parkingId\":\"D\",\"primaryUrl\":\"postgres://postgres:dev@db-d/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-d-replica/parking\",\"sync\":true},{\"parkingId\":\"E\",\"primaryUrl\":\"postgres://postgres:dev@db-e/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-e-replica/parking\",\"sync\":false},{\"parkingId\":\"F\",\"primaryUrl\":\"postgres://postgres:dev@db-f/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-f-replica/parking\",\"sync\":false}]"
-      }
+        "PARKINGS": "[{\"parkingId\":\"A\",\"primaryUrl\":\"postgres://postgres:dev@db-a/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-a-replica/parking\",\"sync\":true},{\"parkingId\":\"B\",\"primaryUrl\":\"postgres://postgres:dev@db-b/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-b-replica/parking\",\"sync\":false},{\"parkingId\":\"C\",\"primaryUrl\":\"postgres://postgres:dev@db-c/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-c-replica/parking\",\"sync\":false},{\"parkingId\":\"D\",\"primaryUrl\":\"postgres://postgres:dev@db-d/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-d-replica/parking\",\"sync\":true},{\"parkingId\":\"E\",\"primaryUrl\":\"postgres://postgres:dev@db-e/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-e-replica/parking\",\"sync\":false},{\"parkingId\":\"F\",\"primaryUrl\":\"postgres://postgres:dev@db-f/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-f-replica/parking\",\"sync\":false}]",
+        "UV_THREADPOOL_SIZE": "16"
+      },
+      "depends_on": {
+        "db-a": {
+          "condition": "service_healthy"
+        },
+        "db-a-replica": {
+          "condition": "service_healthy"
+        },
+        "db-b": {
+          "condition": "service_healthy"
+        },
+        "db-b-replica": {
+          "condition": "service_healthy"
+        },
+        "db-c": {
+          "condition": "service_healthy"
+        },
+        "db-c-replica": {
+          "condition": "service_healthy"
+        },
+        "db-d": {
+          "condition": "service_healthy"
+        },
+        "db-d-replica": {
+          "condition": "service_healthy"
+        },
+        "db-e": {
+          "condition": "service_healthy"
+        },
+        "db-e-replica": {
+          "condition": "service_healthy"
+        },
+        "db-f": {
+          "condition": "service_healthy"
+        },
+        "db-f-replica": {
+          "condition": "service_healthy"
+        }
+      },
+      "dns_opt": [
+        "timeout:1",
+        "attempts:1"
+      ]
     },
     "failover-manager-2": {
       "environment": {
-        "PARKINGS": "[{\"parkingId\":\"A\",\"primaryUrl\":\"postgres://postgres:dev@db-a/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-a-replica/parking\",\"sync\":true},{\"parkingId\":\"B\",\"primaryUrl\":\"postgres://postgres:dev@db-b/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-b-replica/parking\",\"sync\":false},{\"parkingId\":\"C\",\"primaryUrl\":\"postgres://postgres:dev@db-c/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-c-replica/parking\",\"sync\":false},{\"parkingId\":\"D\",\"primaryUrl\":\"postgres://postgres:dev@db-d/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-d-replica/parking\",\"sync\":true},{\"parkingId\":\"E\",\"primaryUrl\":\"postgres://postgres:dev@db-e/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-e-replica/parking\",\"sync\":false},{\"parkingId\":\"F\",\"primaryUrl\":\"postgres://postgres:dev@db-f/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-f-replica/parking\",\"sync\":false}]"
-      }
+        "PARKINGS": "[{\"parkingId\":\"A\",\"primaryUrl\":\"postgres://postgres:dev@db-a/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-a-replica/parking\",\"sync\":true},{\"parkingId\":\"B\",\"primaryUrl\":\"postgres://postgres:dev@db-b/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-b-replica/parking\",\"sync\":false},{\"parkingId\":\"C\",\"primaryUrl\":\"postgres://postgres:dev@db-c/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-c-replica/parking\",\"sync\":false},{\"parkingId\":\"D\",\"primaryUrl\":\"postgres://postgres:dev@db-d/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-d-replica/parking\",\"sync\":true},{\"parkingId\":\"E\",\"primaryUrl\":\"postgres://postgres:dev@db-e/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-e-replica/parking\",\"sync\":false},{\"parkingId\":\"F\",\"primaryUrl\":\"postgres://postgres:dev@db-f/parking\",\"replicaUrl\":\"postgres://postgres:dev@db-f-replica/parking\",\"sync\":false}]",
+        "UV_THREADPOOL_SIZE": "16"
+      },
+      "depends_on": {
+        "db-a": {
+          "condition": "service_healthy"
+        },
+        "db-a-replica": {
+          "condition": "service_healthy"
+        },
+        "db-b": {
+          "condition": "service_healthy"
+        },
+        "db-b-replica": {
+          "condition": "service_healthy"
+        },
+        "db-c": {
+          "condition": "service_healthy"
+        },
+        "db-c-replica": {
+          "condition": "service_healthy"
+        },
+        "db-d": {
+          "condition": "service_healthy"
+        },
+        "db-d-replica": {
+          "condition": "service_healthy"
+        },
+        "db-e": {
+          "condition": "service_healthy"
+        },
+        "db-e-replica": {
+          "condition": "service_healthy"
+        },
+        "db-f": {
+          "condition": "service_healthy"
+        },
+        "db-f-replica": {
+          "condition": "service_healthy"
+        }
+      },
+      "dns_opt": [
+        "timeout:1",
+        "attempts:1"
+      ]
     },
     "db-agg": {
       "command": [
@@ -123,7 +209,8 @@
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
         "ZONE": "bac",
-        "READ_DATABASE_URL": "postgres://postgres:dev@db-a-replica/parking"
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-a-replica/parking",
+        "UV_THREADPOOL_SIZE": "16"
       },
       "depends_on": {
         "db-a": {
@@ -133,7 +220,11 @@
           "condition": "service_completed_successfully",
           "required": false
         }
-      }
+      },
+      "dns_opt": [
+        "timeout:1",
+        "attempts:1"
+      ]
     },
     "db-b-replica": {
       "profiles": [
@@ -186,8 +277,13 @@
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
         "ZONE": "bac",
-        "READ_DATABASE_URL": "postgres://postgres:dev@db-b-replica/parking"
-      }
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-b-replica/parking",
+        "UV_THREADPOOL_SIZE": "16"
+      },
+      "dns_opt": [
+        "timeout:1",
+        "attempts:1"
+      ]
     },
     "db-c-replica": {
       "profiles": [
@@ -240,8 +336,13 @@
       "environment": {
         "ETCD_ENDPOINTS": "http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379",
         "ZONE": "bac",
-        "READ_DATABASE_URL": "postgres://postgres:dev@db-c-replica/parking"
-      }
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-c-replica/parking",
+        "UV_THREADPOOL_SIZE": "16"
+      },
+      "dns_opt": [
+        "timeout:1",
+        "attempts:1"
+      ]
     },
     "db-d-replica": {
       "profiles": [
@@ -356,7 +457,8 @@
         "NODE_URL": "http://toxiproxy:18004",
         "SLOTS": "CAR:1:5,CAR:2:5",
         "DATABASE_URL": "postgres://postgres:dev@db-d/parking",
-        "READ_DATABASE_URL": "postgres://postgres:dev@db-d-replica/parking"
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-d-replica/parking",
+        "UV_THREADPOOL_SIZE": "16"
       },
       "ports": [
         "8004:8004"
@@ -370,7 +472,11 @@
           "required": false
         }
       },
-      "mem_limit": "256m"
+      "mem_limit": "256m",
+      "dns_opt": [
+        "timeout:1",
+        "attempts:1"
+      ]
     },
     "db-e-replica": {
       "profiles": [
@@ -460,7 +566,8 @@
         "NODE_URL": "http://toxiproxy:18005",
         "SLOTS": "CAR:1:8,MOTO:1:2",
         "DATABASE_URL": "postgres://postgres:dev@db-e/parking",
-        "READ_DATABASE_URL": "postgres://postgres:dev@db-e-replica/parking"
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-e-replica/parking",
+        "UV_THREADPOOL_SIZE": "16"
       },
       "ports": [
         "8005:8005"
@@ -470,7 +577,11 @@
           "condition": "service_healthy"
         }
       },
-      "mem_limit": "256m"
+      "mem_limit": "256m",
+      "dns_opt": [
+        "timeout:1",
+        "attempts:1"
+      ]
     },
     "db-f-replica": {
       "profiles": [
@@ -560,7 +671,8 @@
         "NODE_URL": "http://toxiproxy:18006",
         "SLOTS": "CAR:1:8,MOTO:1:2",
         "DATABASE_URL": "postgres://postgres:dev@db-f/parking",
-        "READ_DATABASE_URL": "postgres://postgres:dev@db-f-replica/parking"
+        "READ_DATABASE_URL": "postgres://postgres:dev@db-f-replica/parking",
+        "UV_THREADPOOL_SIZE": "16"
       },
       "ports": [
         "8006:8006"
@@ -570,7 +682,11 @@
           "condition": "service_healthy"
         }
       },
-      "mem_limit": "256m"
+      "mem_limit": "256m",
+      "dns_opt": [
+        "timeout:1",
+        "attempts:1"
+      ]
     },
     "toxiproxy": {
       "profiles": [
