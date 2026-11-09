@@ -154,6 +154,18 @@ Aggregator gom ý định trong cửa sổ 2 ms, tối đa 20 lệnh mỗi câu 
 
 Bản kế tiếp gom tối đa 16 phản hồi trong một giao dịch. Cập nhật cache và ACK RabbitMQ vẫn diễn ra sau khi PostgreSQL xác nhận COMMIT.
 
+## Ba lượt trên bản 12b259e
+
+Runtime có gom ghi intent, gom giao dịch ghi kết quả và tái sử dụng snapshot khi trả xung đột slot. Cả ba lượt chạy đủ 300 VU hai phút, B trễ 1.500 ms. Mọi ngưỡng k6 và 12 bất biến sau tải đều đạt.
+
+| Lượt | Đọc p95 | Đặt p95 | PD-20 p99 tắt / bật hedge | Giảm p99 |
+|---|---:|---:|---:|---:|
+| [42590443489](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42590443489) | 15,70 ms | 275 ms | 1.601,99 / 37,76 ms | 97,64% |
+| [42590437526](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42590437526) | 12,59 ms | 184 ms | 1.602,00 / 53,19 ms | 96,68% |
+| [42590442256](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42590442256) | 10,83 ms | 150 ms | 1.601,89 / 68,87 ms | 95,70% |
+
+JSON gốc và kiểm tra sau tải được lưu trong `ket-qua-do/tc80-12b259e-r1` tới `r3`, và `pd20-12b259e-r1` tới `r3`. Các số đo vượt ngưỡng trên bản trước vẫn được ghi ở trên.
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).

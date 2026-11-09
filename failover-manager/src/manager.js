@@ -78,7 +78,7 @@ function makeFailoverManager({
   async function checkPrimary(state) {
     let client = null;
     try {
-      client = await pgClientFactory(state.primaryUrl, 1000, 1000);
+      client = await pgClientFactory(state.primaryUrl, 1000, 500);
       await client.connect();
       await client.query('SELECT 1');
       state.primaryFailures = 0;
@@ -96,7 +96,7 @@ function makeFailoverManager({
     if (!state.replicaUrl) return true;
     let client = null;
     try {
-      client = await pgClientFactory(state.replicaUrl, 1000, 1000);
+      client = await pgClientFactory(state.replicaUrl, 1000, 500);
       await client.connect();
       await client.query('SELECT 1');
       state.replicaFailures = 0;
