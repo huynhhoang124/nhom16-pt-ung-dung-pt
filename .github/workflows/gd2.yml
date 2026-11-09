@@ -110,6 +110,13 @@ jobs:
           ETCD_ENDPOINTS: http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
         run: |
           docker compose up -d --build --wait
+          for attempt in {1..30}; do
+            ready=$(docker compose exec -T rabbitmq rabbitmqctl -q list_queues name consumers |
+              awk '$1 ~ /^(cmd[.][ABC]|agg[.]replies[.]recovery)$/ && $2 > 0 { count++ } END { print count+0 }')
+            if [[ "$ready" == 4 ]]; then break; fi
+            test "$attempt" -lt 30
+            sleep 2
+          done
           node --test --test-name-pattern='TC02|TC06' tests/e2e.test.mjs
           mkdir -p obs-evidence
           for query in 'sum(command_duration_seconds_count) > 0' 'sum(aggregator_is_leader) == 1'; do
