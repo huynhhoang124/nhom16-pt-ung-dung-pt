@@ -21,7 +21,7 @@ const AGG2 = process.env.AGGREGATOR_2_URL ?? 'http://localhost:8010';
 const SCALE = process.env.SCALE === '1';
 const PARKING_IDS = SCALE ? ['A', 'B', 'C', 'D', 'E', 'F'] : ['A', 'B', 'C'];
 const NODE = Object.fromEntries(['A', 'B', 'C', 'D', 'E', 'F'].map((id, index) => [id, `http://localhost:${Number(process.env.PARKING_BASE_PORT ?? 8001) + index}`]));
-const COMPOSE = SCALE
+const COMPOSE = SCALE && !process.env.COMPOSE_FILE
   ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord'
   : 'docker compose';
 const KEY = process.env.INTERNAL_KEY ?? 'dev';
@@ -103,6 +103,18 @@ test('PD-12 etcd gắn nhãn vùng Bắc/Nam và registry trả đủ sáu bãi'
     ['A', 'bac'], ['B', 'bac'], ['C', 'bac'],
     ['D', 'nam'], ['E', 'nam'], ['F', 'nam'],
   ]);
+});
+
+test('PD-19 truy vấn đủ sáu bãi với đúng một request liên vùng', { ...T, skip: !SCALE }, async () => {
+  const crossZone = async () => {
+    const metrics = await (await fetch(AGG + '/metrics')).text();
+    return Number(metrics.match(/^cross_zone_requests_total\{[^}]+\} (\d+)$/m)?.[1] ?? 0);
+  };
+  const before = await crossZone();
+  const response = await agg('/api/parkings/availability');
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.filter((parking) => parking.status === 'ONLINE').map((parking) => parking.parkingId).sort(), PARKING_IDS);
+  assert.equal(await crossZone() - before, 1);
 });
 
 test('TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh', T, async () => {
@@ -1033,18 +1045,30 @@ test('TC69 zombie primary fencing: DB primary cũ sống lại (mang epoch cũ) 
 );
 
 // --- PD-21: giới hạn đăng nhập dùng chung giữa các bản Aggregator (cần aggregator-2: profile ha) ---
-test('TC-PD21 giới hạn đăng nhập phân tán: 5 lần sai rải qua 2 Aggregator -> lần 6 bị 429 ở cả hai', { ...T, skip: !process.env.HA }, async () => {
+test('TC-PD21 giới hạn đăng nhập dùng chung giữa các Aggregator', { ...T, skip: !process.env.HA }, async () => {
   const usersDb = process.env.SHARD ? 'db-users-1' : 'db-agg';   // user2 ở phân mảnh 1 (ring.js)
   const clear = () => sql(usersDb, "DELETE FROM login_buckets WHERE username='user2'");
-  const tryLogin = (i, password) => (i % 2 ? agg2 : agg)('/api/auth/login', { method: 'POST', body: { username: 'user2', password } });
-  // TC65, TC66 tắt aggregator-2 khi xong: bật lại cho test này, xong thì trả về như cũ
+  const loginOptions = (password) => ({ method: 'POST', body: { username: 'user2', password } });
+  const north = [agg, agg2].map((request) => async (password) =>
+    (await request('/api/auth/login', loginOptions(password))).status);
+  const south = ['aggregator-nam-1', 'aggregator-nam-2'].map((service) => (password) => {
+    const code = "fetch('http://localhost:8000/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: process.argv[1] }).then(r => console.log(r.status))";
+    const [, ...args] = COMPOSE.split(' ');
+    return Number(execFileSync('docker', [...args, 'exec', '-T', service, 'node', '-e', code,
+      JSON.stringify(loginOptions(password).body)], { cwd: ROOT, encoding: 'utf8' }).trim());
+  });
+  const instances = SCALE ? [...north, ...south] : north;
+
+  // TC65, TC66 tắt aggregator-2 khi xong: bật lại cho test này, xong thì trả về như cũ.
   compose('--profile ha up -d aggregator-2');
   await until('2 Aggregator sẵn sàng', async () => (await agg('/health')).status === 200 && (await agg2('/health')).status === 200, 60_000);
   clear();
   try {
-    for (let i = 0; i < 5; i++) assert.equal((await tryLogin(i, 'sai-mat-khau')).status, 401, `lần sai ${i + 1}`);
-    assert.equal((await tryLogin(5, process.env.DEMO_PASSWORD ?? '123456')).status, 429);
-    assert.equal((await tryLogin(6, process.env.DEMO_PASSWORD ?? '123456')).status, 429);
+    for (let i = 0; i < 5; i++) {
+      assert.equal(await instances[i % instances.length]('sai-mat-khau'), 401, `lần sai ${i + 1}`);
+    }
+    for (const tryLogin of instances) assert.equal(await tryLogin(process.env.DEMO_PASSWORD ?? '123456'), 429);
+    console.log(`TC-PD21 - lần thứ 6 bị giới hạn trên cả ${instances.length} Aggregator`);
   } finally {
     clear();
     compose('--profile ha stop aggregator-2');
