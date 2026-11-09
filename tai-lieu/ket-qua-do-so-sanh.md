@@ -176,6 +176,8 @@ Ba lượt đầu trên 30 slot ở commit `8205351` đo p95 đặt 270, 316 và
 
 Bản tiếp theo gộp chính sách biển số/tầng vào câu giữ slot sau khi đã lấy khóa quản trị. Với primary tĩnh, consumer gom tối đa 16 lệnh theo thứ tự nhận trong cùng giao dịch, chờ COMMIT rồi mới ACK. Nếu lô lỗi, toàn bộ lô rollback và từng tin đi lại qua luồng xử lý retry/DLQ. Khi dùng pool kiểm epoch qua etcd, consumer tiếp tục giao dịch từng lệnh.
 
+Bản gom lệnh node `bb38e18` đo 141, 200 và 339 ms trên 30 slot. Ở lượt 339 ms, p95 trước khi node bắt đầu giao dịch là 138 ms, từ node tới relay là 30 ms và từ node tới lúc Aggregator lưu kết quả là 160 ms. Bản kế tiếp ghi cả lô phản hồi bằng một câu UPDATE, lấy khóa các ID theo thứ tự rồi cập nhật và gửi NOTIFY trong cùng statement.
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).

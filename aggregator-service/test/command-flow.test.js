@@ -20,7 +20,7 @@ async function setup(t,options={}){
   const pool={query,connect:async()=>({query,release(){}})},calls=[],cache=new Map();let behaviour;
   const publisher={send:async(_p,_t,_b,opts)=>{calls.push(opts);return behaviour(opts);}};
   const flow=makeCommandFlow({pool,publisher,instanceId:'1',waitMs:3000,...options});
-  const handle=makeReplyHandler({pool,cache,internalKey:'key',signal:flow.signal});
+  const handle=makeReplyHandler({pool,cache,internalKey:'key',signal:flow.signal,persist:makeReplyBatch(pool)});
   behaviour=opts=>handle(reply(opts));flow.setReady(true);flow.start();
   t.after(async()=>{await flow.stop();await db.close();});
   return {db,pool,flow,handle,calls,cache,set(fn){behaviour=fn;}};
@@ -68,54 +68,57 @@ test('an invalid database value does not reject other intents in its batch', asy
   assert.equal(valid.value.body.commandId, 'user:valid');
 });
 
-test('reply batches wait for the shared COMMIT before exposing either result', { timeout: 1000 }, async () => {
-  const commands = [];
+test('reply batches expose results only after the durable update succeeds', async () => {
   const commit = Promise.withResolvers();
-  const pool = { async connect() {
-    return {
-      async query(sql, params) {
-        commands.push(params?.[0] ?? sql);
-        if (sql === 'COMMIT') return commit.promise;
-        return params?.[0];
-      },
-      release() {},
-    };
+  let calls = 0;
+  const pool = { async query(sql, [json]) {
+    calls++;
+    assert.match(sql, /ORDER BY id FOR UPDATE/);
+    const records = JSON.parse(json);
+    assert.deepEqual(records.map((record) => record.command_id), ['a', 'z']);
+    await commit.promise;
+    return { rows: records.map((record) => ({ id: record.command_id, batch_ordinal: record.ordinal })) };
   } };
   const persist = makeReplyBatch(pool);
+  const args = (id) => [id, 'corr', 'A', 'reserve', {}, 'DONE', {}, 201, 'hash', null, null, null];
   let completed = 0;
-  const first = persist('UPDATE', ['z']).then((value) => { completed++; return value; });
-  const second = persist('UPDATE', ['a']).then((value) => { completed++; return value; });
+  const first = persist('', args('z')).then((value) => { completed++; return value; });
+  const second = persist('', args('a')).then((value) => { completed++; return value; });
   try {
-    while (!commands.includes('COMMIT')) await new Promise((resolve) => setTimeout(resolve, 1));
-    assert.deepEqual(commands, ['BEGIN', 'a', 'z', 'COMMIT']);
+    while (!calls) await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.equal(calls, 1);
     assert.equal(completed, 0);
   } finally {
     commit.resolve();
   }
-  assert.deepEqual(await Promise.all([first, second]), ['z', 'a']);
+  assert.deepEqual(await Promise.all([first, second]), [{ rows: [{ id: 'z' }] }, { rows: [{ id: 'a' }] }]);
 });
 
-test('a failed reply batch rolls back every result and permits redelivery', async () => {
-  const commands = [];
+test('a failed reply update rejects the whole batch and permits redelivery', async () => {
   let fail = true;
-  const pool = { async connect() {
-    return {
-      async query(sql, args) {
-        commands.push(sql);
-        if (args && fail) throw new Error('database write failed');
-        return { rows: [] };
-      },
-      release() {},
-    };
+  const pool = { async query() {
+    if (fail) throw new Error('database write failed');
+    return { rows: [{ id: 'a', batch_ordinal: 0 }] };
   } };
   const persist = makeReplyBatch(pool);
-  const results = await Promise.allSettled([persist('UPDATE', ['a']), persist('UPDATE', ['b'])]);
+  const results = await Promise.allSettled([persist('', ['a']), persist('', ['b'])]);
   assert.ok(results.every((result) => result.status === 'rejected'));
-  assert.ok(commands.includes('ROLLBACK'));
-  assert.ok(!commands.includes('COMMIT'));
   fail = false;
-  assert.deepEqual(await persist('UPDATE', ['a']), { rows: [] });
-  assert.equal(commands.at(-1), 'COMMIT');
+  assert.deepEqual(await persist('', ['a']), { rows: [{ id: 'a' }] });
+});
+
+test('batched duplicate IDs accept the matching identity and reject a conflicting reply', async (t) => {
+  const { flow, set, calls, handle } = await setup(t, { waitMs: 30 });
+  set(() => {});
+  assert.equal((await flow.execute(request)).code, 202);
+  const opts = calls[0];
+  const results = await Promise.all([
+    handle(reply({ ...opts, correlationId: 'incorrect' })),
+    handle(reply(opts)),
+    handle(reply(opts, { id: 'conflicting-result' })),
+  ]);
+  assert.deepEqual(results, [false, true, false]);
+  assert.deepEqual((await completed(flow)).result, { id: 'reservation' });
 });
 
 test('unknown publish stays PENDING/202; retry preserves identity and deadline',async t=>{

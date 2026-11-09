@@ -57,30 +57,47 @@ function makeReplyBatch(pool) {
     while (queue.length) {
       // Every aggregator takes overlapping row locks in the same order.
       const batch = queue.splice(0, 16).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
-      let client;
-      let discard;
       try {
-        client = await pool.connect();
-        await client.query('BEGIN');
-        const results = await Promise.allSettled(batch.map(async (entry) =>
-          context.with(entry.parent, () => client.query(entry.sql, entry.args))));
-        const failure = results.find((result) => result.status === 'rejected');
-        if (failure) throw failure.reason;
-        await client.query('COMMIT');
-        // Callers update caches and acknowledge RabbitMQ only after the shared durable commit.
-        batch.forEach((entry, index) => entry.resolve(results[index].value));
+        const records = batch.map(({ args }, ordinal) => ({
+          command_id: args[0], correlation_id: args[1], parking_id: args[2], type: args[3], actor: args[4],
+          status: args[5], result: args[6], status_code: args[7], reply_hash: args[8], slot: args[9],
+          source: args[10], traceparent: args[11], ordinal,
+        }));
+        const { rows } = await context.with(batch[0].parent, () => pool.query(
+          `WITH locked AS MATERIALIZED (
+             SELECT id FROM commands WHERE id=ANY($2::text[]) ORDER BY id FOR UPDATE
+           ), replies AS (
+             SELECT DISTINCT ON (c.id) r.*
+             FROM jsonb_to_recordset($1::jsonb) AS r(command_id text, correlation_id text, parking_id text,
+               type text, actor jsonb, status text, result jsonb, status_code int, reply_hash text, slot jsonb,
+               source text, traceparent text, ordinal int)
+             JOIN locked l ON l.id=r.command_id
+             JOIN commands c ON c.id=l.id AND c.correlation_id=r.correlation_id AND c.parking_id=r.parking_id
+               AND c.type=r.type AND c.actor=r.actor AND c.status='PENDING'
+             ORDER BY c.id, r.ordinal
+           ), updated AS (
+             UPDATE commands c SET status=r.status,result=r.result,status_code=r.status_code,reply_hash=r.reply_hash,
+               slot=r.slot,updated_at=now(),failure_phase=NULL,publish_state='CONFIRMED',publish_lease_until=NULL
+             FROM replies r WHERE c.id=r.command_id AND c.status='PENDING'
+             RETURNING c.*, r.ordinal AS batch_ordinal, r.source AS batch_source, r.traceparent AS batch_traceparent
+           )
+           SELECT updated.* FROM updated CROSS JOIN LATERAL pg_notify('command_results',
+             json_build_object('id',updated.id,'source',updated.batch_source,
+               'traceparent',COALESCE(updated.batch_traceparent,updated.envelope->>'traceparent'))::text)`,
+          [JSON.stringify(records), records.map((record) => record.command_id)]));
+        const results = new Map(rows.map(({ batch_ordinal, batch_source, batch_traceparent, ...row }) =>
+          [batch_ordinal, row]));
+        // One statement commits every result before callers update caches or acknowledge RabbitMQ.
+        batch.forEach((entry, ordinal) => entry.resolve({ rows: results.has(ordinal) ? [results.get(ordinal)] : [] }));
       } catch (error) {
-        if (client) await client.query('ROLLBACK').catch((cause) => { discard = cause; });
         for (const entry of batch) entry.reject(error);
-      } finally {
-        client?.release(discard);
       }
     }
     scheduled = false;
   }
 
-  return (sql, args) => new Promise((resolve, reject) => {
-    queue.push({ id: args[0], sql, args, parent: context.active(), resolve, reject });
+  return (_sql, args) => new Promise((resolve, reject) => {
+    queue.push({ id: args[0], args, parent: context.active(), resolve, reject });
     if (!scheduled) {
       scheduled = true;
       setTimeout(() => void flush(), 3);
