@@ -73,7 +73,7 @@ test('reply batches expose results only after the durable update succeeds', asyn
   let calls = 0;
   const pool = { async query(sql, [json]) {
     calls++;
-    assert.match(sql, /ORDER BY id FOR UPDATE/);
+    assert.match(sql, /ORDER BY created_at, id FOR UPDATE/);
     const records = JSON.parse(json);
     assert.deepEqual(records.map((record) => record.command_id), ['a', 'z']);
     await commit.promise;

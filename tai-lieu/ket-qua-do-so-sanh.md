@@ -178,6 +178,10 @@ Bản tiếp theo gộp chính sách biển số/tầng vào câu giữ slot sau
 
 Bản gom lệnh node `bb38e18` đo 141, 200 và 339 ms trên 30 slot. Ở lượt 339 ms, p95 trước khi node bắt đầu giao dịch là 138 ms, từ node tới relay là 30 ms và từ node tới lúc Aggregator lưu kết quả là 160 ms. Bản kế tiếp ghi cả lô phản hồi bằng một câu UPDATE, lấy khóa các ID theo thứ tự rồi cập nhật và gửi NOTIFY trong cùng statement.
 
+Bản `5f72bba` trên 30 slot đạt p95 173, 276 và 105 ms ở ba lượt độc lập, mỗi lượt đủ 300 VU hai phút và 12 bất biến sau tải. [Lượt 173 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42598456545) · [Lượt 276 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42598451870) · [Lượt 105 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42598456564).
+
+Lượt kế tiếp `0bcab8a` đạt p95 234 ms nhưng không qua gate vì tỉ lệ 503 là 0,0312%. PostgreSQL phát hiện deadlock giữa luồng đánh dấu publisher confirm và luồng ghi kết quả. Bản sửa đồng bộ thứ tự khóa dòng của hai luồng với worker claim theo `created_at, id`. [Lượt phát hiện deadlock](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42598928307).
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).

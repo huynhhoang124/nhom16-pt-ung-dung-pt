@@ -293,9 +293,14 @@ function makeCommandFlow({
         // One durable update per batch avoids competing with replies for twenty pool connections/commits.
         if (confirmed.length) await pool.query(
           // The durable SENDING lease survives a lost confirm marker, so recovery retries the same command ID.
-          `WITH delivery AS MATERIALIZED (SELECT set_config('synchronous_commit','off',true))
-           UPDATE commands SET publish_state='CONFIRMED', publish_lease_until=NULL, updated_at=now()
-           FROM delivery WHERE id=ANY($1::text[]) AND publish_owner=$2 AND status='PENDING'`, [confirmed, owner]);
+          `WITH delivery AS MATERIALIZED (SELECT set_config('synchronous_commit','off',true)),
+           locked AS MATERIALIZED (
+             SELECT c.id FROM commands c, delivery
+             WHERE c.id=ANY($1::text[]) AND c.publish_owner=$2 AND c.status='PENDING'
+             ORDER BY c.created_at, c.id FOR UPDATE OF c
+           )
+           UPDATE commands c SET publish_state='CONFIRMED', publish_lease_until=NULL, updated_at=now()
+           FROM locked WHERE c.id=locked.id AND c.publish_owner=$2 AND c.status='PENDING'`, [confirmed, owner]);
         if (rows.length === PUBLISH_BATCH) publishRequested = true;
         const failed = sent.find((result) => result.status === 'rejected');
         if (failed) throw failed.reason;

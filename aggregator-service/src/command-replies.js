@@ -55,7 +55,7 @@ function makeReplyBatch(pool) {
 
   async function flush() {
     while (queue.length) {
-      // Every aggregator takes overlapping row locks in the same order.
+      // Match the publishing worker lock order for overlapping command rows.
       const batch = queue.splice(0, 16).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
       try {
         const records = batch.map(({ args }, ordinal) => ({
@@ -65,7 +65,7 @@ function makeReplyBatch(pool) {
         }));
         const { rows } = await context.with(batch[0].parent, () => pool.query(
           `WITH locked AS MATERIALIZED (
-             SELECT id FROM commands WHERE id=ANY($2::text[]) ORDER BY id FOR UPDATE
+             SELECT id FROM commands WHERE id=ANY($2::text[]) ORDER BY created_at, id FOR UPDATE
            ), replies AS (
              SELECT DISTINCT ON (c.id) r.*
              FROM jsonb_to_recordset($1::jsonb) AS r(command_id text, correlation_id text, parking_id text,
