@@ -136,6 +136,64 @@ test('PD-19 truy vấn đủ sáu bãi với đúng một request liên vùng', 
   assert.equal(await crossZone() - before, 1);
 });
 
+test('PD-22 đo khởi tạo cache sáu bãi và kiểm replay sự kiện thật', { ...T, skip: !SCALE }, async () => {
+  const requireAggregator = createRequire(new URL('../aggregator-service/package.json', import.meta.url));
+  const { reconcile, createReconcileQueue, replayRecentEvents } = requireAggregator('./src/events');
+  const slotCode = await freeSlot('A');
+  const booking = await node('A', '/api/reservations', { method: 'POST', body: {
+    requestId: `pd22-${randomUUID()}`, userId: 'user1', slotCode, licensePlate: plate(),
+  } });
+  assert.equal(booking.status, 201);
+  cancelLater('A', booking.body.id);
+  await until('sự kiện đặt chỗ đã vào broker', () =>
+    sql('db-a', `SELECT count(*) FROM parking_events WHERE slot_code='${slotCode}' AND event_type='RESERVED' AND published_at IS NOT NULL`) === '1',
+  15_000);
+
+  async function measure(paced) {
+    const cache = new Map();
+    const nodes = PARKING_IDS.map((id) => ({ id }));
+    let requests = 0, active = 0, peak = 0;
+    const reg = { async json({ id }, path) {
+      requests++;
+      peak = Math.max(peak, ++active);
+      try {
+        const result = await node(id, path);
+        assert.equal(result.status, 200);
+        return result.body;
+      } finally {
+        active--;
+      }
+    } };
+    const started = performance.now();
+    if (paced) {
+      const replayCache = new Map();
+      const { promise, resolve, reject } = Promise.withResolvers();
+      let completed = 0;
+      const queue = createReconcileQueue(reg, cache, undefined, {
+        info() { if (++completed === nodes.length) resolve(); },
+        error(message, details) { reject(new Error(`${message}: ${details.error}`)); },
+      });
+      nodes.forEach(queue.enqueue);
+      await Promise.all([
+        promise,
+        replayRecentEvents('amqp://parking:parking@localhost/%2F', replayCache, undefined, { info() {} }),
+      ]);
+      assert.equal(replayCache.get(`A:${slotCode}`)?.status, 'RESERVED');
+    } else {
+      await Promise.all(nodes.map((n) => reconcile(reg, cache, n)));
+    }
+    assert.equal(cache.size, 60);
+    return { requests, peak, ms: Math.round(performance.now() - started) };
+  }
+
+  const before = await measure(false);
+  const after = await measure(true);
+  console.log('PD-22 cache warmup:', JSON.stringify({ before, after }));
+  assert.equal(before.peak, 6);
+  assert.equal(after.peak, 1);
+  assert.equal(after.requests, before.requests);
+});
+
 test('TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh', T, async () => {
   const admin = await login('admin');
   const started = performance.now();
@@ -986,7 +1044,8 @@ test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng
     try {
       // 1. Khởi động failover-manager
       compose('--profile coord up -d failover-manager-1 failover-manager-2');
-      await until('Failover-manager 1 sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
+      await until('Failover-manager có leader', async () =>
+        (await Promise.all([fm1('/health'), fm2('/health')])).some((result) => result.body?.isLeader), 15_000);
 
       // 2. Kiểm tra bãi A đang hoạt động bình thường trên primary (db-a)
       const avBefore = await node('A', '/api/availability');

@@ -291,13 +291,13 @@ function makeFailoverManager({
     isChecking = true;
     try {
       if (!elector || !elector.isLeader()) return;
-      for (const state of parkingStates) {
+      await Promise.all(parkingStates.map(async (state) => {
         try {
           await checkParking(state);
         } catch (err) {
           log.error?.(`[failover-manager] Lỗi khi kiểm tra bãi ${state.parkingId}`, { error: err.message });
         }
-      }
+      }));
     } finally {
       isChecking = false;
     }

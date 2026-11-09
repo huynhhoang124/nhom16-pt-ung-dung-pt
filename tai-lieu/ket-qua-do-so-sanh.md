@@ -148,7 +148,7 @@ Các lượt dưới đây dùng cùng runtime TC80 qua Nginx, 300 VU trong hai 
 | [42585766630](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42585766630) | 35,22 ms | 269 ms |
 | [42586082392](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42586082392) | 43,80 ms | 290 ms |
 
-PD-20 ở lượt 42586082392 giảm p99 từ 1.601,68 ms xuống 39,25 ms (97,55%). Hai lượt thử lại trên runtime trước đó từng vượt 300 ms (369,65 và 590 ms). Kết quả trên xác nhận các lượt đo đã chạy trên runner GitHub Actions.
+PD-20 ở lượt 42586082392 giảm p99 từ 1.601,68 ms xuống 39,25 ms (97,55%). Hai lượt thử lại trên runtime trước đó từng vượt 300 ms (369,65 và 590 ms). Lượt sau trên cùng runtime lại đạt p95 521,75 ms. p95 từ khi ghi intent tới khi node bắt đầu giao dịch tăng lên 280 ms. 22,9% lệnh ở B chờ trong bộ đệm consumer trên 100 ms. DB Aggregator thực hiện 28.866 lần đồng bộ WAL trong lượt này. [Lượt vượt ngưỡng](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42587003507).
 
 ## Cách chạy lại
 

@@ -82,6 +82,7 @@ jobs:
           docker compose up -d --build
           curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
           docker compose exec -T rabbitmq sh -s < scripts/prepare-rabbit-ha.sh
+          node --test tests/tc61.pd04.e2e.mjs
           node --test tests/e2e.test.mjs
       - if: matrix.profile == 'shards'
         env:

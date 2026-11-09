@@ -33,6 +33,41 @@ test('reply before publisher confirm releases request; same key yields same comm
   await assert.rejects(flow.execute({...request,payload:{slotCode:'A02'}}),{code:'IDEMPOTENCY_KEY_REUSED'});
   applyEvent(cache,{parkingId:'A',slot:'A01',status:'AVAILABLE',version:1});assert.equal(cache.get('A:A01').status,'RESERVED');
 });
+test('concurrent intents share one durable insert and preserve idempotency', async (t) => {
+  const { flow, pool, calls } = await setup(t);
+  const query = pool.query;
+  let insertions = 0;
+  pool.query = (sql, params) => {
+    if (sql.includes('INSERT INTO commands')) insertions++;
+    return query(sql, params);
+  };
+
+  const [first, replay, collision, distinct] = await Promise.allSettled([
+    flow.execute(request),
+    flow.execute(request),
+    flow.execute({ ...request, payload: { slotCode: 'A02' } }),
+    flow.execute({ ...request, key: 'next' }),
+  ]);
+
+  assert.equal(insertions, 1);
+  assert.equal(first.value.code, 201);
+  assert.deepEqual(replay.value, first.value);
+  assert.equal(collision.reason.code, 'IDEMPOTENCY_KEY_REUSED');
+  assert.equal(distinct.value.code, 201);
+  assert.deepEqual(calls.map((call) => call.messageId), ['user:key', 'user:next']);
+});
+
+test('an invalid database value does not reject other intents in its batch', async (t) => {
+  const { flow } = await setup(t);
+  const [invalid, valid] = await Promise.allSettled([
+    flow.execute({ ...request, payload: { slotCode: '\u0000' } }),
+    flow.execute({ ...request, key: 'valid' }),
+  ]);
+  assert.equal(invalid.reason.code, 'COMMAND_PERSISTENCE_UNKNOWN');
+  assert.equal(valid.value.code, 201);
+  assert.equal(valid.value.body.commandId, 'user:valid');
+});
+
 test('unknown publish stays PENDING/202; retry preserves identity and deadline',async t=>{
   const {flow,set,calls,pool,handle}=await setup(t,{waitMs:30});
   set(()=>{throw Object.assign(new Error('disconnect'),{code:'PUBLISH_UNKNOWN_RESULT'});});

@@ -38,6 +38,9 @@ function makeCommandFlow({
   let expiring = false;
   let replyReady = false;
   let timer;
+  let intentTimer;
+  let insertingIntents = false;
+  const intents = [];
 
   function wait(id) {
     let resolve;
@@ -93,6 +96,62 @@ function makeCommandFlow({
       [id, { error: code, sendStatus: 'FAILED_TO_SEND' }, status, code]);
   }
 
+  async function insertIntents(batch) {
+    const unique = new Map();
+    for (const { values } of batch) {
+      if (!unique.has(values[0])) unique.set(values[0], values);
+    }
+    const values = [...unique.values()];
+    const tuples = values.map((_, index) => {
+      const parameter = (column) => `$${index * 9 + column}`;
+      return `(${parameter(1)}::text,${parameter(2)},${parameter(3)},${parameter(4)},${parameter(5)},
+        ${parameter(6)}::jsonb,${parameter(7)}::jsonb,${parameter(8)}::jsonb,${parameter(9)},
+        statement_timestamp() + ${index} * interval '1 microsecond')`;
+    });
+    const { rows } = await pool.query(
+      `INSERT INTO commands(id, parking_id, type, user_id, request_hash, payload, actor, envelope, correlation_id, reply_to, created_at)
+       SELECT id, parking_id, type, user_id, request_hash, payload, actor, envelope, id, reply_to, created_at
+       FROM (VALUES ${tuples.join(',')}) AS v(id, parking_id, type, user_id, request_hash, payload, actor, envelope, reply_to, created_at)
+       ORDER BY id ON CONFLICT (id) DO NOTHING RETURNING *`, values.flat());
+    return new Map(rows.map((row) => [row.id, row]));
+  }
+
+  async function flushIntents() {
+    intentTimer = null;
+    insertingIntents = true;
+    try {
+      while (intents.length) {
+        const batch = intents.splice(0, PUBLISH_BATCH);
+        try {
+          const inserted = await insertIntents(batch);
+          for (const intent of batch) intent.resolve(inserted.get(intent.values[0]));
+        } catch (error) {
+          // A rejected value must not block other requests. Retry only after a known SQL rollback.
+          if (batch.length > 1 && /^(22|23)/.test(error.code ?? '')) {
+            for (const intent of batch) {
+              try {
+                const inserted = await insertIntents([intent]);
+                intent.resolve(inserted.get(intent.values[0]));
+              } catch (failure) { intent.reject(failure); }
+            }
+          } else {
+            for (const intent of batch) intent.reject(error);
+          }
+        }
+      }
+    } finally {
+      insertingIntents = false;
+    }
+  }
+
+  function persistIntent(values) {
+    return new Promise((resolve, reject) => {
+      intents.push({ values, resolve, reject });
+      // Group durable writes over a short window and cap the size of each SQL statement.
+      if (!intentTimer && !insertingIntents) intentTimer = setTimeout(() => void flushIntents(), 2);
+    });
+  }
+
   async function execute({ parkingId, type, user, payload, key, traceparent, fencingToken }) {
     if (stopped) throw fail('COMMAND_SERVICE_STOPPED', 503);
     if (typeof key !== 'string' || !key.length || key.length > 64 || /[\u0000-\u001f\u007f]/.test(key)) {
@@ -119,11 +178,8 @@ function makeCommandFlow({
     const waiter = wait(id);   // phải đăng ký chờ TRƯỚC khi ghi ý định, vì worker có thể gửi ngay sau đó
 
     try {
-      const inserted = await pool.query(
-        `INSERT INTO commands(id, parking_id, type, user_id, request_hash, payload, actor, envelope, correlation_id, reply_to)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$1,$9) ON CONFLICT (id) DO NOTHING RETURNING *`,
-        [id, parkingId, type, user.sub, hash, payload, actor, envelope, `agg.${instanceId}`]);
-      let row = inserted.rows[0] ?? await get(id);
+      const inserted = await persistIntent([id, parkingId, type, user.sub, hash, payload, actor, envelope, `agg.${instanceId}`]);
+      let row = inserted ?? await get(id);
       if (row.request_hash !== hash) throw fail('IDEMPOTENCY_KEY_REUSED', 422);
       // Leader mới phát lại cùng ID với token mới; inbox của node bảo đảm không ghi hai lần.
       if (sagaId && row.status === 'PENDING' && replyReady &&
@@ -291,7 +347,7 @@ function makeCommandFlow({
     stopped = true;
     clearInterval(timer);
     for (const id of pending.keys()) settle(id, { id, status: 'PENDING', publish_state: 'AWAITING_RESULT' });
-    while (publishing || scanning || expiring) await new Promise((r) => setTimeout(r, 10));
+    while (intentTimer || insertingIntents || publishing || scanning || expiring) await new Promise((r) => setTimeout(r, 10));
   }
 
   return { execute, get, pump, scan, start, stop, signal, settle, markFailed, pending, setReady(v) { replyReady = v; } };
