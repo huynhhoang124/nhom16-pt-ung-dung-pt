@@ -166,6 +166,12 @@ Runtime có gom ghi intent, gom giao dịch ghi kết quả và tái sử dụng
 
 JSON gốc và kiểm tra sau tải được lưu trong `ket-qua-do/tc80-12b259e-r1` tới `r3`, và `pd20-12b259e-r1` tới `r3`. Các số đo vượt ngưỡng trên bản trước vẫn được ghi ở trên.
 
+## Nghiệm thu cấu hình 10 slot mỗi bãi
+
+Theo yêu cầu chốt 10 slot cho mọi bãi, gate TC80 dùng A/B/C tổng 30 slot. CI kiểm tra trực tiếp mỗi bãi có đúng 10 slot trước khi tạo tải. Workload giữ 240 VU đọc, 60 VU đặt, hai phút, B chậm 1.500 ms và ngưỡng p95 đặt dưới 300 ms. Counter `reservations_created` buộc có đặt thành công trong lượt đo.
+
+Bộ dữ liệu 130 slot được giữ riêng để chạy lại các bảng lịch sử. Trên bộ này, hai lượt 6a72da9 đạt p95 414 và 428,55 ms. Mỗi bảng cần đọc cùng số slot ghi trong cấu hình tương ứng. [Lượt 414 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42595605931) · [Lượt 428,55 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42595646824).
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).

@@ -14,6 +14,7 @@ const POLL_INTERVAL_MS = Number(__ENV.POLL_INTERVAL_MS || 500);
 const DEBUG_SLOW_MS = Number(__ENV.DEBUG_SLOW_MS || 0);
 const json = { headers: { 'Content-Type': 'application/json' } };
 const statusCounts = new Counter('http_status_count');
+const reservationsCreated = new Counter('reservations_created');
 const reportedErrors = new Set();
 const httpStatuses = new Rate('unexpected_status');
 const status503 = new Rate('response_503');
@@ -29,6 +30,7 @@ export const options = {
   },
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(95)', 'p(99)'],
   thresholds: {
+    ...(RESERVE_VUS > 0 ? { reservations_created: ['count>0'] } : {}),
     lookup_duration_ms: [`p(95)<${__ENV.LOOKUP_P95_MS || 500}`],
     reserve_duration_ms: [`p(95)<${__ENV.RESERVE_P95_MS || 3000}`],
     http_req_failed: [`rate<${__ENV.MAX_ERROR_RATE || 0.01}`],
@@ -118,6 +120,7 @@ export function reserve({ token, slots, runId }) {
   if (final.code === 201) {
     const id = final.result?.id;
     if (!check(id, { 'đặt trả reservation id': (value) => Boolean(value) })) return;
+    reservationsCreated.add(1);
     sleep(0.2);
     const cancelAuth = { headers: { ...auth.headers, 'Idempotency-Key': `${key}-cancel` } };
     const cancelled = record(http.del(`${url}/${encodeURIComponent(id)}`, null, cancelAuth), 'cancel');
