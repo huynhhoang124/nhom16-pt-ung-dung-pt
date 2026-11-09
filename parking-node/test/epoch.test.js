@@ -42,7 +42,11 @@ test('PD-14b dynamic pool: chuyển đổi primary url và đóng pool cũ', asy
   const dynPool = await makeDynamicPool({
     parkingId: 'A',
     defaultDatabaseUrl: 'postgres://db1',
-    poolFactory: (opts) => pools[opts.connectionString],
+    poolFactory: (opts) => {
+      assert.equal(opts.connectionTimeoutMillis, 1000);
+      assert.equal(opts.query_timeout, 2000);
+      return pools[opts.connectionString];
+    },
     etcdClient: mockEtcd,
   });
 

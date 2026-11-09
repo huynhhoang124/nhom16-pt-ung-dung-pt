@@ -1,7 +1,7 @@
 const test=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
 const {PGlite}=require('@electric-sql/pglite');
 const {makeCommandFlow}=require('../src/command-flow');
-const {makeReplyHandler}=require('../src/command-replies');
+const {makeReplyBatch,makeReplyHandler}=require('../src/command-replies');
 const {signature}=require('../src/command-signature');
 const {applyEvent}=require('../src/events');
 const user={sub:'user',role:'USER'},request={parkingId:'A',type:'reserve',user,payload:{slotCode:'A01'},key:'key',traceparent:'00-11111111111111111111111111111111-2222222222222222-01'};
@@ -20,7 +20,7 @@ async function setup(t,options={}){
   const pool={query,connect:async()=>({query,release(){}})},calls=[],cache=new Map();let behaviour;
   const publisher={send:async(_p,_t,_b,opts)=>{calls.push(opts);return behaviour(opts);}};
   const flow=makeCommandFlow({pool,publisher,instanceId:'1',waitMs:3000,...options});
-  const handle=makeReplyHandler({pool,cache,internalKey:'key',signal:flow.signal});
+  const handle=makeReplyHandler({pool,cache,internalKey:'key',signal:flow.signal,persist:makeReplyBatch(pool)});
   behaviour=opts=>handle(reply(opts));flow.setReady(true);flow.start();
   t.after(async()=>{await flow.stop();await db.close();});
   return {db,pool,flow,handle,calls,cache,set(fn){behaviour=fn;}};
@@ -33,6 +33,94 @@ test('reply before publisher confirm releases request; same key yields same comm
   await assert.rejects(flow.execute({...request,payload:{slotCode:'A02'}}),{code:'IDEMPOTENCY_KEY_REUSED'});
   applyEvent(cache,{parkingId:'A',slot:'A01',status:'AVAILABLE',version:1});assert.equal(cache.get('A:A01').status,'RESERVED');
 });
+test('concurrent intents share one durable insert and preserve idempotency', async (t) => {
+  const { flow, pool, calls } = await setup(t);
+  const query = pool.query;
+  let insertions = 0;
+  pool.query = (sql, params) => {
+    if (sql.includes('INSERT INTO commands')) insertions++;
+    return query(sql, params);
+  };
+
+  const [first, replay, collision, distinct] = await Promise.allSettled([
+    flow.execute(request),
+    flow.execute(request),
+    flow.execute({ ...request, payload: { slotCode: 'A02' } }),
+    flow.execute({ ...request, key: 'next' }),
+  ]);
+
+  assert.equal(insertions, 1);
+  assert.equal(first.value.code, 201);
+  assert.deepEqual(replay.value, first.value);
+  assert.equal(collision.reason.code, 'IDEMPOTENCY_KEY_REUSED');
+  assert.equal(distinct.value.code, 201);
+  assert.deepEqual(calls.map((call) => call.messageId), ['user:key', 'user:next']);
+});
+
+test('an invalid database value does not reject other intents in its batch', async (t) => {
+  const { flow } = await setup(t);
+  const [invalid, valid] = await Promise.allSettled([
+    flow.execute({ ...request, payload: { slotCode: '\u0000' } }),
+    flow.execute({ ...request, key: 'valid' }),
+  ]);
+  assert.equal(invalid.reason.code, 'COMMAND_PERSISTENCE_UNKNOWN');
+  assert.equal(valid.value.code, 201);
+  assert.equal(valid.value.body.commandId, 'user:valid');
+});
+
+test('reply batches expose results only after the durable update succeeds', async () => {
+  const commit = Promise.withResolvers();
+  let calls = 0;
+  const pool = { async query(sql, [json]) {
+    calls++;
+    assert.match(sql, /ORDER BY created_at, id FOR UPDATE/);
+    const records = JSON.parse(json);
+    assert.deepEqual(records.map((record) => record.command_id), ['a', 'z']);
+    await commit.promise;
+    return { rows: records.map((record) => ({ id: record.command_id, batch_ordinal: record.ordinal })) };
+  } };
+  const persist = makeReplyBatch(pool);
+  const args = (id) => [id, 'corr', 'A', 'reserve', {}, 'DONE', {}, 201, 'hash', null, null, null];
+  let completed = 0;
+  const first = persist('', args('z')).then((value) => { completed++; return value; });
+  const second = persist('', args('a')).then((value) => { completed++; return value; });
+  try {
+    while (!calls) await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.equal(calls, 1);
+    assert.equal(completed, 0);
+  } finally {
+    commit.resolve();
+  }
+  assert.deepEqual(await Promise.all([first, second]), [{ rows: [{ id: 'z' }] }, { rows: [{ id: 'a' }] }]);
+});
+
+test('a failed reply update rejects the whole batch and permits redelivery', async () => {
+  let fail = true;
+  const pool = { async query() {
+    if (fail) throw new Error('database write failed');
+    return { rows: [{ id: 'a', batch_ordinal: 0 }] };
+  } };
+  const persist = makeReplyBatch(pool);
+  const results = await Promise.allSettled([persist('', ['a']), persist('', ['b'])]);
+  assert.ok(results.every((result) => result.status === 'rejected'));
+  fail = false;
+  assert.deepEqual(await persist('', ['a']), { rows: [{ id: 'a' }] });
+});
+
+test('batched duplicate IDs accept the matching identity and reject a conflicting reply', async (t) => {
+  const { flow, set, calls, handle } = await setup(t, { waitMs: 30 });
+  set(() => {});
+  assert.equal((await flow.execute(request)).code, 202);
+  const opts = calls[0];
+  const results = await Promise.all([
+    handle(reply({ ...opts, correlationId: 'incorrect' })),
+    handle(reply(opts)),
+    handle(reply(opts, { id: 'conflicting-result' })),
+  ]);
+  assert.deepEqual(results, [false, true, false]);
+  assert.deepEqual((await completed(flow)).result, { id: 'reservation' });
+});
+
 test('unknown publish stays PENDING/202; retry preserves identity and deadline',async t=>{
   const {flow,set,calls,pool,handle}=await setup(t,{waitMs:30});
   set(()=>{throw Object.assign(new Error('disconnect'),{code:'PUBLISH_UNKNOWN_RESULT'});});

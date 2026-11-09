@@ -136,6 +136,52 @@ Ba lượt chạy 300 VU trong hai phút, B chậm 1.500 ms và đạt cả 12 b
 
 Sau khi tách seed demo, lượt `eb19475` đạt 283 ms. Lượt `0e31bd5` chỉ đổi test TC01 và có p95 353 ms, chạy lại 301 ms. Lượt 353 ms có WAL sync trung bình ở DB bãi B khoảng 0,99 ms/lần, so với 0,26–0,41 ms/lần ở ba lượt đạt. Bản sửa kế tiếp đưa kiểm tra request ID vào câu giữ slot, và chỉ lấy khóa quản trị khi thao tác cần kiểm tra chính sách đặt chỗ. [Lượt 283 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42501525189) · [Lượt 353 và 301 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42502224604).
 
+## Kiểm chứng lại khi nghiệm thu GĐ2
+
+Các lượt dưới đây dùng cùng runtime TC80 qua Nginx, 300 VU trong hai phút, 130 slot của bộ đo và bãi B trễ 1.500 ms. Các commit giữa các lượt chỉ đổi failover manager, profile sáu bãi, kiểm thử và tài liệu ngoài stack đo. Mỗi lượt đạt các ngưỡng k6 và 12 bất biến sau tải.
+
+| Lượt | Đọc p95 | Đặt p95 |
+|---|---:|---:|
+| [42584345731](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42584345731) | 19,30 ms | 154 ms |
+| [42585148487](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42585148487) | 20,67 ms | 156 ms |
+| [42585749642](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42585749642) | 17,05 ms | 136 ms |
+| [42585766630](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42585766630) | 35,22 ms | 269 ms |
+| [42586082392](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42586082392) | 43,80 ms | 290 ms |
+
+PD-20 ở lượt 42586082392 giảm p99 từ 1.601,68 ms xuống 39,25 ms (97,55%). Hai lượt thử lại trên runtime trước đó từng vượt 300 ms (369,65 và 590 ms). Lượt sau trên cùng runtime lại đạt p95 521,75 ms. p95 từ khi ghi intent tới khi node bắt đầu giao dịch tăng lên 280 ms. 22,9% lệnh ở B chờ trong bộ đệm consumer trên 100 ms. DB Aggregator thực hiện 28.866 lần đồng bộ WAL trong lượt này. [Lượt vượt ngưỡng](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42587003507).
+
+Aggregator gom ý định trong cửa sổ 2 ms, tối đa 20 lệnh mỗi câu INSERT. Chỉ phát lệnh sau khi INSERT thành công. Bản `26f51ae` đo 155, 280 và 496 ms. Lượt 496 ms thực hiện 25.739 lần đồng bộ WAL trên DB Aggregator, mất trung bình 1,53 ms/lần. Cùng commit, lượt 155 ms đo trung bình 0,62 ms/lần. [Lượt 496 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42588001343) · [Lượt 155 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42588011599) · [Lượt 280 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42588011865).
+
+Bản kế tiếp gom tối đa 16 phản hồi trong một giao dịch. Cập nhật cache và ACK RabbitMQ vẫn diễn ra sau khi PostgreSQL xác nhận COMMIT.
+
+## Ba lượt trên bản 12b259e
+
+Runtime có gom ghi intent, gom giao dịch ghi kết quả và tái sử dụng snapshot khi trả xung đột slot. Cả ba lượt chạy đủ 300 VU hai phút, B trễ 1.500 ms. Mọi ngưỡng k6 và 12 bất biến sau tải đều đạt.
+
+| Lượt | Đọc p95 | Đặt p95 | PD-20 p99 tắt / bật hedge | Giảm p99 |
+|---|---:|---:|---:|---:|
+| [42590443489](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42590443489) | 15,70 ms | 275 ms | 1.601,99 / 37,76 ms | 97,64% |
+| [42590437526](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42590437526) | 12,59 ms | 184 ms | 1.602,00 / 53,19 ms | 96,68% |
+| [42590442256](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42590442256) | 10,83 ms | 150 ms | 1.601,89 / 68,87 ms | 95,70% |
+
+JSON gốc và kiểm tra sau tải được lưu trong `ket-qua-do/tc80-12b259e-r1` tới `r3`, và `pd20-12b259e-r1` tới `r3`. Các số đo vượt ngưỡng trên bản trước vẫn được ghi ở trên.
+
+## Nghiệm thu cấu hình 10 slot mỗi bãi
+
+Theo yêu cầu chốt 10 slot cho mọi bãi, gate TC80 dùng A/B/C tổng 30 slot. CI kiểm tra trực tiếp mỗi bãi có đúng 10 slot trước khi tạo tải. Workload giữ 240 VU đọc, 60 VU đặt, hai phút, B chậm 1.500 ms và ngưỡng p95 đặt dưới 300 ms. Counter `reservations_created` buộc có đặt thành công trong lượt đo.
+
+Bộ dữ liệu 130 slot được giữ riêng để chạy lại các bảng lịch sử. Trên bộ này, hai lượt 6a72da9 đạt p95 414 và 428,55 ms. Mỗi bảng cần đọc cùng số slot ghi trong cấu hình tương ứng. [Lượt 414 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42595605931) · [Lượt 428,55 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42595646824).
+
+Ba lượt đầu trên 30 slot ở commit `8205351` đo p95 đặt 270, 316 và 383 ms. Cấu hình 10 slot chưa đủ để mọi lượt qua ngưỡng.
+
+Bản tiếp theo gộp chính sách biển số/tầng vào câu giữ slot sau khi đã lấy khóa quản trị. Với primary tĩnh, consumer gom tối đa 16 lệnh theo thứ tự nhận trong cùng giao dịch, chờ COMMIT rồi mới ACK. Nếu lô lỗi, toàn bộ lô rollback và từng tin đi lại qua luồng xử lý retry/DLQ. Khi dùng pool kiểm epoch qua etcd, consumer tiếp tục giao dịch từng lệnh.
+
+Bản gom lệnh node `bb38e18` đo 141, 200 và 339 ms trên 30 slot. Ở lượt 339 ms, p95 trước khi node bắt đầu giao dịch là 138 ms, từ node tới relay là 30 ms và từ node tới lúc Aggregator lưu kết quả là 160 ms. Bản kế tiếp ghi cả lô phản hồi bằng một câu UPDATE, lấy khóa các ID theo thứ tự rồi cập nhật và gửi NOTIFY trong cùng statement.
+
+Bản `5f72bba` trên 30 slot đạt p95 173, 276 và 105 ms ở ba lượt độc lập, mỗi lượt đủ 300 VU hai phút và 12 bất biến sau tải. [Lượt 173 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42598456545) · [Lượt 276 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42598451870) · [Lượt 105 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42598456564).
+
+Lượt kế tiếp `0bcab8a` đạt p95 234 ms nhưng không qua gate vì tỉ lệ 503 là 0,0312%. PostgreSQL phát hiện deadlock giữa luồng đánh dấu publisher confirm và luồng ghi kết quả. Bản sửa đồng bộ thứ tự khóa dòng của hai luồng với worker claim theo `created_at, id`. [Lượt phát hiện deadlock](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42598928307).
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).

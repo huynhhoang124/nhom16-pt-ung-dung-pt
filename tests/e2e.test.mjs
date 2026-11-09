@@ -15,14 +15,15 @@ import { registerTc60Pd05Tests } from './tc60.pd05.test.mjs';
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { io } = createRequire(new URL('../frontend/package.json', import.meta.url))('socket.io-client');
+const FRONTEND = process.env.FRONTEND_URL ?? 'http://localhost:3000';
 const AGG = process.env.AGGREGATOR_URL ?? 'http://localhost:8000';
 const AGG2 = process.env.AGGREGATOR_2_URL ?? 'http://localhost:8010';
 const SCALE = process.env.SCALE === '1';
 const PARKING_IDS = SCALE ? ['A', 'B', 'C', 'D', 'E', 'F'] : ['A', 'B', 'C'];
 const NODE = Object.fromEntries(['A', 'B', 'C', 'D', 'E', 'F'].map((id, index) => [id, `http://localhost:${Number(process.env.PARKING_BASE_PORT ?? 8001) + index}`]));
-const COMPOSE = SCALE
-  ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord'
-  : 'docker compose';
+const COMPOSE = (SCALE && !process.env.COMPOSE_FILE
+  ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml'
+  : 'docker compose') + (SCALE ? ' --profile scale --profile coord' : '');
 const KEY = process.env.INTERNAL_KEY ?? 'dev';
 const T = { timeout: 120_000 };
 
@@ -102,6 +103,99 @@ test('PD-12 etcd gắn nhãn vùng Bắc/Nam và registry trả đủ sáu bãi'
     ['A', 'bac'], ['B', 'bac'], ['C', 'bac'],
     ['D', 'nam'], ['E', 'nam'], ['F', 'nam'],
   ]);
+});
+
+test('PD-14a cả sáu replica nhận WAL dưới một giây', { ...T, skip: !SCALE }, async () => {
+  for (const id of PARKING_IDS) {
+    const db = `db-${id.toLowerCase()}`;
+    const replica = `${db}-replica`;
+    const syncState = ['A', 'D'].includes(id) ? 'quorum' : 'async';
+    await until(`Replica ${id} đang streaming (${syncState})`, () =>
+      sql(db, `SELECT count(*) FROM pg_stat_replication WHERE application_name='${replica}' AND state='streaming' AND sync_state='${syncState}'`) === '1',
+    20_000);
+    const started = performance.now();
+    const lsn = sql(db, "SELECT pg_create_restore_point('gd2_acceptance')");
+    assert.match(lsn, /^[0-9A-F]+\/[0-9A-F]+$/);
+    await until(`Replica ${id} phát lại WAL tới ${lsn}`, () =>
+      sql(replica, `SELECT pg_last_wal_replay_lsn() >= '${lsn}'::pg_lsn`) === 't', 1000);
+    const elapsed = performance.now() - started;
+    console.log(`PD-14a ${id} (${syncState}) - WAL replay ms:`, elapsed.toFixed(0));
+    assert.ok(elapsed < 1000, `Replica ${id} mất ${elapsed.toFixed(0)} ms để phát lại WAL`);
+  }
+});
+
+test('PD-19 truy vấn đủ sáu bãi với đúng một request liên vùng', { ...T, skip: !SCALE }, async () => {
+  const crossZone = async () => {
+    const metrics = await (await fetch(AGG + '/metrics')).text();
+    return Number(metrics.match(/^cross_zone_requests_total\{[^}]+\} (\d+)$/m)?.[1] ?? 0);
+  };
+  const before = await crossZone();
+  const response = await agg('/api/parkings/availability');
+  assert.equal(response.status, 200);
+  assert.deepEqual(response.body.filter((parking) => parking.status === 'ONLINE').map((parking) => parking.parkingId).sort(), PARKING_IDS);
+  assert.equal(await crossZone() - before, 1);
+});
+
+test('PD-22 đo khởi tạo cache sáu bãi và kiểm replay sự kiện thật', { ...T, skip: !SCALE }, async () => {
+  const requireAggregator = createRequire(new URL('../aggregator-service/package.json', import.meta.url));
+  const { reconcile, createReconcileQueue, replayRecentEvents } = requireAggregator('./src/events');
+  const slotCode = await freeSlot('A');
+  const booking = await node('A', '/api/reservations', { method: 'POST', body: {
+    requestId: `pd22-${randomUUID()}`, userId: 'user1', slotCode, licensePlate: plate(),
+  } });
+  assert.equal(booking.status, 201);
+  try {
+    await until('sự kiện đặt chỗ đã vào broker', () =>
+      sql('db-a', `SELECT count(*) FROM parking_events WHERE slot_code='${slotCode}' AND event_type='RESERVED' AND published_at IS NOT NULL`) === '1',
+    15_000);
+
+    async function measure(paced) {
+      const cache = new Map();
+      const nodes = PARKING_IDS.map((id) => ({ id }));
+      let requests = 0, active = 0, peak = 0;
+      const reg = { async json({ id }, path) {
+        requests++;
+        peak = Math.max(peak, ++active);
+        try {
+          const result = await node(id, path);
+          assert.equal(result.status, 200);
+          return result.body;
+        } finally {
+          active--;
+        }
+      } };
+      const started = performance.now();
+      if (paced) {
+        const replayCache = new Map();
+        const { promise, resolve, reject } = Promise.withResolvers();
+        let completed = 0;
+        const queue = createReconcileQueue(reg, cache, undefined, {
+          info() { if (++completed === nodes.length) resolve(); },
+          error(message, details) { reject(new Error(`${message}: ${details.error}`)); },
+        });
+        nodes.forEach(queue.enqueue);
+        await Promise.all([
+          promise,
+          replayRecentEvents('amqp://parking:parking@localhost/%2F', replayCache, undefined, { info() {} }),
+        ]);
+        assert.equal(replayCache.get(`A:${slotCode}`)?.status, 'RESERVED');
+      } else {
+        await Promise.all(nodes.map((n) => reconcile(reg, cache, n)));
+      }
+      assert.equal(cache.size, 60);
+      return { requests, peak, ms: Math.round(performance.now() - started) };
+    }
+
+    const before = await measure(false);
+    const after = await measure(true);
+    console.log('PD-22 cache warmup:', JSON.stringify({ before, after }));
+    assert.equal(before.peak, 6);
+    assert.equal(after.peak, 1);
+    assert.equal(after.requests, before.requests);
+  } finally {
+    const cancelled = await node('A', `/api/reservations/${booking.body.id}`, { method: 'DELETE' });
+    assert.equal(cancelled.status, 200);
+  }
 });
 
 test('TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh', T, async () => {
@@ -360,7 +454,7 @@ test('TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200',
       // Chờ Nginx chuyển request sang Aggregator 2
       await until('Nginx phục vụ qua Aggregator 2',
         async () => {
-          const r = await http('http://localhost:3000/api/parkings');
+          const r = await http(FRONTEND + '/api/parkings');
           return r.status === 200;
         }, 20_000);
 
@@ -368,7 +462,7 @@ test('TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200',
       const statuses = [];
 
       for (let i = 0; i < 20; i++) {
-        const r = await http('http://localhost:3000/api/parkings');
+        const r = await http(FRONTEND + '/api/parkings');
         statuses.push(r.status);
 
         assert.equal(r.status, 200,
@@ -599,6 +693,7 @@ test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), o
       compose('start rabbitmq rabbitmq-2');
       await until('cụm rabbitmq phục hồi', () => {
         try {
+          compose('exec -T rabbitmq rabbitmq-diagnostics -q check_port_connectivity');
           const s = compose('exec -T rabbitmq rabbitmqctl cluster_status');
           return s.includes('rabbit@rabbitmq-2') && s.includes('rabbit@rabbitmq-3');
         } catch {
@@ -885,6 +980,54 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
   }),
 );
 
+test('TC70 bãi đồng bộ tự hạ cấp sang async khi mất replica, giải phóng lệnh ghi',
+  { ...T, skip: !(process.env.COORD && process.env.HA) },
+  async (t) => {
+    compose('--profile coord up -d failover-manager-1 failover-manager-2');
+    await until('Failover-manager có leader', async () =>
+      (await Promise.all([fm1('/health'), fm2('/health')])).some((result) => result.body?.isLeader), 15_000);
+
+    for (const parkingId of SCALE ? ['A', 'D'] : ['A']) {
+      await t.test(`Bãi ${parkingId}`, async () => {
+        const db = `db-${parkingId.toLowerCase()}`;
+        const replica = `${db}-replica`;
+        const waitForSync = () => until(`Replica ${parkingId} đang sao chép đồng bộ`, () =>
+          sql(db, `SELECT count(*) FROM pg_stat_replication WHERE application_name='${replica}' AND sync_state IN ('sync','quorum')`) === '1', 30_000);
+        try {
+          await waitForSync();
+          compose(`stop ${replica}`);
+          const stoppedAt = Date.now();
+          await until(`Failover-manager hạ ${parkingId} xuống async`, () =>
+            sql(db, 'SHOW synchronous_standby_names') === '', 15_000);
+          console.log(`TC70 ${parkingId} - ms từ khi replica dừng tới khi primary báo async:`, Date.now() - stoppedAt);
+
+          const bookRes = await node(parkingId, '/api/reservations', {
+            method: 'POST',
+            body: {
+              requestId: `e2e-tc70:${randomUUID()}`,
+              userId: 'user1',
+              slotCode: await freeSlot(parkingId),
+              licensePlate: plate(),
+            },
+          });
+          assert.equal(bookRes.status, 201);
+          const cancelled = await node(parkingId, `/api/reservations/${bookRes.body.id}`, { method: 'DELETE' });
+          assert.equal(cancelled.status, 200);
+        } catch (error) {
+          console.error(compose('logs --no-color --tail 30 failover-manager-1 failover-manager-2'));
+          throw error;
+        } finally {
+          compose(`start ${replica}`);
+          compose(`up -d --force-recreate ${db}-sync-config`);
+          await waitForSync();
+        }
+      });
+    }
+    // TC68 cần manager mới và trạng thái sync đã được phục hồi.
+    compose('--profile coord restart failover-manager-1 failover-manager-2');
+  }
+);
+
 // TC68 -> TC69 dùng chung trạng thái sau failover; TC69 (hoặc TC68 lỗi) trả bãi A về db-a, epoch 1
 let tc68Passed = false;
 const etcdPut = (k, v) => compose(`exec -T etcd-1 etcdctl put ${k} ${v}`);
@@ -907,15 +1050,19 @@ test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng
     try {
       // 1. Khởi động failover-manager
       compose('--profile coord up -d failover-manager-1 failover-manager-2');
-      await until('Failover-manager 1 sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
+      await until('Failover-manager có leader', async () =>
+        (await Promise.all([fm1('/health'), fm2('/health')])).some((result) => result.body?.isLeader), 15_000);
 
       // 2. Kiểm tra bãi A đang hoạt động bình thường trên primary (db-a)
       const avBefore = await node('A', '/api/availability');
       assert.equal(avBefore.status, 200);
+      const free = await until('Bãi A có slot trống', async () =>
+        (await node('A', '/api/slots/available')).body?.[0]?.slotCode, 10_000);
 
       // 3. Tắt db-a (primary bãi A) để kích hoạt failover tự động
       console.log('TC68 - Tắt db-a để kích hoạt failover tự động...');
       compose('stop db-a');
+      const stoppedAt = performance.now();
 
       // 4. Chờ failover-manager phát hiện lỗi liên tiếp và promote db-a-replica, cập nhật etcd
       await until('Failover hoàn tất trên etcd (epoch >= 2)', async () => {
@@ -924,21 +1071,16 @@ test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng
         const pA1 = st1?.parkings?.find((p) => p.parkingId === 'A');
         const pA2 = st2?.parkings?.find((p) => p.parkingId === 'A');
         return (pA1 && pA1.primaryUrl.includes('replica')) || (pA2 && pA2.primaryUrl.includes('replica'));
-      }, 45_000);
+      }, 15_000);
 
-      // 5. Node A tự nhận primary mới qua etcd watch mà không cần khởi động lại, đặt chỗ thành công
-      await sleep(1500);
-      const free = await freeSlot('A');
-      const bookRes = await node('A', '/api/reservations', {
-        method: 'POST',
-        body: {
-          requestId: `e2e-tc68:${randomUUID()}`,
-          userId: 'user1',
-          slotCode: free,
-          licensePlate: plate(),
-        },
-      });
-      assert.equal(bookRes.status, 201);
+      // 5. Node A tự nhận primary mới qua etcd watch và dùng cùng ID khi thử lại.
+      const body = { requestId: `e2e-tc68:${randomUUID()}`, userId: 'user1', slotCode: free, licensePlate: plate() };
+      await until('Node A ghi được trên primary mới', async () =>
+        (await node('A', '/api/reservations', { method: 'POST', body })).status === 201,
+      Math.max(0, 15_000 - (performance.now() - stoppedAt)));
+      const recoveredMs = performance.now() - stoppedAt;
+      console.log('TC68 - ms từ khi primary dừng tới khi đặt chỗ được:', recoveredMs.toFixed(0));
+      assert.ok(recoveredMs <= 15_000, `TC68 phục hồi sau ${recoveredMs.toFixed(0)} ms`);
       console.log('TC68 - PASS: Failover tự động thành công, node tự chuyển pool và đặt chỗ bình thường');
       tc68Passed = true;
     } finally {
@@ -984,50 +1126,31 @@ test('TC69 zombie primary fencing: DB primary cũ sống lại (mang epoch cũ) 
   }
 );
 
-test('TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự động hạ cấp sang async, giải phóng lệnh ghi',
-  { ...T, skip: !process.env.COORD },
-  async () => {
-    try {
-      compose('--profile coord up -d failover-manager-1');
-      await until('Failover-manager sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
-
-      // Kích hoạt degrade hoặc mô phỏng replica chết
-      const degRes = await fm1('/api/test/degrade/A', { method: 'POST' });
-      assert.equal(degRes.status, 200);
-      assert.equal(degRes.body?.degradedToAsync, true);
-
-      // Lệnh ghi trên primary A vẫn thực hiện trơn tru không bị nghẽn
-      const free = await freeSlot('A');
-      const bookRes = await node('A', '/api/reservations', {
-        method: 'POST',
-        body: {
-          requestId: `e2e-tc70:${randomUUID()}`,
-          userId: 'user1',
-          slotCode: free,
-          licensePlate: plate(),
-        },
-      });
-      assert.equal(bookRes.status, 201);
-      console.log('TC70 - PASS: Đã hạ cấp sao chép đồng bộ sang async khi replica chết, lệnh ghi thông suốt');
-    } finally {
-      compose('--profile coord stop failover-manager-1');
-    }
-  }
-);
-
 // --- PD-21: giới hạn đăng nhập dùng chung giữa các bản Aggregator (cần aggregator-2: profile ha) ---
-test('TC-PD21 giới hạn đăng nhập phân tán: 5 lần sai rải qua 2 Aggregator -> lần 6 bị 429 ở cả hai', { ...T, skip: !process.env.HA }, async () => {
+test('TC-PD21 giới hạn đăng nhập dùng chung giữa các Aggregator', { ...T, skip: !process.env.HA }, async () => {
   const usersDb = process.env.SHARD ? 'db-users-1' : 'db-agg';   // user2 ở phân mảnh 1 (ring.js)
   const clear = () => sql(usersDb, "DELETE FROM login_buckets WHERE username='user2'");
-  const tryLogin = (i, password) => (i % 2 ? agg2 : agg)('/api/auth/login', { method: 'POST', body: { username: 'user2', password } });
-  // TC65, TC66 tắt aggregator-2 khi xong: bật lại cho test này, xong thì trả về như cũ
+  const loginOptions = (password) => ({ method: 'POST', body: { username: 'user2', password } });
+  const north = [agg, agg2].map((request) => async (password) =>
+    (await request('/api/auth/login', loginOptions(password))).status);
+  const south = ['aggregator-nam-1', 'aggregator-nam-2'].map((service) => (password) => {
+    const code = "fetch('http://localhost:8000/api/auth/login', { method: 'POST', headers: { 'content-type': 'application/json' }, body: process.argv[1] }).then(r => console.log(r.status))";
+    const [, ...args] = COMPOSE.split(' ');
+    return Number(execFileSync('docker', [...args, 'exec', '-T', service, 'node', '-e', code,
+      JSON.stringify(loginOptions(password).body)], { cwd: ROOT, encoding: 'utf8' }).trim());
+  });
+  const instances = SCALE ? [...north, ...south] : north;
+
+  // TC65, TC66 tắt aggregator-2 khi xong: bật lại cho test này, xong thì trả về như cũ.
   compose('--profile ha up -d aggregator-2');
   await until('2 Aggregator sẵn sàng', async () => (await agg('/health')).status === 200 && (await agg2('/health')).status === 200, 60_000);
   clear();
   try {
-    for (let i = 0; i < 5; i++) assert.equal((await tryLogin(i, 'sai-mat-khau')).status, 401, `lần sai ${i + 1}`);
-    assert.equal((await tryLogin(5, process.env.DEMO_PASSWORD ?? '123456')).status, 429);
-    assert.equal((await tryLogin(6, process.env.DEMO_PASSWORD ?? '123456')).status, 429);
+    for (let i = 0; i < 5; i++) {
+      assert.equal(await instances[i % instances.length]('sai-mat-khau'), 401, `lần sai ${i + 1}`);
+    }
+    for (const tryLogin of instances) assert.equal(await tryLogin(process.env.DEMO_PASSWORD ?? '123456'), 429);
+    console.log(`TC-PD21 - lần thứ 6 bị giới hạn trên cả ${instances.length} Aggregator`);
   } finally {
     clear();
     compose('--profile ha stop aggregator-2');

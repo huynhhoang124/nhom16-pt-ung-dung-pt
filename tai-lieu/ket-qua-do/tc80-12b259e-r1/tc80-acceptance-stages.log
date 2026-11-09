@@ -1,0 +1,154 @@
+{
+  "beforeNode": {
+    "count": 22278,
+    "p50": 37,
+    "p95": 141,
+    "p99": 261
+  },
+  "nodeAndRelay": {
+    "count": 22278,
+    "p50": 14,
+    "p95": 36,
+    "p99": 106
+  },
+  "afterNode": {
+    "count": 22278,
+    "p50": 30,
+    "p95": 95,
+    "p99": 162
+  },
+  "total": {
+    "count": 22278,
+    "p50": 73,
+    "p95": 214,
+    "p99": 343
+  }
+}
+parking-a command_consumer_stage_seconds_bucket{le="0.001",parking="A",stage="prefetch_wait"} 2376
+command_consumer_stage_seconds_bucket{le="0.005",parking="A",stage="prefetch_wait"} 2773
+command_consumer_stage_seconds_bucket{le="0.01",parking="A",stage="prefetch_wait"} 3859
+command_consumer_stage_seconds_bucket{le="0.02",parking="A",stage="prefetch_wait"} 4998
+command_consumer_stage_seconds_bucket{le="0.05",parking="A",stage="prefetch_wait"} 6268
+command_consumer_stage_seconds_bucket{le="0.1",parking="A",stage="prefetch_wait"} 6613
+command_consumer_stage_seconds_bucket{le="0.2",parking="A",stage="prefetch_wait"} 6671
+command_consumer_stage_seconds_bucket{le="0.3",parking="A",stage="prefetch_wait"} 6685
+command_consumer_stage_seconds_bucket{le="0.5",parking="A",stage="prefetch_wait"} 6687
+command_consumer_stage_seconds_bucket{le="1",parking="A",stage="prefetch_wait"} 6687
+command_consumer_stage_seconds_bucket{le="2",parking="A",stage="prefetch_wait"} 6687
+command_consumer_stage_seconds_bucket{le="+Inf",parking="A",stage="prefetch_wait"} 6687
+command_consumer_stage_seconds_sum{parking="A",stage="prefetch_wait"} 100.50717839100025
+command_consumer_stage_seconds_count{parking="A",stage="prefetch_wait"} 6687
+command_consumer_stage_seconds_bucket{le="0.001",parking="A",stage="processing"} 0
+command_consumer_stage_seconds_bucket{le="0.005",parking="A",stage="processing"} 525
+command_consumer_stage_seconds_bucket{le="0.01",parking="A",stage="processing"} 4722
+command_consumer_stage_seconds_bucket{le="0.02",parking="A",stage="processing"} 6526
+command_consumer_stage_seconds_bucket{le="0.05",parking="A",stage="processing"} 6656
+command_consumer_stage_seconds_bucket{le="0.1",parking="A",stage="processing"} 6678
+command_consumer_stage_seconds_bucket{le="0.2",parking="A",stage="processing"} 6686
+command_consumer_stage_seconds_bucket{le="0.3",parking="A",stage="processing"} 6687
+command_consumer_stage_seconds_bucket{le="0.5",parking="A",stage="processing"} 6687
+command_consumer_stage_seconds_bucket{le="1",parking="A",stage="processing"} 6687
+command_consumer_stage_seconds_bucket{le="2",parking="A",stage="processing"} 6687
+command_consumer_stage_seconds_bucket{le="+Inf",parking="A",stage="processing"} 6687
+command_consumer_stage_seconds_sum{parking="A",stage="processing"} 62.618861783000014
+command_consumer_stage_seconds_count{parking="A",stage="processing"} 6687
+parking-b command_consumer_stage_seconds_bucket{le="0.001",parking="B",stage="prefetch_wait"} 1711
+command_consumer_stage_seconds_bucket{le="0.005",parking="B",stage="prefetch_wait"} 2211
+command_consumer_stage_seconds_bucket{le="0.01",parking="B",stage="prefetch_wait"} 3344
+command_consumer_stage_seconds_bucket{le="0.02",parking="B",stage="prefetch_wait"} 5008
+command_consumer_stage_seconds_bucket{le="0.05",parking="B",stage="prefetch_wait"} 7978
+command_consumer_stage_seconds_bucket{le="0.1",parking="B",stage="prefetch_wait"} 9850
+command_consumer_stage_seconds_bucket{le="0.2",parking="B",stage="prefetch_wait"} 10352
+command_consumer_stage_seconds_bucket{le="0.3",parking="B",stage="prefetch_wait"} 10409
+command_consumer_stage_seconds_bucket{le="0.5",parking="B",stage="prefetch_wait"} 10418
+command_consumer_stage_seconds_bucket{le="1",parking="B",stage="prefetch_wait"} 10418
+command_consumer_stage_seconds_bucket{le="2",parking="B",stage="prefetch_wait"} 10418
+command_consumer_stage_seconds_bucket{le="+Inf",parking="B",stage="prefetch_wait"} 10418
+command_consumer_stage_seconds_sum{parking="B",stage="prefetch_wait"} 345.70058725699937
+command_consumer_stage_seconds_count{parking="B",stage="prefetch_wait"} 10418
+command_consumer_stage_seconds_bucket{le="0.001",parking="B",stage="processing"} 0
+command_consumer_stage_seconds_bucket{le="0.005",parking="B",stage="processing"} 1172
+command_consumer_stage_seconds_bucket{le="0.01",parking="B",stage="processing"} 8139
+command_consumer_stage_seconds_bucket{le="0.02",parking="B",stage="processing"} 10202
+command_consumer_stage_seconds_bucket{le="0.05",parking="B",stage="processing"} 10368
+command_consumer_stage_seconds_bucket{le="0.1",parking="B",stage="processing"} 10404
+command_consumer_stage_seconds_bucket{le="0.2",parking="B",stage="processing"} 10417
+command_consumer_stage_seconds_bucket{le="0.3",parking="B",stage="processing"} 10418
+command_consumer_stage_seconds_bucket{le="0.5",parking="B",stage="processing"} 10418
+command_consumer_stage_seconds_bucket{le="1",parking="B",stage="processing"} 10418
+command_consumer_stage_seconds_bucket{le="2",parking="B",stage="processing"} 10418
+command_consumer_stage_seconds_bucket{le="+Inf",parking="B",stage="processing"} 10418
+command_consumer_stage_seconds_sum{parking="B",stage="processing"} 90.48702222199995
+command_consumer_stage_seconds_count{parking="B",stage="processing"} 10418
+parking-c command_consumer_stage_seconds_bucket{le="0.001",parking="C",stage="prefetch_wait"} 2379
+command_consumer_stage_seconds_bucket{le="0.005",parking="C",stage="prefetch_wait"} 2641
+command_consumer_stage_seconds_bucket{le="0.01",parking="C",stage="prefetch_wait"} 3507
+command_consumer_stage_seconds_bucket{le="0.02",parking="C",stage="prefetch_wait"} 4292
+command_consumer_stage_seconds_bucket{le="0.05",parking="C",stage="prefetch_wait"} 4989
+command_consumer_stage_seconds_bucket{le="0.1",parking="C",stage="prefetch_wait"} 5156
+command_consumer_stage_seconds_bucket{le="0.2",parking="C",stage="prefetch_wait"} 5173
+command_consumer_stage_seconds_bucket{le="0.3",parking="C",stage="prefetch_wait"} 5173
+command_consumer_stage_seconds_bucket{le="0.5",parking="C",stage="prefetch_wait"} 5173
+command_consumer_stage_seconds_bucket{le="1",parking="C",stage="prefetch_wait"} 5173
+command_consumer_stage_seconds_bucket{le="2",parking="C",stage="prefetch_wait"} 5173
+command_consumer_stage_seconds_bucket{le="+Inf",parking="C",stage="prefetch_wait"} 5173
+command_consumer_stage_seconds_sum{parking="C",stage="prefetch_wait"} 53.54626540700044
+command_consumer_stage_seconds_count{parking="C",stage="prefetch_wait"} 5173
+command_consumer_stage_seconds_bucket{le="0.001",parking="C",stage="processing"} 0
+command_consumer_stage_seconds_bucket{le="0.005",parking="C",stage="processing"} 343
+command_consumer_stage_seconds_bucket{le="0.01",parking="C",stage="processing"} 3456
+command_consumer_stage_seconds_bucket{le="0.02",parking="C",stage="processing"} 5047
+command_consumer_stage_seconds_bucket{le="0.05",parking="C",stage="processing"} 5149
+command_consumer_stage_seconds_bucket{le="0.1",parking="C",stage="processing"} 5167
+command_consumer_stage_seconds_bucket{le="0.2",parking="C",stage="processing"} 5173
+command_consumer_stage_seconds_bucket{le="0.3",parking="C",stage="processing"} 5173
+command_consumer_stage_seconds_bucket{le="0.5",parking="C",stage="processing"} 5173
+command_consumer_stage_seconds_bucket{le="1",parking="C",stage="processing"} 5173
+command_consumer_stage_seconds_bucket{le="2",parking="C",stage="processing"} 5173
+command_consumer_stage_seconds_bucket{le="+Inf",parking="C",stage="processing"} 5173
+command_consumer_stage_seconds_sum{parking="C",stage="processing"} 49.647237683
+command_consumer_stage_seconds_count{parking="C",stage="processing"} 5173
+db-a {
+  wal_records: 222412,
+  wal_fpi: 1680,
+  wal_bytes: 43820825,
+  wal_buffers_full: 24,
+  wal_write: 9072,
+  wal_sync: 7135,
+  wal_write_time: 1699.055,
+  wal_sync_time: 4783.028,
+  stats_reset: '2026-11-09T09:04:08.44477+00:00'
+}
+db-b {
+  wal_records: 325840,
+  wal_fpi: 1680,
+  wal_bytes: 61556862,
+  wal_buffers_full: 0,
+  wal_write: 13653,
+  wal_sync: 10900,
+  wal_write_time: 2147.38,
+  wal_sync_time: 7990.73,
+  stats_reset: '2026-11-09T09:04:08.119991+00:00'
+}
+db-c {
+  wal_records: 180322,
+  wal_fpi: 1681,
+  wal_bytes: 36583445,
+  wal_buffers_full: 24,
+  wal_write: 7215,
+  wal_sync: 5638,
+  wal_write_time: 987.001,
+  wal_sync_time: 3893.698,
+  stats_reset: '2026-11-09T09:04:08.41623+00:00'
+}
+db-agg {
+  wal_records: 561659,
+  wal_fpi: 1517,
+  wal_bytes: 102495863,
+  wal_buffers_full: 5,
+  wal_write: 19142,
+  wal_sync: 16645,
+  wal_write_time: 2467.458,
+  wal_sync_time: 12233.639,
+  stats_reset: '2026-11-09T09:04:08.119898+00:00'
+}

@@ -326,6 +326,24 @@ test('PD-14b manager: tự động hạ cấp sync replication sang async khi re
   assert.ok(reloadQuery, 'Phải gọi pg_reload_conf trên primary');
 });
 
+test('PD-14b keeps synchronous replication when PostgreSQL still sees a streaming standby', async () => {
+  const manager = makeFailoverManager({
+    parkings: [{ parkingId: 'A', primaryUrl: 'primary', replicaUrl: 'standby', sync: true }],
+    elector: { isLeader: () => true },
+    log: {},
+    pgClientFactory: (url) => ({
+      async connect() { if (url === 'standby') throw new Error('standby probe failed'); },
+      async query(sql) {
+        assert.ok(sql === 'SELECT 1' || sql.includes('pg_stat_replication'));
+        return { rows: [{}] };
+      },
+      async end() {},
+    }),
+  });
+  for (let attempt = 0; attempt < 3; attempt++) await manager.checkOnce();
+  assert.equal(manager.parkingStates[0].degradedToAsync, false);
+});
+
 test('PD-14b manager: follower không thực hiện kiểm tra failover', async () => {
   let pingCount = 0;
   const pgClientFactory = () => ({

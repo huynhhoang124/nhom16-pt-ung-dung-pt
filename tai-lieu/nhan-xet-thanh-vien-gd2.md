@@ -290,3 +290,15 @@ Giữ bảng điểm 01/11 làm mốc lịch sử. Bảng dưới ghi tiến đ�
 | Phạm Sỹ Hiệp | TC78, TC79 và hai lượt failover Jepsen đạt. PD-27 được đánh giá theo số đo ở [bảng tải](ket-qua-do-so-sanh.md). |
 
 Nguồn kiểm chứng [PR tích hợp #96](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/pull/96) và [CI ngày 08/11](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42471407708).
+
+## Kiểm chứng bổ sung ngày 09/11
+
+| Thành viên | Bằng chứng |
+|---|---|
+| Vũ Văn Hùng | CI chạy TC51/52/54/62 trên RabbitMQ thật, đồng thời kiểm tra luồng huỷ và thanh toán. TC54/62 dùng một node mỗi bãi bị cô lập để quan sát đúng nhánh HTTP 202. |
+| Nguyễn Văn Luận | TC70 đã tắt standby thật ở A và D. Lượt 5a0b61b đo được 2.609 ms và 2.623 ms từ khi container dừng tới khi primary báo async. |
+| Trịnh Kim Loan | Sáu replica phát lại WAL trong 156–792 ms ở lượt f50fff7. TC74 giữ đúng thứ tự nhân quả với đồng hồ D lệch ±30 s. |
+| Đỗ Huyền Trang | TC-PD21 trả 429 trên cả bốn Aggregator sau năm lần nhập sai. PD-20 xem [kết quả đo mới](ket-qua-do-so-sanh.md). PD-22 phát lại sự kiện thật và giữ tối đa 1 request đối soát đang chạy thay vì 6. Cả hai cách gọi 6 lần. Thời gian nạp đủ cache là 17 ms khi gọi đồng thời và 2.530 ms khi giãn nhịp trên cùng stack. Dashboard [Kênh lệnh](anh/pd25-kenh-lenh.png) và [Điều phối](anh/pd25-dieu-phoi.png) chụp khi Prometheus đã có mẫu. Alertmanager nhận `NodeDown` khi bãi B dừng. |
+| Phạm Sỹ Hiệp | Sáu bãi có đủ 60 slot. Một truy vấn tra cứu toàn quốc tăng bộ đếm liên vùng đúng một lần. TC79 kiểm tra 102 lệnh được xác nhận trong lúc cô lập một broker và cả 102 đều kết thúc. |
+
+Nguồn kiểm chứng [GĐ2 integration](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42587003483) và [bản sáu bãi 5a0b61b](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42586082390).

@@ -24,6 +24,7 @@ x-otel-env: &otel-env
 
 x-rabbit: &rabbit
   image: rabbitmq:3.13-management-alpine
+  restart: unless-stopped
   # Share CPU with Node/Postgres on the demo host; avoid Erlang scheduler busy waiting.
   environment:
     RABBITMQ_DEFAULT_USER: parking

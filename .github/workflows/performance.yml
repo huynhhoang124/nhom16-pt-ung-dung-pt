@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 15
     env:
       COMPOSE_PROJECT_NAME: perf-acceptance
-      COMPOSE_FILE: docker-compose.yml:docker-compose.chaos.yml:tests/load/benchmark-slots.compose.yml
+      COMPOSE_FILE: docker-compose.yml:docker-compose.chaos.yml
       COMPOSE_PROFILES: chaos
       COMMAND_MODE: broker
       K6_NETWORK: perf-acceptance_default
@@ -34,6 +34,9 @@ jobs:
           curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
           sleep 10
           node scripts/net.mjs B latency 1500
+          for parking in A B C; do
+            curl -fsS "http://localhost:8000/api/parkings/$parking" | jq -e '.slots | length == 10'
+          done
           for db in db-a db-b db-c db-agg; do
             docker compose exec -T "$db" psql -U postgres -d parking -c 'ALTER SYSTEM SET track_wal_io_timing=on' -c 'SELECT pg_reload_conf()'
           done

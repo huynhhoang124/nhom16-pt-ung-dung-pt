@@ -1,5 +1,5 @@
 // PD-14b: Failover Manager Core Logic (Issue #32)
-//   - Giám sát primary mỗi 1 giây (SELECT 1 timeout 500ms).
+//   - Lên lịch kiểm tra mỗi 1 giây, giới hạn thời gian kết nối và SELECT 1 khi kiểm tra sức khỏe.
 //   - 3 lần lỗi liên tiếp -> đọc replay LSN của replica -> Bước A (CAS tăng epoch trên etcd) -> Bước B (chờ cửa sổ an toàn
 //     để node ngừng ghi vào primary cũ) -> Bước C (pg_promote trên replica) -> Bước 4 (ghi db_epoch vào primary mới).
 //   - CAS thất bại -> dừng ngay, KHÔNG promote. Promote lỗi -> giữ epoch N+1 (không giảm), báo FAILOVER_PROMOTE_FAILED.
@@ -7,10 +7,10 @@
 
 const { Client } = require('pg');
 
-function defaultPgClientFactory(url, timeoutMs = 10000) {
+function defaultPgClientFactory(url, timeoutMs = 10000, connectionTimeoutMs = Math.max(10000, timeoutMs)) {
   const client = new Client({
     connectionString: url,
-    connectionTimeoutMillis: Math.max(10000, timeoutMs),
+    connectionTimeoutMillis: connectionTimeoutMs,
     query_timeout: timeoutMs,   // DB nhận kết nối nhưng treo SQL: SELECT 1 không được chờ mãi (checkOnce kẹt isChecking)
   });
   return {
@@ -78,7 +78,7 @@ function makeFailoverManager({
   async function checkPrimary(state) {
     let client = null;
     try {
-      client = await pgClientFactory(state.primaryUrl, 3000);
+      client = await pgClientFactory(state.primaryUrl, 1000, 500);
       await client.connect();
       await client.query('SELECT 1');
       state.primaryFailures = 0;
@@ -96,9 +96,13 @@ function makeFailoverManager({
     if (!state.replicaUrl) return true;
     let client = null;
     try {
-      client = await pgClientFactory(state.replicaUrl, 3000);
+      // Ask a synchronous primary about its replication connection, avoiding DNS probes of a stopped standby.
+      client = await pgClientFactory(state.sync ? state.primaryUrl : state.replicaUrl, 1000, 1000);
       await client.connect();
-      await client.query('SELECT 1');
+      const result = await client.query(state.sync
+        ? "SELECT 1 FROM pg_stat_replication WHERE state='streaming' LIMIT 1"
+        : 'SELECT 1');
+      if (state.sync && !result.rows.length) throw new Error('Primary has no streaming standby');
       state.replicaFailures = 0;
       state.replicaDownSince = null;
       return true;
@@ -112,7 +116,7 @@ function makeFailoverManager({
 
       // Mục 7.2 - TC70: Bãi đồng bộ có replica chết quá 3s -> hạ cấp sang async
       if (state.sync && !state.degradedToAsync && (downDuration >= 3000 || state.replicaFailures >= 3) && state.primaryFailures === 0) {
-        await degradeToAsync(state);
+        await degradeToAsync(state, { checkStreaming: true });
       }
       return false;
     } finally {
@@ -120,12 +124,18 @@ function makeFailoverManager({
     }
   }
 
-  async function degradeToAsync(state) {
+  async function degradeToAsync(state, { checkStreaming = false } = {}) {
     let client = null;
     try {
-      log.warn?.(`WARN: degraded sync replication to async for parking ${state.parkingId}. Trade-off: Consistency -> Availability after 3s down. RPO > 0: transactions committed during async window may be lost if primary crashes`);
       client = await pgClientFactory(state.primaryUrl, 2000);
       await client.connect();
+      if (checkStreaming) {
+        // A failed probe from this manager does not imply that PostgreSQL lost its standby.
+        const streaming = await client.query(
+          "SELECT 1 FROM pg_stat_replication WHERE state='streaming' AND sync_state IN ('sync','quorum') LIMIT 1");
+        if (streaming.rows.length) return;
+      }
+      log.warn?.(`WARN: degraded sync replication to async for parking ${state.parkingId}. Trade-off: Consistency -> Availability after 3s down. RPO > 0: transactions committed during async window may be lost if primary crashes`);
       await client.query('ALTER SYSTEM RESET synchronous_standby_names');
       await client.query('SELECT pg_reload_conf()');
       state.degradedToAsync = true;
@@ -291,13 +301,13 @@ function makeFailoverManager({
     isChecking = true;
     try {
       if (!elector || !elector.isLeader()) return;
-      for (const state of parkingStates) {
+      await Promise.all(parkingStates.map(async (state) => {
         try {
           await checkParking(state);
         } catch (err) {
           log.error?.(`[failover-manager] Lỗi khi kiểm tra bãi ${state.parkingId}`, { error: err.message });
         }
-      }
+      }));
     } finally {
       isChecking = false;
     }

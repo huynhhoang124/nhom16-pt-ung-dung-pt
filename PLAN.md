@@ -355,8 +355,10 @@ Chỉ sửa file, không chạy lệnh shell, không commit.
 
 ### B16 – Kết thúc
 
+Nhánh `dev` đã lên `main` qua PR #97 và #101. PR #102 chuẩn hóa demo 10 slot mỗi bãi. PR #103 kiểm tra lại cấu hình sáu bãi, chịu lỗi, truy vết, thống kê, phân mảnh và hiệu năng. Xem [nhận xét cập nhật](tai-lieu/nhan-xet-thanh-vien-gd2.md) và [số đo TC80/PD-20](tai-lieu/ket-qua-do-so-sanh.md).
+
 - [ ] Toàn bộ e2e trên `dev` đạt với các profile `coord`, `ha`, `scale`, `obs`.
-- [ ] PR `dev` → `main`.
+- [x] PR `dev` → `main` (#97 và #101).
 - [ ] Cập nhật bảng điểm và nhận xét.
 
 ## Câu hỏi

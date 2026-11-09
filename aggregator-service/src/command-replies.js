@@ -8,7 +8,7 @@ const replyTracer=trace.getTracer('aggregator/replies');
 const INSTANCE_QUEUE_ARGS={'x-queue-type':'quorum','x-message-ttl':60000};
 const RECOVERY='agg.replies.recovery';
 
-function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{},source=null}){
+function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{},source=null,persist=(sql,args)=>pool.query(sql,args)}){
   return async m=>{
     let b;try{if(m.content.length>65536)return false;b=JSON.parse(m.content);}catch{return false;}
     const p=m.properties;
@@ -27,7 +27,7 @@ function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{},s
     const carrier={};
     propagation.inject(context.active(),carrier);
     // Notify other instances in the result transaction. The local instance already has the returned row.
-    const updated=await pool.query(`WITH updated AS (
+    const updated=await persist(`WITH updated AS (
       UPDATE commands SET status=$6,result=$7,status_code=$8,reply_hash=$9,slot=$10,
         updated_at=now(),failure_phase=NULL,publish_state='CONFIRMED',publish_lease_until=NULL
         WHERE ${match} AND status='PENDING' RETURNING *
@@ -49,6 +49,62 @@ function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{},s
   };
 }
 
+function makeReplyBatch(pool) {
+  const queue = [];
+  let scheduled = false;
+
+  async function flush() {
+    while (queue.length) {
+      // Match the publishing worker lock order for overlapping command rows.
+      const batch = queue.splice(0, 16).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      try {
+        const records = batch.map(({ args }, ordinal) => ({
+          command_id: args[0], correlation_id: args[1], parking_id: args[2], type: args[3], actor: args[4],
+          status: args[5], result: args[6], status_code: args[7], reply_hash: args[8], slot: args[9],
+          source: args[10], traceparent: args[11], ordinal,
+        }));
+        const { rows } = await context.with(batch[0].parent, () => pool.query(
+          `WITH locked AS MATERIALIZED (
+             SELECT id FROM commands WHERE id=ANY($2::text[]) ORDER BY created_at, id FOR UPDATE
+           ), replies AS (
+             SELECT DISTINCT ON (c.id) r.*
+             FROM jsonb_to_recordset($1::jsonb) AS r(command_id text, correlation_id text, parking_id text,
+               type text, actor jsonb, status text, result jsonb, status_code int, reply_hash text, slot jsonb,
+               source text, traceparent text, ordinal int)
+             JOIN locked l ON l.id=r.command_id
+             JOIN commands c ON c.id=l.id AND c.correlation_id=r.correlation_id AND c.parking_id=r.parking_id
+               AND c.type=r.type AND c.actor=r.actor AND c.status='PENDING'
+             ORDER BY c.id, r.ordinal
+           ), updated AS (
+             UPDATE commands c SET status=r.status,result=r.result,status_code=r.status_code,reply_hash=r.reply_hash,
+               slot=r.slot,updated_at=now(),failure_phase=NULL,publish_state='CONFIRMED',publish_lease_until=NULL
+             FROM replies r WHERE c.id=r.command_id AND c.status='PENDING'
+             RETURNING c.*, r.ordinal AS batch_ordinal, r.source AS batch_source, r.traceparent AS batch_traceparent
+           )
+           SELECT updated.* FROM updated CROSS JOIN LATERAL pg_notify('command_results',
+             json_build_object('id',updated.id,'source',updated.batch_source,
+               'traceparent',COALESCE(updated.batch_traceparent,updated.envelope->>'traceparent'))::text)`,
+          [JSON.stringify(records), records.map((record) => record.command_id)]));
+        const results = new Map(rows.map(({ batch_ordinal, batch_source, batch_traceparent, ...row }) =>
+          [batch_ordinal, row]));
+        // One statement commits every result before callers update caches or acknowledge RabbitMQ.
+        batch.forEach((entry, ordinal) => entry.resolve({ rows: results.has(ordinal) ? [results.get(ordinal)] : [] }));
+      } catch (error) {
+        for (const entry of batch) entry.reject(error);
+      }
+    }
+    scheduled = false;
+  }
+
+  return (_sql, args) => new Promise((resolve, reject) => {
+    queue.push({ id: args[0], args, parent: context.active(), resolve, reject });
+    if (!scheduled) {
+      scheduled = true;
+      setTimeout(() => void flush(), 3);
+    }
+  });
+}
+
 async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onResult,connect=amqp.connect,log=console,retryMs=1000}){
   const owner=randomUUID();
   const claim=await pool.query(`INSERT INTO aggregator_instances(id,owner,lease_until) VALUES($1,$2,now()+interval '15 seconds')
@@ -56,7 +112,7 @@ async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onR
     WHERE aggregator_instances.lease_until<now() RETURNING id`,[instanceId,owner]);
   if(!claim.rowCount)throw new Error('DUPLICATE_AGGREGATOR_ID');
   const connectAny=makeConnector(url,connect);
-  const handle=makeReplyHandler({pool,internalKey,cache,source:owner,async signal(row,options){
+  const handle=makeReplyHandler({pool,internalKey,cache,source:owner,persist:makeReplyBatch(pool),async signal(row,options){
     await flow.signal(row,options);
     onResult?.(row,context.active());
   }});
@@ -130,4 +186,4 @@ async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onR
   }
   return {stop,handle};
 }
-module.exports={makeReplyHandler,startReplyService,INSTANCE_QUEUE_ARGS,RECOVERY};
+module.exports={makeReplyBatch,makeReplyHandler,startReplyService,INSTANCE_QUEUE_ARGS,RECOVERY};

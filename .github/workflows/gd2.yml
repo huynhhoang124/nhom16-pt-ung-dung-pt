@@ -7,8 +7,11 @@ on:
       - 'docker-compose*.yml'
       - 'aggregator-service/**'
       - 'parking-node/**'
+      - 'failover-manager/**'
       - 'stats-service/**'
+      - 'observability/**'
       - 'rabbitmq/**'
+      - 'scripts/prepare-rabbit-ha.sh'
       - '.github/workflows/gd2.yml'
 concurrency:
   group: gd2-${{ github.event.pull_request.number }}
@@ -20,7 +23,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        profile: [stats, replica, sac]
+        profile: [stats, replica, sac, scale, shards, obs, hlc]
     env:
       COMPOSE_PROJECT_NAME: gd2-ci
       COMMAND_MODE: http
@@ -60,7 +63,95 @@ jobs:
         run: |
           docker compose up -d --build
           curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
+          docker compose exec -T rabbitmq sh -s < scripts/prepare-rabbit-ha.sh
+          docker compose stop parking-b-2 parking-c-2
+          PD03_BROKER=1 node --test tests/command-flow.e2e.mjs
+          node --test --test-name-pattern='TC55|TC59|TC75|TC76' tests/e2e.test.mjs
+          docker compose start parking-b-2 parking-c-2
           node --test --test-name-pattern='PD-05|TC60' tests/e2e.test.mjs
+      - if: matrix.profile == 'scale'
+        env:
+          COMPOSE_FILE: docker-compose.yml:docker-compose.scale.yml
+          COMPOSE_PROFILES: scale,coord,ha
+          RABBITMQ_URL: amqp://parking:parking@rabbitmq/%2F,amqp://parking:parking@rabbitmq-2/%2F,amqp://parking:parking@rabbitmq-3/%2F
+          SCALE: '1'
+          COORD: '1'
+          HA: '1'
+          ENABLE_TEST_FAULTS: '1'
+        run: |
+          docker compose up -d --build
+          curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
+          docker compose exec -T rabbitmq sh -s < scripts/prepare-rabbit-ha.sh
+          node --test tests/tc61.pd04.e2e.mjs
+          node --test tests/e2e.test.mjs
+      - if: matrix.profile == 'shards'
+        env:
+          COMPOSE_FILE: docker-compose.yml:docker-compose.scale.yml:docker-compose.shard.yml
+          COMPOSE_PROFILES: scale,coord,ha
+          SCALE: '1'
+          SHARD: '1'
+          HA: '1'
+        run: |
+          docker compose up -d --build
+          node --test --test-name-pattern='TC73|TC-PD21' tests/e2e.test.mjs
+      - if: matrix.profile == 'hlc'
+        env:
+          COMPOSE_PROFILES: extra
+          HLC_TEST: '1'
+        run: |
+          for skew in 30000 -30000; do
+            CLOCK_SKEW_MS=$skew docker compose up -d --build --wait
+            HLC_EXPECTED_SKEW=$skew node --test tests/tc74.pd17.test.mjs
+          done
+      - if: matrix.profile == 'obs'
+        env:
+          COMPOSE_PROFILES: coord,obs
+          COMMAND_MODE: broker
+          ETCD_ENDPOINTS: http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
+        run: |
+          docker compose up -d --build --wait
+          for attempt in {1..30}; do
+            ready=$(docker compose exec -T rabbitmq rabbitmqctl -q list_queues name consumers |
+              awk '$1 ~ /^(cmd[.][ABC]|agg[.]replies[.]recovery)$/ && $2 > 0 { count++ } END { print count+0 }')
+            if [[ "$ready" == 4 ]]; then break; fi
+            test "$attempt" -lt 30
+            sleep 2
+          done
+          node --test --test-name-pattern='TC02|TC06' tests/e2e.test.mjs
+          mkdir -p obs-evidence
+          for query in 'sum(command_duration_seconds_count) > 0' 'sum(aggregator_is_leader) == 1'; do
+            for attempt in {1..12}; do
+              if curl -fsSG --data-urlencode "query=$query" http://localhost:9090/api/v1/query |
+                jq -e '.data.result | length > 0'; then
+                break
+              fi
+              test "$attempt" -lt 12
+              sleep 5
+            done
+          done
+          sleep 10
+          for dashboard in nhom16-kenh-lenh nhom16-dieu-phoi; do
+            curl -fsS --retry 20 --retry-all-errors http://localhost:3001/api/dashboards/uid/"$dashboard" > "obs-evidence/$dashboard.json"
+            jq -e '.dashboard.panels | length > 0' "obs-evidence/$dashboard.json"
+            google-chrome --headless --no-sandbox --disable-dev-shm-usage --window-size=1440,1000 \
+              --virtual-time-budget=10000 --screenshot="obs-evidence/$dashboard.png" \
+              "http://localhost:3001/d/$dashboard?orgId=1&from=now-2m&to=now&kiosk"
+            test -s "obs-evidence/$dashboard.png"
+          done
+          docker compose stop parking-b
+          for attempt in {1..24}; do
+            curl -fsS http://localhost:9093/api/v2/alerts > obs-evidence/alerts.json
+            if jq -e 'any(.[]; .labels.alertname == "NodeDown" and .labels.instance == "parking-b:8002" and .status.state == "active")' obs-evidence/alerts.json; then
+              exit 0
+            fi
+            sleep 5
+          done
+          exit 1
+      - if: always() && matrix.profile == 'obs'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pd25-observability
+          path: obs-evidence/
       - if: failure()
         run: docker compose logs --no-color --tail 60
   jepsen:
