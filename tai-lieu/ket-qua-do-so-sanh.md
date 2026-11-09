@@ -136,6 +136,20 @@ Ba lượt chạy 300 VU trong hai phút, B chậm 1.500 ms và đạt cả 12 b
 
 Sau khi tách seed demo, lượt `eb19475` đạt 283 ms. Lượt `0e31bd5` chỉ đổi test TC01 và có p95 353 ms, chạy lại 301 ms. Lượt 353 ms có WAL sync trung bình ở DB bãi B khoảng 0,99 ms/lần, so với 0,26–0,41 ms/lần ở ba lượt đạt. Bản sửa kế tiếp đưa kiểm tra request ID vào câu giữ slot, và chỉ lấy khóa quản trị khi thao tác cần kiểm tra chính sách đặt chỗ. [Lượt 283 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42501525189) · [Lượt 353 và 301 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42502224604).
 
+## Kiểm chứng lại khi nghiệm thu GĐ2
+
+Các lượt dưới đây dùng cùng runtime TC80 qua Nginx, 300 VU trong hai phút, 130 slot của bộ đo và bãi B trễ 1.500 ms. Các commit giữa các lượt chỉ đổi failover manager, profile sáu bãi, kiểm thử và tài liệu ngoài stack đo. Mỗi lượt đạt các ngưỡng k6 và 12 bất biến sau tải.
+
+| Lượt | Đọc p95 | Đặt p95 |
+|---|---:|---:|
+| [42584345731](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42584345731) | 19,30 ms | 154 ms |
+| [42585148487](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42585148487) | 20,67 ms | 156 ms |
+| [42585749642](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42585749642) | 17,05 ms | 136 ms |
+| [42585766630](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42585766630) | 35,22 ms | 269 ms |
+| [42586082392](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42586082392) | 43,80 ms | 290 ms |
+
+PD-20 ở lượt 42586082392 giảm p99 từ 1.601,68 ms xuống 39,25 ms (97,55%). Hai lượt thử lại trên runtime trước đó từng vượt 300 ms (369,65 và 590 ms). Kết quả trên xác nhận các lượt đo đã chạy trên runner GitHub Actions.
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).

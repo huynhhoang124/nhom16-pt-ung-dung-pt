@@ -64,7 +64,10 @@ jobs:
           docker compose up -d --build
           curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
           docker compose exec -T rabbitmq sh -s < scripts/prepare-rabbit-ha.sh
+          docker compose stop parking-b-2 parking-c-2
           PD03_BROKER=1 node --test tests/command-flow.e2e.mjs
+          node --test --test-name-pattern='TC55|TC59|TC75|TC76' tests/e2e.test.mjs
+          docker compose start parking-b-2 parking-c-2
           node --test --test-name-pattern='PD-05|TC60' tests/e2e.test.mjs
       - if: matrix.profile == 'scale'
         env:
@@ -103,16 +106,28 @@ jobs:
         env:
           COMPOSE_PROFILES: coord,obs
           COMMAND_MODE: broker
+          ETCD_ENDPOINTS: http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379
         run: |
           docker compose up -d --build --wait
           node --test --test-name-pattern='TC02|TC06' tests/e2e.test.mjs
           mkdir -p obs-evidence
+          for query in 'sum(command_duration_seconds_count) > 0' 'sum(aggregator_is_leader) == 1'; do
+            for attempt in {1..12}; do
+              if curl -fsSG --data-urlencode "query=$query" http://localhost:9090/api/v1/query |
+                jq -e '.data.result | length > 0'; then
+                break
+              fi
+              test "$attempt" -lt 12
+              sleep 5
+            done
+          done
+          sleep 10
           for dashboard in nhom16-kenh-lenh nhom16-dieu-phoi; do
             curl -fsS --retry 20 --retry-all-errors http://localhost:3001/api/dashboards/uid/"$dashboard" > "obs-evidence/$dashboard.json"
             jq -e '.dashboard.panels | length > 0' "obs-evidence/$dashboard.json"
             google-chrome --headless --no-sandbox --disable-dev-shm-usage --window-size=1440,1000 \
               --virtual-time-budget=10000 --screenshot="obs-evidence/$dashboard.png" \
-              "http://localhost:3001/d/$dashboard?orgId=1&kiosk"
+              "http://localhost:3001/d/$dashboard?orgId=1&from=now-2m&to=now&kiosk"
             test -s "obs-evidence/$dashboard.png"
           done
           docker compose stop parking-b

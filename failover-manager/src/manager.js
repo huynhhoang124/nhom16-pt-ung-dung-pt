@@ -1,5 +1,5 @@
 // PD-14b: Failover Manager Core Logic (Issue #32)
-//   - Giám sát primary mỗi 1 giây (SELECT 1 timeout 500ms).
+//   - Lên lịch kiểm tra mỗi 1 giây, giới hạn thời gian kết nối và SELECT 1 khi kiểm tra sức khỏe.
 //   - 3 lần lỗi liên tiếp -> đọc replay LSN của replica -> Bước A (CAS tăng epoch trên etcd) -> Bước B (chờ cửa sổ an toàn
 //     để node ngừng ghi vào primary cũ) -> Bước C (pg_promote trên replica) -> Bước 4 (ghi db_epoch vào primary mới).
 //   - CAS thất bại -> dừng ngay, KHÔNG promote. Promote lỗi -> giữ epoch N+1 (không giảm), báo FAILOVER_PROMOTE_FAILED.
@@ -78,7 +78,7 @@ function makeFailoverManager({
   async function checkPrimary(state) {
     let client = null;
     try {
-      client = await pgClientFactory(state.primaryUrl, 3000);
+      client = await pgClientFactory(state.primaryUrl, 1000, 1000);
       await client.connect();
       await client.query('SELECT 1');
       state.primaryFailures = 0;

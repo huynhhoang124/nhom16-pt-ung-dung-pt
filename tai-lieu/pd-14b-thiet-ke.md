@@ -2,7 +2,7 @@
 
 Nguồn: `failover-manager/src/{leader,manager,index}.js`, `parking-node/src/dynamic-pool.js`.
 
-`failover-manager` tranh khoá `/nhom16/election/failover` bằng CAS, lease TTL 5 s. Chỉ leader giám sát danh sách `PARKINGS`; vòng kiểm tra đặt lịch mỗi 1 s, không chạy chồng. Primary lỗi 3 lần liên tiếp thì kiểm tra replica bằng `pg_last_wal_replay_lsn()`. Code hiện truyền timeout truy vấn 3 s khi ping primary/replica (không phải 500 ms như comment đầu file); thời gian thiết lập kết nối có mức sàn 10 s. Đây là tham số, không phải số đo failover.
+`failover-manager` tranh khoá `/nhom16/election/failover` bằng CAS, lease TTL 5 s. Chỉ leader giám sát danh sách `PARKINGS`; vòng kiểm tra đặt lịch mỗi 1 s, không chạy chồng. Primary lỗi 3 lần liên tiếp thì kiểm tra replica bằng `pg_last_wal_replay_lsn()`. Mỗi phép kiểm tra sức khỏe primary hoặc replica giới hạn kết nối và truy vấn ở 1 s. Kết nối dùng để promote giữ giới hạn riêng. Đây là tham số, không phải số đo failover.
 
 Thứ tự bảo vệ ghi:
 1. CAS tăng `/nhom16/parking/<bãi>/db/epoch` từ N lên N+1, đồng thời kiểm payload khoá leader. CAS thất bại thì không promote.

@@ -105,6 +105,25 @@ test('PD-12 etcd gắn nhãn vùng Bắc/Nam và registry trả đủ sáu bãi'
   ]);
 });
 
+test('PD-14a cả sáu replica nhận WAL dưới một giây', { ...T, skip: !SCALE }, async () => {
+  for (const id of PARKING_IDS) {
+    const db = `db-${id.toLowerCase()}`;
+    const replica = `${db}-replica`;
+    const syncState = ['A', 'D'].includes(id) ? 'quorum' : 'async';
+    await until(`Replica ${id} đang streaming (${syncState})`, () =>
+      sql(db, `SELECT count(*) FROM pg_stat_replication WHERE application_name='${replica}' AND state='streaming' AND sync_state='${syncState}'`) === '1',
+    20_000);
+    const started = performance.now();
+    const lsn = sql(db, "SELECT pg_create_restore_point('gd2_acceptance')");
+    assert.match(lsn, /^[0-9A-F]+\/[0-9A-F]+$/);
+    await until(`Replica ${id} phát lại WAL tới ${lsn}`, () =>
+      sql(replica, `SELECT pg_last_wal_replay_lsn() >= '${lsn}'::pg_lsn`) === 't', 1000);
+    const elapsed = performance.now() - started;
+    console.log(`PD-14a ${id} (${syncState}) - WAL replay ms:`, elapsed.toFixed(0));
+    assert.ok(elapsed < 1000, `Replica ${id} mất ${elapsed.toFixed(0)} ms để phát lại WAL`);
+  }
+});
+
 test('PD-19 truy vấn đủ sáu bãi với đúng một request liên vùng', { ...T, skip: !SCALE }, async () => {
   const crossZone = async () => {
     const metrics = await (await fetch(AGG + '/metrics')).text();
@@ -972,10 +991,12 @@ test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng
       // 2. Kiểm tra bãi A đang hoạt động bình thường trên primary (db-a)
       const avBefore = await node('A', '/api/availability');
       assert.equal(avBefore.status, 200);
+      const free = await freeSlot('A');
 
       // 3. Tắt db-a (primary bãi A) để kích hoạt failover tự động
       console.log('TC68 - Tắt db-a để kích hoạt failover tự động...');
       compose('stop db-a');
+      const stoppedAt = performance.now();
 
       // 4. Chờ failover-manager phát hiện lỗi liên tiếp và promote db-a-replica, cập nhật etcd
       await until('Failover hoàn tất trên etcd (epoch >= 2)', async () => {
@@ -984,21 +1005,16 @@ test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng
         const pA1 = st1?.parkings?.find((p) => p.parkingId === 'A');
         const pA2 = st2?.parkings?.find((p) => p.parkingId === 'A');
         return (pA1 && pA1.primaryUrl.includes('replica')) || (pA2 && pA2.primaryUrl.includes('replica'));
-      }, 45_000);
+      }, 15_000);
 
-      // 5. Node A tự nhận primary mới qua etcd watch mà không cần khởi động lại, đặt chỗ thành công
-      await sleep(1500);
-      const free = await freeSlot('A');
-      const bookRes = await node('A', '/api/reservations', {
-        method: 'POST',
-        body: {
-          requestId: `e2e-tc68:${randomUUID()}`,
-          userId: 'user1',
-          slotCode: free,
-          licensePlate: plate(),
-        },
-      });
-      assert.equal(bookRes.status, 201);
+      // 5. Node A tự nhận primary mới qua etcd watch và dùng cùng ID khi thử lại.
+      const body = { requestId: `e2e-tc68:${randomUUID()}`, userId: 'user1', slotCode: free, licensePlate: plate() };
+      await until('Node A ghi được trên primary mới', async () =>
+        (await node('A', '/api/reservations', { method: 'POST', body })).status === 201,
+      Math.max(0, 15_000 - (performance.now() - stoppedAt)));
+      const recoveredMs = performance.now() - stoppedAt;
+      console.log('TC68 - ms từ khi primary dừng tới khi đặt chỗ được:', recoveredMs.toFixed(0));
+      assert.ok(recoveredMs <= 15_000, `TC68 phục hồi sau ${recoveredMs.toFixed(0)} ms`);
       console.log('TC68 - PASS: Failover tự động thành công, node tự chuyển pool và đặt chỗ bình thường');
       tc68Passed = true;
     } finally {
