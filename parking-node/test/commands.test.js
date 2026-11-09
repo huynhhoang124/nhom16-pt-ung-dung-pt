@@ -270,6 +270,27 @@ test('a rolled-back batch falls back to individual retry and DLQ decisions', asy
   }
 });
 
+test('the failing batch message enters retry once without an immediate second execution', async () => {
+  const broker = fakeBroker();
+  const handled = [], transferred = [];
+  const process = async (message) => { handled.push(message.id); return message; };
+  process.batch = async () => { throw Object.assign(new Error('temporary database failure'), { commandBatchIndex: 1 }); };
+  const consumer = startCommandConsumer({ url: 'amqp://test', parkingId: 'A', connect: broker.connect,
+    log: quiet, processCommand: process, afterCommit() {},
+    retryOrDead: async ({ message }) => { transferred.push(message.id); return true; } });
+  await until(() => broker.connections[0]?.ch.deliver);
+  const channel = broker.connections[0].ch;
+  channel.deliver({ id: 1 });
+  channel.deliver({ id: 2 });
+  try {
+    await until(() => channel.acks.length === 2);
+    assert.deepEqual(handled, [1]);
+    assert.deepEqual(transferred, [2]);
+  } finally {
+    await consumer.stop();
+  }
+});
+
 test('temporary rollback reconnects with backoff, permanent envelope error dead-letters without hot requeue', async () => {
   const b = fakeBroker(); let attempt = 0;
   const consumer = startCommandConsumer({ url: 'amqp://test', parkingId: 'A', connect: b.connect, retryMs: 40, log: quiet,

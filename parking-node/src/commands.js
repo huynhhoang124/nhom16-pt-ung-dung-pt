@@ -150,7 +150,14 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
       try {
         await client.query('BEGIN');
         const results = [];
-        for (const message of messages) results.push(await processCommand(message, client));
+        for (let index = 0; index < messages.length; index++) {
+          try {
+            results.push(await processCommand(messages[index], client));
+          } catch (error) {
+            error.commandBatchIndex = index;
+            throw error;
+          }
+        }
         await client.query('COMMIT');
         return results;
       } catch (error) {
@@ -299,9 +306,10 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
             if (!m) { end(s); return; }
             if (m.fields?.redelivered) require('./metrics').incRedelivered();   // PD-25
             const receivedAt = performance.now();
-            const processOne = async () => {
+            const processOne = async (failure) => {
               if (s.dead || stopped) return;
               try {
+                if (failure) throw failure;
                 const metric = require('./metrics').consumerStage;
                 metric.observe({ stage: 'prefetch_wait' }, (performance.now() - receivedAt) / 1000);
                 const endProcessing = metric.startTimer({ stage: 'processing' });
@@ -335,16 +343,20 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
                     return metric.startTimer({ stage: 'processing' });
                   });
                   let results;
+                  let batchFailure;
                   try {
                     results = await processCommand.batch(batch.map((entry) => entry.m));
                   } catch (error) {
                     // The whole batch rolled back. Apply the established retry/DLQ rules per message.
+                    batchFailure = error;
                     log.error('command batch rolled back', { parkingId, error: error.message });
                   } finally {
                     finish.forEach((done) => done());
                   }
                   if (!results) {
-                    for (const entry of batch) await entry.processOne();
+                    for (let index = 0; index < batch.length; index++) {
+                      await batch[index].processOne(index === batchFailure?.commandBatchIndex ? batchFailure : undefined);
+                    }
                     continue;
                   }
                   for (let index = 0; index < batch.length; index++) {
@@ -355,7 +367,7 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
                 s.draining = false;
               }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
             } else {
-              s.tail = s.tail.then(processOne)
+              s.tail = s.tail.then(() => processOne())
                 .catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
             }
           }, { noAck: false });
