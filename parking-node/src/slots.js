@@ -108,8 +108,16 @@ async function business(c, fn, recover, { lockAdmin = false } = {}) {
 async function reserveIn(c, parkingId, input, minutes = 15) {
   const { requestId, userId, slotCode, licensePlate, startTime, durationMinutes = 120 } = input;
   const replayOr = async (fallback) => {
-    const prior = await findByRequest(c, requestId);
-    return prior.rowCount ? { code: 200, body: prior.rows[0], replayed: true } : fallback;
+    const { rows: [row] } = await c.query(
+      `SELECT r.*, s.slot_code, target.status AS reply_status, target.version AS reply_version
+       FROM (VALUES (1)) AS one(dummy)
+       LEFT JOIN reservations r ON r.request_id=$1
+       LEFT JOIN parking_slots s ON s.id=r.slot_id
+       LEFT JOIN parking_slots target ON target.slot_code=$2`, [requestId, slotCode]);
+    const { reply_status: status, reply_version: version, ...reservation } = row;
+    const out = reservation.id ? { code: 200, body: reservation, replayed: true } : fallback;
+    // Reuse this snapshot when the broker builds the conflict reply.
+    return status ? { ...out, replySlot: { slotCode, status, version: Number(version) } } : out;
   };
   return business(c, async () => {
     const denied = await checkAdminIn(c, { slotCode, licensePlate });

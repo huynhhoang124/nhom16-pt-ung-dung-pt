@@ -112,12 +112,16 @@ test('TC20 đặt trước: hai khung giờ chồng nhau trên cùng slot -> cá
   assert.equal((await slot(pool, 'A01')).status, 'AVAILABLE');          // đặt trước: chưa giữ chỗ
   assert.equal(await count(pool, 'parking_events'), 0);
   const t2 = await inHours(pool, 6);                                       // 6h < 5h + 2h -> chồng
-  assert.deepEqual(await book(pool, 'f2', t2), { code: 409, body: { error: 'TIME_CONFLICT' } });
+  const conflicting = await book(pool, 'f2', t2);
+  assert.deepEqual([conflicting.code, conflicting.body], [409, { error: 'TIME_CONFLICT' }]);
+  assert.deepEqual(conflicting.replySlot, { slotCode: 'A01', status: 'AVAILABLE', version: 0 });
   assert.equal((await book(pool, 'f3', t2, 120, 'A02')).code, 201);      // slot khác thì được
   // đặt ngay mà khung 120' chạm lượt đặt trước lúc +1h -> cũng chồng giờ, slot không bị giữ
   const t3 = await inHours(pool, 1);
   await book(pool, 'f4', t3, 60, 'A03');
-  assert.deepEqual(await s.reserve(pool, P, req('f5', 'A03')), { code: 409, body: { error: 'TIME_CONFLICT' } });
+  const immediate = await s.reserve(pool, P, req('f5', 'A03'));
+  assert.deepEqual([immediate.code, immediate.body], [409, { error: 'TIME_CONFLICT' }]);
+  assert.deepEqual(immediate.replySlot, { slotCode: 'A03', status: 'AVAILABLE', version: 0 });
   assert.equal((await slot(pool, 'A03')).status, 'AVAILABLE');
 });
 
