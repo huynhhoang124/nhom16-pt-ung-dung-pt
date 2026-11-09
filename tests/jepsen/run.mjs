@@ -1,4 +1,4 @@
-import { mkdir } from 'node:fs/promises';
+import { mkdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { BASE_URL, compose, fetchJson, PARKING_IDS, PROJECT, sleep, validateParkingIds } from './config.mjs';
@@ -223,6 +223,8 @@ async function main() {
     await waitForRabbitCluster(['rabbit@rabbitmq', 'rabbit@rabbitmq-2']);
     compose(['up', '-d', 'rabbitmq-3']);
     await waitForRabbitCluster(['rabbit@rabbitmq', 'rabbit@rabbitmq-2', 'rabbit@rabbitmq-3']);
+    const prepareRabbit = await readFile(path.join(ROOT, 'scripts', 'prepare-rabbit-ha.sh'), 'utf8');
+    compose(['exec', '-T', 'rabbitmq', 'sh', '-s'], { input: prepareRabbit.replaceAll('\r\n', '\n') });
     await waitForTopology(record);
     const tasks = [
       runWorkload({

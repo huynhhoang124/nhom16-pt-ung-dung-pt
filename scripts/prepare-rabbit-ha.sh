@@ -1,30 +1,36 @@
-#!/usr/bin/env bash
-# Existing streams do not gain replicas automatically when the other brokers join.
-set -euo pipefail
-broker() { docker compose exec -T rabbitmq "$@"; }
-for node in rabbitmq rabbitmq-2 rabbitmq-3; do
-  for attempt in {1..30}; do
-    if docker compose exec -T "$node" rabbitmq-diagnostics -q check_running; then break; fi
-    if [[ $attempt == 30 ]]; then exit 1; fi
-    sleep 2
-  done
-done
+#!/bin/sh
+# Run inside the root broker after starting all three nodes.
+set -eu
 
-for node in rabbit@rabbitmq-2 rabbit@rabbitmq-3; do
-  for attempt in {1..30}; do
-    status=$(broker rabbitmq-streams stream_status events.stream)
-    if grep -Fq "$node" <<< "$status"; then break; fi
-    broker rabbitmq-streams add_replica events.stream "$node" || true
-    if [[ $attempt == 30 ]]; then
-      broker rabbitmq-streams stream_status events.stream
-      exit 1
+wait_for() {
+  attempt=1
+  until "$@"; do
+    if [ "$attempt" -ge 30 ]; then
+      echo "RabbitMQ HA readiness failed: $*" >&2
+      return 1
     fi
+    attempt=$((attempt + 1))
     sleep 2
   done
+}
+
+for node in rabbit@rabbitmq rabbit@rabbitmq-2 rabbit@rabbitmq-3; do
+  wait_for rabbitmq-diagnostics -n "$node" -q check_running
 done
 
-for attempt in {1..30}; do
-  if broker rabbitmq-diagnostics -q check_if_node_is_quorum_critical; then exit 0; fi
-  sleep 2
+stream_member() {
+  status=$(rabbitmq-streams stream_status events.stream) || return 1
+  if printf '%s\n' "$status" | grep -Fq "$1"; then return 0; fi
+  rabbitmq-streams add_replica events.stream "$1" || return 1
+  return 1
+}
+
+# Queues and streams may be declared before the peer brokers join.
+for node in rabbit@rabbitmq rabbit@rabbitmq-2 rabbit@rabbitmq-3; do
+  rabbitmq-queues grow "$node" all
+  wait_for stream_member "$node"
 done
-exit 1
+
+for node in rabbit@rabbitmq rabbit@rabbitmq-2 rabbit@rabbitmq-3; do
+  wait_for rabbitmq-diagnostics -n "$node" -q check_if_node_is_quorum_critical
+done

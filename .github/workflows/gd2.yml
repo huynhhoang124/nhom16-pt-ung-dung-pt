@@ -9,6 +9,7 @@ on:
       - 'parking-node/**'
       - 'stats-service/**'
       - 'rabbitmq/**'
+      - 'scripts/prepare-rabbit-ha.sh'
       - '.github/workflows/gd2.yml'
 concurrency:
   group: gd2-${{ github.event.pull_request.number }}
@@ -73,7 +74,7 @@ jobs:
         run: |
           docker compose up -d --build
           curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
-          bash scripts/prepare-rabbit-ha.sh
+          docker compose exec -T rabbitmq sh -s < scripts/prepare-rabbit-ha.sh
           node --test tests/e2e.test.mjs
       - if: matrix.profile == 'shards'
         env:
