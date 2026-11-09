@@ -20,7 +20,7 @@ done
 
 stream_member() {
   status=$(rabbitmq-streams stream_status events.stream) || return 1
-  if printf '%s\n' "$status" | grep -Fq "$1"; then return 0; fi
+  if printf '%s\n' "$status" | grep -Eq "(^|[^[:alnum:]@.-])$1([^[:alnum:]@.-]|$)"; then return 0; fi
   rabbitmq-streams add_replica events.stream "$1" || return 1
   return 1
 }

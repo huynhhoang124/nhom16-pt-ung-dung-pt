@@ -24,6 +24,8 @@ jobs:
         working-directory: aggregator-service
       - run: npm test
         working-directory: notification-service
+      - run: npm ci && npm test
+        working-directory: failover-manager
 
   frontend:
     runs-on: ubuntu-latest

@@ -15,6 +15,7 @@ import { registerTc60Pd05Tests } from './tc60.pd05.test.mjs';
 try { process.loadEnvFile(new URL('../.env', import.meta.url)); } catch { /* chưa có .env: dùng biến môi trường / mặc định */ }
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const { io } = createRequire(new URL('../frontend/package.json', import.meta.url))('socket.io-client');
+const FRONTEND = process.env.FRONTEND_URL ?? 'http://localhost:3000';
 const AGG = process.env.AGGREGATOR_URL ?? 'http://localhost:8000';
 const AGG2 = process.env.AGGREGATOR_2_URL ?? 'http://localhost:8010';
 const SCALE = process.env.SCALE === '1';
@@ -360,7 +361,7 @@ test('TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200',
       // Chờ Nginx chuyển request sang Aggregator 2
       await until('Nginx phục vụ qua Aggregator 2',
         async () => {
-          const r = await http('http://localhost:3000/api/parkings');
+          const r = await http(FRONTEND + '/api/parkings');
           return r.status === 200;
         }, 20_000);
 
@@ -368,7 +369,7 @@ test('TC43 HA: tắt Aggregator 1, 20 request qua Nginx vẫn trả 200',
       const statuses = [];
 
       for (let i = 0; i < 20; i++) {
-        const r = await http('http://localhost:3000/api/parkings');
+        const r = await http(FRONTEND + '/api/parkings');
         statuses.push(r.status);
 
         assert.equal(r.status, 200,
@@ -885,38 +886,50 @@ test('TC66 split-brain fencing token: Leader cũ bị pause gửi lệnh token c
   }),
 );
 
-test('TC70 bãi đồng bộ: Replica chết quá 3s -> Failover manager tự động hạ cấp sang async, giải phóng lệnh ghi',
+test('TC70 bãi đồng bộ tự hạ cấp sang async khi mất replica, giải phóng lệnh ghi',
   { ...T, skip: !(process.env.COORD && process.env.HA) },
-  async () => {
-    try {
-      compose('--profile coord up -d failover-manager-1');
-      await until('Failover-manager sẵn sàng', async () => (await fm1('/health')).status === 200, 15_000);
+  async (t) => {
+    compose('--profile coord up -d failover-manager-1 failover-manager-2');
+    await until('Failover-manager có leader', async () =>
+      (await Promise.all([fm1('/health'), fm2('/health')])).some((result) => result.body?.isLeader), 15_000);
 
-      await until('Replica A đang sao chép đồng bộ', () =>
-        sql('db-a', "SELECT count(*) FROM pg_stat_replication WHERE application_name='db-a-replica' AND sync_state IN ('sync','quorum')") === '1', 30_000);
-      compose('stop db-a-replica');
-      await until('Failover-manager hạ A xuống async', () =>
-        sql('db-a', 'SHOW synchronous_standby_names') === '', 15_000);
+    for (const parkingId of SCALE ? ['A', 'D'] : ['A']) {
+      await t.test(`Bãi ${parkingId}`, async () => {
+        const db = `db-${parkingId.toLowerCase()}`;
+        const replica = `${db}-replica`;
+        const waitForSync = () => until(`Replica ${parkingId} đang sao chép đồng bộ`, () =>
+          sql(db, `SELECT count(*) FROM pg_stat_replication WHERE application_name='${replica}' AND sync_state IN ('sync','quorum')`) === '1', 30_000);
+        try {
+          await waitForSync();
+          compose(`stop ${replica}`);
+          const stoppedAt = Date.now();
+          await until(`Failover-manager hạ ${parkingId} xuống async`, () =>
+            sql(db, 'SHOW synchronous_standby_names') === '', 15_000);
+          console.log(`TC70 ${parkingId} - ms từ khi replica dừng tới khi primary báo async:`, Date.now() - stoppedAt);
 
-      // Lệnh ghi trên primary A vẫn thực hiện trơn tru không bị nghẽn
-      const free = await freeSlot('A');
-      const bookRes = await node('A', '/api/reservations', {
-        method: 'POST',
-        body: {
-          requestId: `e2e-tc70:${randomUUID()}`,
-          userId: 'user1',
-          slotCode: free,
-          licensePlate: plate(),
-        },
+          const bookRes = await node(parkingId, '/api/reservations', {
+            method: 'POST',
+            body: {
+              requestId: `e2e-tc70:${randomUUID()}`,
+              userId: 'user1',
+              slotCode: await freeSlot(parkingId),
+              licensePlate: plate(),
+            },
+          });
+          assert.equal(bookRes.status, 201);
+          cancelLater(parkingId, bookRes.body.id);
+        } catch (error) {
+          console.error(compose('logs --no-color --tail 30 failover-manager-1 failover-manager-2'));
+          throw error;
+        } finally {
+          compose(`start ${replica}`);
+          compose(`up -d --force-recreate ${db}-sync-config`);
+          await waitForSync();
+        }
       });
-      assert.equal(bookRes.status, 201);
-      cancelLater('A', bookRes.body.id);
-      console.log('TC70 - PASS: Đã hạ cấp sao chép đồng bộ sang async khi replica chết, lệnh ghi thông suốt');
-    } finally {
-      compose('--profile coord stop failover-manager-1 failover-manager-2');
-      compose('start db-a-replica');
-      compose('up -d --force-recreate db-a-sync-config');
     }
+    // TC68 cần manager mới và trạng thái sync đã được phục hồi.
+    compose('--profile coord restart failover-manager-1 failover-manager-2');
   }
 );
 

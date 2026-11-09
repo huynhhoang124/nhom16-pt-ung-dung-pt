@@ -100,7 +100,18 @@ function parkingService({ id, zone, port, slots }) {
 }
 
 export function makeScaleCompose() {
+  const failoverParkings = JSON.stringify(LOTS.map(({ id: parkingId }) => {
+    const id = parkingId.toLowerCase();
+    return {
+      parkingId,
+      primaryUrl: `postgres://postgres:dev@db-${id}/parking`,
+      replicaUrl: `postgres://postgres:dev@db-${id}-replica/parking`,
+      sync: sync(id),
+    };
+  }));
   const services = {
+    'failover-manager-1': { environment: { PARKINGS: failoverParkings } },
+    'failover-manager-2': { environment: { PARKINGS: failoverParkings } },
     'db-agg': { ...DB_LIMITS },
     aggregator: { environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac', REGIONAL_PEER_URL: 'http://aggregator-nam:8000' } },
     'aggregator-2': { profiles: ['ha', 'scale'], environment: { ETCD_ENDPOINTS: ENDPOINTS, ZONE: 'bac', REGIONAL_PEER_URL: 'http://aggregator-nam:8000' } },

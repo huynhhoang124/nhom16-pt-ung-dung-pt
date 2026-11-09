@@ -7,10 +7,10 @@
 
 const { Client } = require('pg');
 
-function defaultPgClientFactory(url, timeoutMs = 10000) {
+function defaultPgClientFactory(url, timeoutMs = 10000, connectionTimeoutMs = Math.max(10000, timeoutMs)) {
   const client = new Client({
     connectionString: url,
-    connectionTimeoutMillis: Math.max(10000, timeoutMs),
+    connectionTimeoutMillis: connectionTimeoutMs,
     query_timeout: timeoutMs,   // DB nhận kết nối nhưng treo SQL: SELECT 1 không được chờ mãi (checkOnce kẹt isChecking)
   });
   return {
@@ -96,7 +96,7 @@ function makeFailoverManager({
     if (!state.replicaUrl) return true;
     let client = null;
     try {
-      client = await pgClientFactory(state.replicaUrl, 3000);
+      client = await pgClientFactory(state.replicaUrl, 1000, 1000);
       await client.connect();
       await client.query('SELECT 1');
       state.replicaFailures = 0;

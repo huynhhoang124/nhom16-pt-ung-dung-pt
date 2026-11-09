@@ -7,6 +7,7 @@ on:
       - 'docker-compose*.yml'
       - 'aggregator-service/**'
       - 'parking-node/**'
+      - 'failover-manager/**'
       - 'stats-service/**'
       - 'rabbitmq/**'
       - 'scripts/prepare-rabbit-ha.sh'
