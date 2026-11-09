@@ -112,7 +112,7 @@ function makeFailoverManager({
 
       // Mục 7.2 - TC70: Bãi đồng bộ có replica chết quá 3s -> hạ cấp sang async
       if (state.sync && !state.degradedToAsync && (downDuration >= 3000 || state.replicaFailures >= 3) && state.primaryFailures === 0) {
-        await degradeToAsync(state);
+        await degradeToAsync(state, { checkStreaming: true });
       }
       return false;
     } finally {
@@ -120,12 +120,18 @@ function makeFailoverManager({
     }
   }
 
-  async function degradeToAsync(state) {
+  async function degradeToAsync(state, { checkStreaming = false } = {}) {
     let client = null;
     try {
-      log.warn?.(`WARN: degraded sync replication to async for parking ${state.parkingId}. Trade-off: Consistency -> Availability after 3s down. RPO > 0: transactions committed during async window may be lost if primary crashes`);
       client = await pgClientFactory(state.primaryUrl, 2000);
       await client.connect();
+      if (checkStreaming) {
+        // A failed probe from this manager does not imply that PostgreSQL lost its standby.
+        const streaming = await client.query(
+          "SELECT 1 FROM pg_stat_replication WHERE state='streaming' AND sync_state IN ('sync','quorum') LIMIT 1");
+        if (streaming.rows.length) return;
+      }
+      log.warn?.(`WARN: degraded sync replication to async for parking ${state.parkingId}. Trade-off: Consistency -> Availability after 3s down. RPO > 0: transactions committed during async window may be lost if primary crashes`);
       await client.query('ALTER SYSTEM RESET synchronous_standby_names');
       await client.query('SELECT pg_reload_conf()');
       state.degradedToAsync = true;

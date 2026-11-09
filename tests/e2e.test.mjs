@@ -144,54 +144,58 @@ test('PD-22 đo khởi tạo cache sáu bãi và kiểm replay sự kiện thậ
     requestId: `pd22-${randomUUID()}`, userId: 'user1', slotCode, licensePlate: plate(),
   } });
   assert.equal(booking.status, 201);
-  cancelLater('A', booking.body.id);
-  await until('sự kiện đặt chỗ đã vào broker', () =>
-    sql('db-a', `SELECT count(*) FROM parking_events WHERE slot_code='${slotCode}' AND event_type='RESERVED' AND published_at IS NOT NULL`) === '1',
-  15_000);
+  try {
+    await until('sự kiện đặt chỗ đã vào broker', () =>
+      sql('db-a', `SELECT count(*) FROM parking_events WHERE slot_code='${slotCode}' AND event_type='RESERVED' AND published_at IS NOT NULL`) === '1',
+    15_000);
 
-  async function measure(paced) {
-    const cache = new Map();
-    const nodes = PARKING_IDS.map((id) => ({ id }));
-    let requests = 0, active = 0, peak = 0;
-    const reg = { async json({ id }, path) {
-      requests++;
-      peak = Math.max(peak, ++active);
-      try {
-        const result = await node(id, path);
-        assert.equal(result.status, 200);
-        return result.body;
-      } finally {
-        active--;
+    async function measure(paced) {
+      const cache = new Map();
+      const nodes = PARKING_IDS.map((id) => ({ id }));
+      let requests = 0, active = 0, peak = 0;
+      const reg = { async json({ id }, path) {
+        requests++;
+        peak = Math.max(peak, ++active);
+        try {
+          const result = await node(id, path);
+          assert.equal(result.status, 200);
+          return result.body;
+        } finally {
+          active--;
+        }
+      } };
+      const started = performance.now();
+      if (paced) {
+        const replayCache = new Map();
+        const { promise, resolve, reject } = Promise.withResolvers();
+        let completed = 0;
+        const queue = createReconcileQueue(reg, cache, undefined, {
+          info() { if (++completed === nodes.length) resolve(); },
+          error(message, details) { reject(new Error(`${message}: ${details.error}`)); },
+        });
+        nodes.forEach(queue.enqueue);
+        await Promise.all([
+          promise,
+          replayRecentEvents('amqp://parking:parking@localhost/%2F', replayCache, undefined, { info() {} }),
+        ]);
+        assert.equal(replayCache.get(`A:${slotCode}`)?.status, 'RESERVED');
+      } else {
+        await Promise.all(nodes.map((n) => reconcile(reg, cache, n)));
       }
-    } };
-    const started = performance.now();
-    if (paced) {
-      const replayCache = new Map();
-      const { promise, resolve, reject } = Promise.withResolvers();
-      let completed = 0;
-      const queue = createReconcileQueue(reg, cache, undefined, {
-        info() { if (++completed === nodes.length) resolve(); },
-        error(message, details) { reject(new Error(`${message}: ${details.error}`)); },
-      });
-      nodes.forEach(queue.enqueue);
-      await Promise.all([
-        promise,
-        replayRecentEvents('amqp://parking:parking@localhost/%2F', replayCache, undefined, { info() {} }),
-      ]);
-      assert.equal(replayCache.get(`A:${slotCode}`)?.status, 'RESERVED');
-    } else {
-      await Promise.all(nodes.map((n) => reconcile(reg, cache, n)));
+      assert.equal(cache.size, 60);
+      return { requests, peak, ms: Math.round(performance.now() - started) };
     }
-    assert.equal(cache.size, 60);
-    return { requests, peak, ms: Math.round(performance.now() - started) };
-  }
 
-  const before = await measure(false);
-  const after = await measure(true);
-  console.log('PD-22 cache warmup:', JSON.stringify({ before, after }));
-  assert.equal(before.peak, 6);
-  assert.equal(after.peak, 1);
-  assert.equal(after.requests, before.requests);
+    const before = await measure(false);
+    const after = await measure(true);
+    console.log('PD-22 cache warmup:', JSON.stringify({ before, after }));
+    assert.equal(before.peak, 6);
+    assert.equal(after.peak, 1);
+    assert.equal(after.requests, before.requests);
+  } finally {
+    const cancelled = await node('A', `/api/reservations/${booking.body.id}`, { method: 'DELETE' });
+    assert.equal(cancelled.status, 200);
+  }
 });
 
 test('TC56 mandatory return từ RabbitMQ: bãi không tồn tại trả 404 nhanh', T, async () => {
@@ -1006,7 +1010,8 @@ test('TC70 bãi đồng bộ tự hạ cấp sang async khi mất replica, giả
             },
           });
           assert.equal(bookRes.status, 201);
-          cancelLater(parkingId, bookRes.body.id);
+          const cancelled = await node(parkingId, `/api/reservations/${bookRes.body.id}`, { method: 'DELETE' });
+          assert.equal(cancelled.status, 200);
         } catch (error) {
           console.error(compose('logs --no-color --tail 30 failover-manager-1 failover-manager-2'));
           throw error;
@@ -1050,7 +1055,8 @@ test('TC68 failover manager: Primary bãi A chết -> promote replica, CAS tăng
       // 2. Kiểm tra bãi A đang hoạt động bình thường trên primary (db-a)
       const avBefore = await node('A', '/api/availability');
       assert.equal(avBefore.status, 200);
-      const free = await freeSlot('A');
+      const free = await until('Bãi A có slot trống', async () =>
+        (await node('A', '/api/slots/available')).body?.[0]?.slotCode, 10_000);
 
       // 3. Tắt db-a (primary bãi A) để kích hoạt failover tự động
       console.log('TC68 - Tắt db-a để kích hoạt failover tự động...');

@@ -8,7 +8,7 @@ const replyTracer=trace.getTracer('aggregator/replies');
 const INSTANCE_QUEUE_ARGS={'x-queue-type':'quorum','x-message-ttl':60000};
 const RECOVERY='agg.replies.recovery';
 
-function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{},source=null}){
+function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{},source=null,persist=(sql,args)=>pool.query(sql,args)}){
   return async m=>{
     let b;try{if(m.content.length>65536)return false;b=JSON.parse(m.content);}catch{return false;}
     const p=m.properties;
@@ -27,7 +27,7 @@ function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{},s
     const carrier={};
     propagation.inject(context.active(),carrier);
     // Notify other instances in the result transaction. The local instance already has the returned row.
-    const updated=await pool.query(`WITH updated AS (
+    const updated=await persist(`WITH updated AS (
       UPDATE commands SET status=$6,result=$7,status_code=$8,reply_hash=$9,slot=$10,
         updated_at=now(),failure_phase=NULL,publish_state='CONFIRMED',publish_lease_until=NULL
         WHERE ${match} AND status='PENDING' RETURNING *
@@ -49,6 +49,45 @@ function makeReplyHandler({pool,internalKey,cache=new Map(),signal=async()=>{},s
   };
 }
 
+function makeReplyBatch(pool) {
+  const queue = [];
+  let scheduled = false;
+
+  async function flush() {
+    while (queue.length) {
+      // Every aggregator takes overlapping row locks in the same order.
+      const batch = queue.splice(0, 16).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+      let client;
+      let discard;
+      try {
+        client = await pool.connect();
+        await client.query('BEGIN');
+        const results = await Promise.allSettled(batch.map(async (entry) =>
+          context.with(entry.parent, () => client.query(entry.sql, entry.args))));
+        const failure = results.find((result) => result.status === 'rejected');
+        if (failure) throw failure.reason;
+        await client.query('COMMIT');
+        // Callers update caches and acknowledge RabbitMQ only after the shared durable commit.
+        batch.forEach((entry, index) => entry.resolve(results[index].value));
+      } catch (error) {
+        if (client) await client.query('ROLLBACK').catch((cause) => { discard = cause; });
+        for (const entry of batch) entry.reject(error);
+      } finally {
+        client?.release(discard);
+      }
+    }
+    scheduled = false;
+  }
+
+  return (sql, args) => new Promise((resolve, reject) => {
+    queue.push({ id: args[0], sql, args, parent: context.active(), resolve, reject });
+    if (!scheduled) {
+      scheduled = true;
+      setTimeout(() => void flush(), 3);
+    }
+  });
+}
+
 async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onResult,connect=amqp.connect,log=console,retryMs=1000}){
   const owner=randomUUID();
   const claim=await pool.query(`INSERT INTO aggregator_instances(id,owner,lease_until) VALUES($1,$2,now()+interval '15 seconds')
@@ -56,7 +95,7 @@ async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onR
     WHERE aggregator_instances.lease_until<now() RETURNING id`,[instanceId,owner]);
   if(!claim.rowCount)throw new Error('DUPLICATE_AGGREGATOR_ID');
   const connectAny=makeConnector(url,connect);
-  const handle=makeReplyHandler({pool,internalKey,cache,source:owner,async signal(row,options){
+  const handle=makeReplyHandler({pool,internalKey,cache,source:owner,persist:makeReplyBatch(pool),async signal(row,options){
     await flow.signal(row,options);
     onResult?.(row,context.active());
   }});
@@ -130,4 +169,4 @@ async function startReplyService({pool,url,instanceId,internalKey,flow,cache,onR
   }
   return {stop,handle};
 }
-module.exports={makeReplyHandler,startReplyService,INSTANCE_QUEUE_ARGS,RECOVERY};
+module.exports={makeReplyBatch,makeReplyHandler,startReplyService,INSTANCE_QUEUE_ARGS,RECOVERY};

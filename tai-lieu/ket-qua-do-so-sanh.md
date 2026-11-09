@@ -150,6 +150,10 @@ Các lượt dưới đây dùng cùng runtime TC80 qua Nginx, 300 VU trong hai 
 
 PD-20 ở lượt 42586082392 giảm p99 từ 1.601,68 ms xuống 39,25 ms (97,55%). Hai lượt thử lại trên runtime trước đó từng vượt 300 ms (369,65 và 590 ms). Lượt sau trên cùng runtime lại đạt p95 521,75 ms. p95 từ khi ghi intent tới khi node bắt đầu giao dịch tăng lên 280 ms. 22,9% lệnh ở B chờ trong bộ đệm consumer trên 100 ms. DB Aggregator thực hiện 28.866 lần đồng bộ WAL trong lượt này. [Lượt vượt ngưỡng](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42587003507).
 
+Aggregator gom ý định trong cửa sổ 2 ms, tối đa 20 lệnh mỗi câu INSERT. Chỉ phát lệnh sau khi INSERT thành công. Bản `26f51ae` đo 155, 280 và 496 ms. Lượt 496 ms thực hiện 25.739 lần đồng bộ WAL trên DB Aggregator, mất trung bình 1,53 ms/lần. Cùng commit, lượt 155 ms đo trung bình 0,62 ms/lần. [Lượt 496 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42588001343) · [Lượt 155 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42588011599) · [Lượt 280 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42588011865).
+
+Bản kế tiếp gom tối đa 16 phản hồi trong một giao dịch. Cập nhật cache và ACK RabbitMQ vẫn diễn ra sau khi PostgreSQL xác nhận COMMIT.
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).
