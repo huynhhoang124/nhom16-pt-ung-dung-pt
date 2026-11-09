@@ -21,9 +21,9 @@ const AGG2 = process.env.AGGREGATOR_2_URL ?? 'http://localhost:8010';
 const SCALE = process.env.SCALE === '1';
 const PARKING_IDS = SCALE ? ['A', 'B', 'C', 'D', 'E', 'F'] : ['A', 'B', 'C'];
 const NODE = Object.fromEntries(['A', 'B', 'C', 'D', 'E', 'F'].map((id, index) => [id, `http://localhost:${Number(process.env.PARKING_BASE_PORT ?? 8001) + index}`]));
-const COMPOSE = SCALE && !process.env.COMPOSE_FILE
-  ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord'
-  : 'docker compose';
+const COMPOSE = (SCALE && !process.env.COMPOSE_FILE
+  ? 'docker compose -f docker-compose.yml -f docker-compose.scale.yml'
+  : 'docker compose') + (SCALE ? ' --profile scale --profile coord' : '');
 const KEY = process.env.INTERNAL_KEY ?? 'dev';
 const T = { timeout: 120_000 };
 
@@ -693,6 +693,7 @@ test('TC49 cụm RabbitMQ: dừng cả rabbitmq và rabbitmq-2 (mất quorum), o
       compose('start rabbitmq rabbitmq-2');
       await until('cụm rabbitmq phục hồi', () => {
         try {
+          compose('exec -T rabbitmq rabbitmq-diagnostics -q check_port_connectivity');
           const s = compose('exec -T rabbitmq rabbitmqctl cluster_status');
           return s.includes('rabbit@rabbitmq-2') && s.includes('rabbit@rabbitmq-3');
         } catch {
