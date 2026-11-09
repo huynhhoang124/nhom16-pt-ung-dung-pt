@@ -69,9 +69,11 @@ jobs:
           SCALE: '1'
           COORD: '1'
           HA: '1'
+          ENABLE_TEST_FAULTS: '1'
         run: |
           docker compose up -d --build
           curl --fail --retry 40 --retry-all-errors --retry-delay 2 http://localhost:8000/health
+          bash scripts/prepare-rabbit-ha.sh
           node --test tests/e2e.test.mjs
       - if: matrix.profile == 'shards'
         env:
