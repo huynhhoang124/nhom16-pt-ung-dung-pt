@@ -4,3 +4,6 @@ dist/
 .claude/
 .playwright-mcp/
 tests/jepsen/results/
+
+# chứng chỉ HTTPS tự ký cho bản dev (scripts/dev-cert.mjs)
+frontend/.cert/
