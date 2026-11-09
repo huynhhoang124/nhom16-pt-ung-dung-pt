@@ -148,12 +148,11 @@ export async function api(path, {
     }
   }
 
-  const data = await r.json().catch(() => ({}));
-
-  if (r.status === 401 && s && !keepSession) {
-    session.set(null);
-    location.reload();
-  }
+  // Proxy/nginx trả trang lỗi (không phải JSON) khi trung tâm sập -> gắn mã để báo lỗi rõ ràng thay vì "Có lỗi xảy ra".
+  const data = await r.json().catch(() => (r.status >= 500 ? { error: 'SERVER_UNAVAILABLE' } : {}));
+  // Chỉ coi là hết phiên khi Aggregator từ chối chính token (UNAUTHORIZED). 401 nghiệp vụ — vd cổng báo
+  // INVALID_QR / QR_EXPIRED — không được làm nhân viên bị đăng xuất giữa lúc xe đang chờ.
+  if (r.status === 401 && s && !keepSession && data?.error === 'UNAUTHORIZED') { session.set(null); location.reload(); }
 
   return { ok: r.ok, status: r.status, data };
 }
@@ -196,8 +195,27 @@ const MESSAGES = {
   RESERVATION_NOT_ACTIVE: 'Đặt chỗ không còn hiệu lực.',
   INVALID_CREDENTIALS: 'Sai tên đăng nhập hoặc mật khẩu.',
   PARKING_EXISTS: 'Mã bãi đã tồn tại.',
+  INVALID_PARKING_ID: 'Mã bãi 1–8 ký tự, chỉ chữ in hoa và số.',
+  INVALID_NAME: 'Nhập tên bãi.',
+  INVALID_API_URL: 'Địa chỉ máy chủ phải bắt đầu bằng http:// hoặc https://.',
+  INVALID_COORDS: 'Toạ độ không hợp lệ (vĩ độ -90…90, kinh độ -180…180).',
+  PARKING_ONLINE: 'Bãi đang hoạt động, không gỡ được. Chỉ gỡ được bãi đang mất kết nối.',
+  PARKING_NOT_FOUND: 'Không tìm thấy bãi.',
   NETWORK: 'Không kết nối được máy chủ.',
+  SERVER_UNAVAILABLE: 'Máy chủ trung tâm đang mất kết nối. Hệ thống sẽ hoạt động lại khi kết nối được, vui lòng thử lại sau ít phút.',
   PLATE_ALREADY_INSIDE: 'Biển số này đang có xe gửi trong bãi.',
+  PLATE_ALREADY_BOOKED: 'Biển số này đã giữ một chỗ khác trong khung giờ này.',
+  // PD-04 lệnh quản trị gửi tới nhiều bãi
+  INVALID_PRICING: 'Bảng giá không hợp lệ.',
+  INVALID_FLOOR: 'Tầng không hợp lệ (1–100).',
+  INVALID_PLATES: 'Danh sách biển số không hợp lệ.',
+  INVALID_PAYLOAD: 'Dữ liệu lệnh không hợp lệ.',
+  INVALID_ZONE: 'Vùng không hợp lệ.',
+  INVALID_TARGETS: 'Không có bãi nào trong vùng đã chọn.',
+  ADMIN_COMMAND_EXPIRED: 'Lệnh đã quá hạn 10 phút trước khi bãi nhận được.',
+  ADMIN_SLOT_CAS_CONFLICT: 'Ô vừa thay đổi trạng thái cùng lúc, bãi chưa áp dụng được. Thử gửi lại.',
+  BROADCAST_UNAVAILABLE: 'Kênh phát lệnh quản trị đang tắt hoặc mất kết nối.',
+  PLATE_BANNED: 'Biển số này đang bị cấm gửi xe.',
   PLATE_TOO_SHORT: 'Nhập ít nhất 3 ký tự biển số.',
   TOO_MANY_ATTEMPTS: 'Thử sai quá nhiều lần. Vui lòng đợi 15 phút.',
   USERNAME_TAKEN: 'Tên đăng nhập đã có người dùng.',
@@ -225,7 +243,42 @@ const MESSAGES = {
   NOT_INSIDE: 'Xe không có trong bãi.',
   INVALID_PLATE: 'Biển số không hợp lệ (vd 30A-123.45).',
 };
-export const message = (data) => MESSAGES[data?.error] ?? data?.error ?? 'Có lỗi xảy ra.';
+export const message = (data) => {
+  if (data?.error === 'PLATE_ALREADY_BOOKED' && data.slotCode) return `Biển số này đã giữ ô ${data.slotCode} trong khung giờ này. Huỷ vé đó ở "Đặt chỗ của tôi" nếu muốn đổi ô.`;
+  if (data?.error === 'PLATE_ALREADY_INSIDE' && data.slotCode) return `Biển số này đang có xe gửi ở ô ${data.slotCode}.`;
+  return MESSAGES[data?.error] ?? data?.error ?? 'Có lỗi xảy ra.';
+};
+
+// "Xe của tôi": các biển số đã dùng gần đây, lưu trên máy này theo từng tài khoản (tiện ích, không phải dữ liệu chính).
+const vehiclesKey = () => `parking.vehicles.${session.get()?.user?.id ?? 'guest'}`;
+export const vehicles = {
+  list() { try { return JSON.parse(localStorage.getItem(vehiclesKey())) ?? []; } catch { return []; } },
+  remember(plate) {
+    const p = formatPlate(String(plate).toUpperCase().replace(/[^0-9A-Z]/g, ''));
+    try { localStorage.setItem(vehiclesKey(), JSON.stringify([p, ...vehicles.list().filter((x) => x !== p)].slice(0, 5))); } catch { /* bỏ qua */ }
+  },
+  forget(plate) { try { localStorage.setItem(vehiclesKey(), JSON.stringify(vehicles.list().filter((x) => x !== plate))); } catch { /* bỏ qua */ } },
+};
+
+// Ước tính phí theo bảng giá của bãi — cùng công thức với parking-node/src/pricing.js (chỉ để khách tham khảo khi đặt).
+export function estimateFee(rule, minutes, start = new Date()) {
+  if (!rule || minutes < 5) return 0;
+  const block = (m) => {
+    if (m <= 0) return 0;
+    const fee = rule.firstBlockFee + Math.max(0, Math.ceil((m - rule.firstBlockMin) / 60)) * rule.nextHourFee;
+    return rule.maxDayFee == null ? fee : Math.min(fee, rule.maxDayFee);
+  };
+  const days = Math.floor(minutes / 1440);
+  const from = new Date(start); const to = new Date(from.getTime() + minutes * 60000);
+  let nights = 0;   // số đêm 22:00–06:00 (giờ VN) mà khung giờ chạm vào
+  const VN = 7 * 3600_000;
+  for (let d = Math.floor((from.getTime() + VN) / 86400_000) - 1; ; d++) {
+    const s = d * 86400_000 + 22 * 3600_000 - VN;
+    if (s >= to.getTime()) break;
+    if (s + 8 * 3600_000 > from.getTime()) nights++;
+  }
+  return days * block(1440) + block(minutes % 1440) + nights * (rule.overnightFee ?? 0);
+}
 
 export const STATUS_LABEL = { AVAILABLE: 'Trống', RESERVED: 'Đã đặt', OCCUPIED: 'Có xe', MAINTENANCE: 'Bảo trì', DEGRADED: 'Suy giảm', ONLINE: 'Hoạt động', OFFLINE: 'Ngoại tuyến' };
 export const RESERVATION_LABEL = { ACTIVE: 'Đang hiệu lực', USED: 'Đã vào bãi', DONE: 'Hoàn tất', CANCELLED: 'Đã huỷ', EXPIRED: 'Hết hạn' };

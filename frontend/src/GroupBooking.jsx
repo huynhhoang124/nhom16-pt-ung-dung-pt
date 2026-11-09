@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, message, newKey } from './api.js';
-import { Icon, Plate } from './ui.jsx';
+import { api, message, newKey, useLive } from './api.js';
+import { Icon, Plate, TYPE_NAME } from './ui.jsx';
 
 // Trạng thái từng bước của saga: [nhãn, class của dòng, class của chip, biểu tượng]
 const STEP = {
@@ -21,7 +21,17 @@ export default function GroupBooking({ onDone }) {
   const [saga, setSaga] = useState(null);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [slotsBy, setSlotsBy] = useState({});   // { A: [slot...] } — ô của từng bãi để chọn, không bắt gõ mã
   useEffect(() => { api('/api/parkings').then((r) => r.ok && setParkings(r.data)); }, []);
+  const lots = [...new Set(items.map((x) => x.parkingId))].join(',');
+  useEffect(() => {
+    lots.split(',').filter((id) => id && !slotsBy[id]).forEach((id) =>
+      api(`/api/parkings/${id}`).then((r) => setSlotsBy((m) => ({ ...m, [id]: r.ok ? r.data.slots.filter((s) => s.status !== 'HIDDEN') : [] }))));
+  }, [lots]);
+  useLive(['SLOT_UPDATED'], () => {   // ô vừa có người đặt thì danh sách cập nhật theo
+    lots.split(',').filter(Boolean).forEach((id) =>
+      api(`/api/parkings/${id}`).then((r) => r.ok && setSlotsBy((m) => ({ ...m, [id]: r.data.slots.filter((s) => s.status !== 'HIDDEN') }))));
+  }, 800);
   useEffect(() => {
     if (!saga || ['COMPLETED', 'FAILED'].includes(saga.status)) return undefined;
     const timer = setInterval(() => api(`/api/group-reservations/${saga.id}`).then((r) => {
@@ -30,7 +40,14 @@ export default function GroupBooking({ onDone }) {
     return () => clearInterval(timer);
   }, [saga?.id, saga?.status]);
 
-  const set = (i, k, v) => { setItems(items.map((x, j) => (j === i ? { ...x, [k]: k === 'slotCode' ? v.toUpperCase() : v } : x))); setKey(newKey()); };
+  // Đổi bãi thì bỏ ô đã chọn (mã ô thuộc bãi cũ).
+  const set = (i, k, v) => { setItems(items.map((x, j) => (j === i ? { ...x, [k]: v, ...(k === 'parkingId' && { slotCode: '' }) } : x))); setKey(newKey()); };
+  // Ô chọn được cho dòng i: còn trống và chưa bị dòng khác cùng bãi chọn.
+  const options = (i) => {
+    const x = items[i];
+    const taken = new Set(items.filter((y, j) => j !== i && y.parkingId === x.parkingId).map((y) => y.slotCode));
+    return (slotsBy[x.parkingId] ?? []).filter((s) => s.status === 'AVAILABLE' && !taken.has(s.slotCode));
+  };
 
   async function submit(e) {
     e.preventDefault();
@@ -52,7 +69,21 @@ export default function GroupBooking({ onDone }) {
           <select value={x.parkingId} onChange={(e) => set(i, 'parkingId', e.target.value)} aria-label={`Bãi của xe ${i + 1}`}>
             {parkings.map((p) => <option key={p.parkingId} value={p.parkingId}>{p.name}</option>)}
           </select>
-          <input className="mono" placeholder="Slot, vd A05" value={x.slotCode} onChange={(e) => set(i, 'slotCode', e.target.value)} aria-label={`Slot của xe ${i + 1}`} required />
+          {(() => {
+            const opts = options(i);
+            const loading = !slotsBy[x.parkingId];
+            const byType = Object.entries(opts.reduce((m, s) => ({ ...m, [s.type]: [...(m[s.type] ?? []), s] }), {}));
+            return (
+              <select className="mono" value={x.slotCode} onChange={(e) => set(i, 'slotCode', e.target.value)} aria-label={`Ô của xe ${i + 1}`} required disabled={loading}>
+                <option value="">{loading ? 'Đang tải…' : opts.length ? 'Chọn ô trống' : 'Hết ô trống'}</option>
+                {byType.map(([t, list]) => (
+                  <optgroup key={t} label={TYPE_NAME[t] ?? t}>
+                    {list.map((s) => <option key={s.slotCode} value={s.slotCode}>{s.slotCode}{s.floor != null ? ` · tầng ${s.floor}` : ''}</option>)}
+                  </optgroup>
+                ))}
+              </select>
+            );
+          })()}
           <input className="mono" placeholder="Biển số" value={x.licensePlate} onChange={(e) => set(i, 'licensePlate', e.target.value)} aria-label={`Biển số xe ${i + 1}`} required />
         </div>
       ))}
