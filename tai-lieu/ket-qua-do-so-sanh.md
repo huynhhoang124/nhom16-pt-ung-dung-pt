@@ -172,6 +172,10 @@ Theo yêu cầu chốt 10 slot cho mọi bãi, gate TC80 dùng A/B/C tổng 30 s
 
 Bộ dữ liệu 130 slot được giữ riêng để chạy lại các bảng lịch sử. Trên bộ này, hai lượt 6a72da9 đạt p95 414 và 428,55 ms. Mỗi bảng cần đọc cùng số slot ghi trong cấu hình tương ứng. [Lượt 414 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42595605931) · [Lượt 428,55 ms](https://github.com/huynhhoang124/nhom16-pt-ung-dung-pt/actions/runs/42595646824).
 
+Ba lượt đầu trên 30 slot ở commit `8205351` đo p95 đặt 270, 316 và 383 ms. Cấu hình 10 slot chưa đủ để mọi lượt qua ngưỡng.
+
+Bản tiếp theo gộp chính sách biển số/tầng vào câu giữ slot sau khi đã lấy khóa quản trị. Với primary tĩnh, consumer gom tối đa 16 lệnh theo thứ tự nhận trong cùng giao dịch, chờ COMMIT rồi mới ACK. Nếu lô lỗi, toàn bộ lô rollback và từng tin đi lại qua luồng xử lý retry/DLQ. Khi dùng pool kiểm epoch qua etcd, consumer tiếp tục giao dịch từng lệnh.
+
 ## Cách chạy lại
 
 Chạy trên stack thử, không chạy cùng e2e/chaos khác. Script **không** đổi cấu hình theo tên; người chạy dựng đúng stack trước và ghi Compose/env, revision, thời lượng, số bãi/Aggregator, chế độ lệnh và trạng thái replica cùng ảnh Grafana. Hai vế chỉ đổi một biến; giữ 300 VU (240 đọc + 60 đặt), thời lượng, dữ liệu seed và ngưỡng giống nhau. Đồng bộ đồng hồ Windows/WSL/Docker trước khi đo (xem `ket-qua-test-tai.md`).

@@ -7,7 +7,8 @@ const { requestId } = require('./log');
 const hlc = require('./hlc');
 const { context, propagation } = require('@opentelemetry/api');
 const { fenceIn } = require('./fencing');
-const { guardAdminIn, checkAdminIn, ADMIN_GATE_SQL } = require('./admin-guards');
+const { guardAdminIn, ADMIN_POLICY_SQL, adminDenial, ADMIN_GATE_SQL } = require('./admin-guards');
+const { normalizePlate } = require('./plate');
 
 // Dừng giao dịch với kết quả nghiệp vụ (409, 404...) thay vì lỗi hệ thống.
 class Abort {
@@ -120,8 +121,6 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     return status ? { ...out, replySlot: { slotCode, status, version: Number(version) } } : out;
   };
   return business(c, async () => {
-    const denied = await checkAdminIn(c, { slotCode, licensePlate });
-    if (denied) return replayOr(denied);
     // An immediate reservation uses the transaction clock in INSERT, avoiding a separate round trip.
     const now = startTime ? (await c.query('SELECT now() AS now')).rows[0].now : null;
     const start = startTime ? (new Date(startTime) > now ? new Date(startTime) : now) : null;
@@ -131,20 +130,26 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     const hold = instant
       ? `UPDATE parking_slots SET status='RESERVED',version=version+1,updated_at=now()
          WHERE slot_code=$3 AND status='AVAILABLE'
-           AND NOT EXISTS (SELECT 1 FROM reservations WHERE request_id=$1) RETURNING id,version`
+           AND NOT EXISTS (SELECT 1 FROM reservations WHERE request_id=$1)
+           AND NOT EXISTS (SELECT 1 FROM policy WHERE banned OR locked) RETURNING id,version`
       : `SELECT id,version FROM parking_slots WHERE slot_code=$3 AND status NOT IN ('MAINTENANCE','HIDDEN')
-         AND NOT EXISTS (SELECT 1 FROM reservations WHERE request_id=$1)`;
+         AND NOT EXISTS (SELECT 1 FROM reservations WHERE request_id=$1)
+         AND NOT EXISTS (SELECT 1 FROM policy WHERE banned OR locked)`;
     const r = await c.query(
-      `WITH held AS (${hold})
-       INSERT INTO reservations(request_id,user_id,slot_id,license_plate,start_time,end_time,expire_time,status)
-       SELECT $1,$2,held.id,$4,COALESCE($5::timestamptz,now()),
-         COALESCE($5::timestamptz,now()) + make_interval(mins => $6),
-         COALESCE($5::timestamptz,now()) + make_interval(mins => $7),$8 FROM held
-       RETURNING *, (SELECT version FROM held) AS slot_version`,
-      [requestId,userId,slotCode,licensePlate,start,durationMinutes,minutes,input.sagaId ? 'PENDING_SAGA' : 'ACTIVE']);
+      `WITH policy AS MATERIALIZED (${ADMIN_POLICY_SQL.replace('$1', '$9').replace('$2', '$3')}),
+       held AS (${hold}), inserted AS (
+         INSERT INTO reservations(request_id,user_id,slot_id,license_plate,start_time,end_time,expire_time,status)
+         SELECT $1,$2,held.id,$4,COALESCE($5::timestamptz,now()),
+           COALESCE($5::timestamptz,now()) + make_interval(mins => $6),
+           COALESCE($5::timestamptz,now()) + make_interval(mins => $7),$8 FROM held
+         RETURNING *, (SELECT version FROM held) AS slot_version
+       )
+       SELECT inserted.*, policy.banned, policy.locked FROM policy LEFT JOIN inserted ON true`,
+      [requestId,userId,slotCode,licensePlate,start,durationMinutes,minutes,input.sagaId ? 'PENDING_SAGA' : 'ACTIVE',
+        licensePlate ? normalizePlate(licensePlate) : null]);
     // No row held means no writes to roll back. Still check for an idempotent winner.
-    if (!r.rowCount) return replayOr({ code: 409, body: { error: 'SLOT_TAKEN' } });
-    const { slot_version: version, ...reservation } = r.rows[0];
+    if (!r.rows[0].id) return replayOr(adminDenial(r.rows[0]) ?? { code: 409, body: { error: 'SLOT_TAKEN' } });
+    const { slot_version: version, banned, locked, ...reservation } = r.rows[0];
     if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', version, licensePlate, { userId, reservationId: reservation.id });
     return { code: 201, body: { ...reservation, slot_code: slotCode },
       ...(instant && { replySlot: { slotCode, status: 'RESERVED', version: Number(version) } }) };

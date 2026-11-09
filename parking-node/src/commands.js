@@ -119,7 +119,7 @@ async function epochError(pool, c) {
 }
 
 function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecret = `${internalKey}:qr:${parkingId}`, now = Date.now, adminEnabled = true, beforeDispatch }) {
-  return async (m) => {
+  const processCommand = async (m, transaction = null) => {
     const adminCommand = /^cmd\.(zone-|all\.)/.test(m.fields?.routingKey ?? '');
     let env;
     try {
@@ -134,7 +134,7 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
       kind: SpanKind.CONSUMER,
       attributes: { 'messaging.system': 'rabbitmq', 'messaging.destination.name': m.fields?.routingKey ?? `cmd.${parkingId}` },
     }, parent, async (span) => {
-      try { return await processEnvelope(m, env, adminCommand); }
+      try { return await processEnvelope(m, env, adminCommand, transaction); }
       catch (error) {
         span.recordException(error);
         span.setStatus({ code: SpanStatusCode.ERROR, message: error.message });
@@ -143,16 +143,36 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
     });
   };
 
-  async function processEnvelope(m, env, adminCommand) {
+  // A static primary can commit a FIFO batch together. Epoch-aware deployments keep per-command fencing.
+  if (typeof pool.checkEpoch !== 'function') {
+    processCommand.batch = async (messages) => {
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const results = [];
+        for (const message of messages) results.push(await processCommand(message, client));
+        await client.query('COMMIT');
+        return results;
+      } catch (error) {
+        await client.query('ROLLBACK').catch(() => {});
+        throw error;
+      } finally {
+        client.release();
+      }
+    };
+  }
+  return processCommand;
+
+  async function processEnvelope(m, env, adminCommand, transaction) {
     // Cập nhật HLC ngay khi nhận lệnh, trước khi phát sinh sự kiện mới.
     if (env.hlc !== undefined) {
       hlc.update(env.hlc);
     }
 
     const hash = createHash('sha256').update(canonical({ type: env.type, parkingId, actor: env.actor, payload: env.payload })).digest('hex');
-    const c = await pool.connect();
+    const c = transaction ?? await pool.connect();
     try {
-      await c.query('BEGIN');
+      if (!transaction) await c.query('BEGIN');
       const stale = await epochError(pool, c);
       if (stale) { await c.query('ROLLBACK'); return { ...stale, messageId: env.messageId }; }
       // Token và ghi nghiệp vụ nằm trong cùng giao dịch inbox.
@@ -160,6 +180,7 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
       let out;
       if (!fence.ok) {
         // Không lưu lỗi token cũ vào inbox: leader mới phải được gửi lại cùng messageId.
+        if (transaction) throw new Error('FENCING_REQUIRES_INDIVIDUAL_TRANSACTION');
         await c.query('ROLLBACK');
         return { code: fence.code, body: { error: fence.error }, messageId: env.messageId };
       }
@@ -207,12 +228,12 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
       // Kiểm lại trước COMMIT: giao dịch đã qua lần kiểm đầu rồi bị chậm thì không được commit vào primary cũ sau failover
       const late = await epochError(pool, c);
       if (late) { await c.query('ROLLBACK'); return { ...late, messageId: env.messageId }; }
-      await c.query('COMMIT');
+      if (!transaction) await c.query('COMMIT');
       return { ...out, messageId: env.messageId, duplicate: !inserted.rowCount };
     } catch (e) {
-      await c.query('ROLLBACK').catch(() => {});
+      if (!transaction) await c.query('ROLLBACK').catch(() => {});
       throw e;
-    } finally { c.release(); }
+    } finally { if (!transaction) c.release(); }
   }
 }
 
@@ -245,7 +266,7 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
       let s;
       try {
         const conn = await connectAny();
-        s = { conn, dead: false, tail: Promise.resolve() }; state = s;
+        s = { conn, dead: false, tail: Promise.resolve(), pending: [], draining: false }; state = s;
         const closed = new Promise((r) => { s.closed = r; });
         conn.on('error', () => end(s)); conn.on('close', () => end(s));
         if (stopped) { end(s); break; }
@@ -278,8 +299,7 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
             if (!m) { end(s); return; }
             if (m.fields?.redelivered) require('./metrics').incRedelivered();   // PD-25
             const receivedAt = performance.now();
-            // SAC chooses a consumer, NOT a serial async callback execution order.
-            s.tail = s.tail.then(async () => {
+            const processOne = async () => {
               if (s.dead || stopped) return;
               try {
                 const metric = require('./metrics').consumerStage;
@@ -299,7 +319,45 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
                 else if (error instanceof InvalidCommand) ch.nack(m, false, false); // durable DLX target; no hot requeue.
                 else end(s); // Leave unacked, close/reconnect with backoff after rollback.
               }
-            }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
+            };
+            // SAC chooses a consumer, NOT a serial async callback execution order.
+            if (processCommand.batch) {
+              s.pending.push({ m, ch, receivedAt, processOne });
+              if (s.draining) return;
+              s.draining = true;
+              s.tail = s.tail.then(async () => {
+                await new Promise((resolve) => setTimeout(resolve, 2));
+                while (s.pending.length && !s.dead && !stopped) {
+                  const batch = s.pending.splice(0, 16);
+                  const metric = require('./metrics').consumerStage;
+                  const finish = batch.map((entry) => {
+                    metric.observe({ stage: 'prefetch_wait' }, (performance.now() - entry.receivedAt) / 1000);
+                    return metric.startTimer({ stage: 'processing' });
+                  });
+                  let results;
+                  try {
+                    results = await processCommand.batch(batch.map((entry) => entry.m));
+                  } catch (error) {
+                    // The whole batch rolled back. Apply the established retry/DLQ rules per message.
+                    log.error('command batch rolled back', { parkingId, error: error.message });
+                  } finally {
+                    finish.forEach((done) => done());
+                  }
+                  if (!results) {
+                    for (const entry of batch) await entry.processOne();
+                    continue;
+                  }
+                  for (let index = 0; index < batch.length; index++) {
+                    await afterCommit(results[index]);
+                    if (!s.dead) batch[index].ch.ack(batch[index].m);
+                  }
+                }
+                s.draining = false;
+              }).catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
+            } else {
+              s.tail = s.tail.then(processOne)
+                .catch((error) => { log.error('command consumer failed', { error: error.message }); end(s); });
+            }
           }, { noAck: false });
           entry.tag = consumerTag;
           log.info?.('command consumer ready', { parkingId, queue, consumerTag, prefetch });

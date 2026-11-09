@@ -198,6 +198,78 @@ test('consumer serializes handlers despite prefetch 20, ack follows commit hook,
   assert.equal(b.connections.length, 1); assert.equal(b.connections[0].closed, true);
 });
 
+test('static-primary batches keep FIFO effects and roll back the complete batch on error', async (t) => {
+  const pool = await makePool('A', 5);
+  t.after(() => pool.db.close());
+  const process = makeCommandProcessor({ pool, parkingId: 'A', internalKey: KEY });
+  const first = message('batch-first');
+  const conflict = message('batch-conflict');
+  const results = await process.batch([first, conflict]);
+  assert.deepEqual(results.map((result) => result.code), [201, 409]);
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM reservations')).n, 1);
+  assert.equal((await one(pool, 'SELECT count(*)::int AS n FROM command_reply_outbox')).n, 2);
+
+  const second = message('batch-rollback', 'reserve', { slotCode: 'A02', licensePlate: '30A-456.78' });
+  const invalid = message('batch-invalid');
+  invalid.properties.headers['x-command-signature'] = 'bad';
+  await assert.rejects(process.batch([second, invalid]), InvalidCommand);
+  assert.equal((await one(pool, "SELECT count(*)::int AS n FROM inbox_messages WHERE message_id='u42:batch-rollback'")).n, 0);
+  assert.equal((await one(pool, "SELECT status FROM parking_slots WHERE slot_code='A02'")).status, 'AVAILABLE');
+  assert.equal((await process(second)).code, 201);
+});
+
+test('consumer acknowledges a FIFO batch only after its shared commit', async () => {
+  const broker = fakeBroker();
+  let release;
+  const blocked = new Promise((resolve) => { release = resolve; });
+  const seen = [];
+  const process = async (message) => message;
+  process.batch = async (messages) => {
+    seen.push(...messages.map((message) => message.id));
+    await blocked;
+    return messages;
+  };
+  const consumer = startCommandConsumer({ url: 'amqp://test', parkingId: 'A', connect: broker.connect,
+    log: quiet, processCommand: process, afterCommit() {} });
+  await until(() => broker.connections[0]?.ch.deliver);
+  const channel = broker.connections[0].ch;
+  channel.deliver({ id: 1 });
+  channel.deliver({ id: 2 });
+  try {
+    await until(() => seen.length === 2);
+    assert.deepEqual(seen, [1, 2]);
+    assert.equal(channel.acks.length, 0);
+  } finally {
+    release();
+    await until(() => channel.acks.length === 2);
+    await consumer.stop();
+  }
+});
+
+test('a rolled-back batch falls back to individual retry and DLQ decisions', async () => {
+  const broker = fakeBroker();
+  const handled = [];
+  const process = async (message) => {
+    handled.push(message.id);
+    if (message.id === 2) throw new InvalidCommand('bad signature');
+    return message;
+  };
+  process.batch = async () => { throw new Error('batch rolled back'); };
+  const consumer = startCommandConsumer({ url: 'amqp://test', parkingId: 'A', connect: broker.connect,
+    log: quiet, processCommand: process, afterCommit() {} });
+  await until(() => broker.connections[0]?.ch.deliver);
+  const channel = broker.connections[0].ch;
+  channel.deliver({ id: 1 });
+  channel.deliver({ id: 2 });
+  try {
+    await until(() => channel.nacks.length === 1);
+    assert.deepEqual(handled, [1, 2]);
+    assert.equal(channel.acks.length, 1);
+  } finally {
+    await consumer.stop();
+  }
+});
+
 test('temporary rollback reconnects with backoff, permanent envelope error dead-letters without hot requeue', async () => {
   const b = fakeBroker(); let attempt = 0;
   const consumer = startCommandConsumer({ url: 'amqp://test', parkingId: 'A', connect: b.connect, retryMs: 40, log: quiet,
