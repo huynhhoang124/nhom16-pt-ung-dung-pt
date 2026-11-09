@@ -187,7 +187,7 @@ function makeCommandProcessor({ pool, parkingId, internalKey, reservationMinutes
       let out;
       if (!fence.ok) {
         // Không lưu lỗi token cũ vào inbox: leader mới phải được gửi lại cùng messageId.
-        if (transaction) throw new Error('FENCING_REQUIRES_INDIVIDUAL_TRANSACTION');
+        if (transaction) throw Object.assign(new Error('FENCING_REQUIRES_INDIVIDUAL_TRANSACTION'), { individual: true });
         await c.query('ROLLBACK');
         return { code: fence.code, body: { error: fence.error }, messageId: env.messageId };
       }
@@ -355,7 +355,8 @@ function startCommandConsumer({ url, pool, parkingId, internalKey, log = console
                   }
                   if (!results) {
                     for (let index = 0; index < batch.length; index++) {
-                      await batch[index].processOne(index === batchFailure?.commandBatchIndex ? batchFailure : undefined);
+                      // A message needing its own transaction is reprocessed alone, not retried.
+                      await batch[index].processOne(index === batchFailure?.commandBatchIndex && !batchFailure.individual ? batchFailure : undefined);
                     }
                     continue;
                   }
