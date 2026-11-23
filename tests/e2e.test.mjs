@@ -80,6 +80,13 @@ test.after(async () => { for (const f of undo) await f(); });
 let tok;
 test.before(async () => {
   await until(`${PARKING_IDS.length} bãi ONLINE`, async () => (await Promise.all(PARKING_IDS.map(statusOf))).every((s) => s === 'ONLINE'), 120_000);
+  // Aggregator khởi động trước RabbitMQ thì consumer và kênh lệnh hẹn nối lại sau vài giây: bãi ONLINE (HTTP) chưa có
+  // nghĩa là đường sự kiện đã sẵn sàng.
+  await until('Aggregator đã nghe sự kiện slot', () => {
+    try {
+      return /^aggregator\.slot-updates\.\S+\s+[1-9]/m.test(compose('exec -T rabbitmq rabbitmqctl -q list_queues name consumers'));
+    } catch { return false; }   // broker còn đang khởi động
+  }, 90_000);
   tok = { user1: await login('user1'), user2: await login('user2'), staffA: await login('staff-a'), admin: await login('admin') };
 });
 
@@ -254,9 +261,13 @@ test('TC27 hai lần trả tiền song song khác key cho cùng một phiên (Po
   assert.equal((await node('A', `/api/slots/${slot}/exit`, { method: 'POST', body: {} })).status, 200);   // đã trả: cho ra
 });
 
-test('TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> RabbitMQ -> Aggregator -> Socket.IO', T, async () => {
+test('TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> RabbitMQ -> Aggregator -> Socket.IO', T, async (t) => {
+  // Sự kiện của các test trước còn nằm trong outbox thì relay chưa nối broker: đối soát (5 s/lượt) sẽ đưa trạng thái
+  // cuối lên trước và sự kiện OCCUPIED đến sau bị bỏ vì version cũ. Chờ outbox về 0 rồi mới đo đường realtime.
+  await until('outbox bãi A đã gửi hết', () => sql('db-a', 'SELECT count(*) FROM parking_events WHERE published_at IS NULL') === '0', 30_000);
   const { slotCode: slot, version: v0 } = (await node('A', '/api/slots/available')).body[0];
   const socket = io(AGG, { transports: ['websocket'] });
+  t.after(() => socket.close());   // test hỏng giữa chừng mà socket còn mở thì tiến trình node --test không thoát
   const got = [];
   // chỉ đếm sự kiện mới hơn lúc bắt đầu: sự kiện của test trước trên cùng slot có thể đến muộn (giao nhận cuối cùng)
   socket.on('SLOT_UPDATED', (e) => e.slot === slot && e.version > v0 && got.push(e.status));
@@ -267,7 +278,6 @@ test('TC06 + TC07 nhân viên cho xe vào/ra; sự kiện đi qua outbox -> Rabb
   // Barrier gọi thẳng node (không qua Aggregator)
   assert.equal((await node('A', `/api/slots/${slot}/exit`, { method: 'POST', body: {} })).body.status, 'AVAILABLE');
   await until('nhận đủ 2 sự kiện realtime', () => got.length >= 2, 15_000);
-  socket.close();
   assert.deepEqual(got, ['OCCUPIED', 'AVAILABLE']);
   assert.equal((await agg(`/api/parkings/A/slots/${slot}/enter`, { method: 'POST', token: tok.staffA, body: {} })).status, 200);
   exitLater('A', slot);
