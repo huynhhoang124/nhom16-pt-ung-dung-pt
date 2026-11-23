@@ -234,6 +234,14 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
         // xe ra: lượt đặt kết thúc, phần khung giờ còn lại trả cho người khác
         await c.query(`UPDATE reservations SET status='DONE' WHERE id=$1 AND status='USED'`, [open.reservation_id]);
         session = { ...(await getSession(c, open.id)), breakdown: q.breakdown };
+        // Đã trả trên ứng dụng, quá hạn và thu thêm tiền mặt phần chênh ở cổng: ghi nhận doanh thu phần chênh
+        // (CAR_EXIT chỉ tính doanh thu khi cả phiên trả tiền mặt lúc ra).
+        if (q.due > 0 && open.paid_at) {
+          await emit(c, parkingId, 'PAYMENT_COMPLETED', slotCode, undefined, 0, null, {
+            event: 'PAYMENT_COMPLETED', sessionId: open.id, fee: q.due, total: Number(session.fee), paymentMethod: 'CASH',
+            occurredAt: session.exitedAt,
+          });
+        }
       }
     }
     const eventExtra = session?.id
@@ -326,7 +334,9 @@ async function payIn(c, { sessionId, method, paymentKey, userId, parkingId }) {
       await emit(c, parkingId, 'PAYMENT_COMPLETED', session.slotCode, undefined, 0, null, {
         event: 'PAYMENT_COMPLETED',
         sessionId,
-        fee: Number(session.fee),
+        // fee = số tiền thu lần này (doanh thu cộng thêm); trả phần chênh thì khác tổng phí của phiên (total).
+        fee: q.due,
+        total: Number(session.fee),
         occurredAt: session.paidAt,
       });
     }

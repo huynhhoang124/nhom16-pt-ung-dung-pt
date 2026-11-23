@@ -385,8 +385,15 @@ function makeRegistry({
     catch { return { parkingId: n.id, status: 'OFFLINE' }; }
   }));
 
-  // PT-01: nhiều bản Aggregator dùng chung DB điều phối -> mỗi vòng health check nạp bãi mới do bản khác thêm.
-  const sync = (rows) => rows.filter((r) => !nodes.has(r.parking_id)).map((r) => (add(r), r.parking_id));
+  // PT-01: nhiều bản Aggregator dùng chung DB điều phối -> mỗi vòng health check đồng bộ theo bảng parking_nodes:
+  // nạp bãi mới, cập nhật bãi bị sửa (PATCH) và bỏ bãi đã gỡ (DELETE) ở bản Aggregator khác. Trả về mã các bãi mới.
+  const sync = (rows) => {
+    const ids = new Set(rows.map((r) => r.parking_id));
+    for (const id of [...nodes.keys()]) if (!ids.has(id)) nodes.delete(id);
+    const fresh = rows.filter((r) => !nodes.has(r.parking_id)).map((r) => r.parking_id);
+    rows.forEach(add);
+    return fresh;
+  };
 
   const api = {
     nodes,
