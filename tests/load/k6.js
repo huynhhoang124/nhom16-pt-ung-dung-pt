@@ -20,6 +20,10 @@ const status503 = new Rate('response_503');
 const status504 = new Rate('response_504');
 const lookupDuration = new Trend('lookup_duration_ms', true);
 const reserveDuration = new Trend('reserve_duration_ms', true);
+// Tách kết quả cuối của lượt đặt: 201 là đã giữ ô, 409 là bị từ chối (trùng giờ, ô đã giữ, biển số đã giữ ô khác).
+const reserveCreated = new Counter('reserve_final_201');
+const reserveConflict = new Counter('reserve_final_409');
+const reserveCreatedDuration = new Trend('reserve_201_duration_ms', true);
 http.setResponseCallback(http.expectedStatuses(200, 201, 202, 409));
 
 export const options = {
@@ -110,10 +114,16 @@ export function reserve({ token, slots, runId }) {
   const auth = { headers: { ...json.headers, Authorization: `Bearer ${token}`, 'Idempotency-Key': key } };
   const url = `${BASE}/api/parkings/${encodeURIComponent(parkingId)}/reservations`;
   const started = Date.now();
-  const response = record(http.post(url, JSON.stringify({ slotCode, licensePlate: '30A-999.99' }), auth), 'reserve');
+  // Mỗi VU một biển số riêng: quy tắc một biển số không giữ hai ô trùng giờ (PLATE_ALREADY_BOOKED) không được
+  // biến bài đo thành đo đường bị từ chối. Biển dạng 30A-<VU 3 số>.<ITER 2 số>, hợp lệ với plate.js.
+  const plate = `30A-${String(__VU % 1000).padStart(3, '0')}.${String(__ITER % 100).padStart(2, '0')}`;
+  const response = record(http.post(url, JSON.stringify({ slotCode, licensePlate: plate }), auth), 'reserve');
   check(response, { 'đặt: 201/202/409': (r) => [201, 202, 409].includes(r.status) });
   const final = resolve(response, auth);
-  reserveDuration.add(Date.now() - started);
+  const elapsed = Date.now() - started;
+  reserveDuration.add(elapsed);
+  if (final.code === 201) { reserveCreated.add(1); reserveCreatedDuration.add(elapsed); }
+  if (final.code === 409) reserveConflict.add(1);
   check(final, { 'đặt có kết quả cuối 201/409': (r) => [201, 409].includes(r.code) });
   if (final.code === 201) {
     const id = final.result?.id;
@@ -138,6 +148,9 @@ export function handleSummary(data) {
     http: percentiles('http_req_duration'),
     lookup: percentiles('lookup_duration_ms'),
     reserve: percentiles('reserve_duration_ms'), // từ POST tới kết quả cuối, gồm thời gian poll khi 202
+    reserve_created: percentiles('reserve_201_duration_ms'),
+    reserve_final_201: values('reserve_final_201').count ?? 0,
+    reserve_final_409: values('reserve_final_409').count ?? 0,
     requests_per_second: values('http_reqs').rate ?? null,
     iterations_per_second: values('iterations').rate ?? null,
     response_503_rate: values('response_503').rate ?? null,
@@ -146,6 +159,7 @@ export function handleSummary(data) {
   };
   return { [__ENV.SUMMARY_PATH || '/results/summary.json']: JSON.stringify(report, null, 2),
     stdout: `${JSON.stringify({ configuration: report.configuration, lookup: report.lookup, reserve: report.reserve,
+      reserve_created: report.reserve_created, reserve_final_201: report.reserve_final_201, reserve_final_409: report.reserve_final_409,
       requests_per_second: report.requests_per_second, response_503_rate: report.response_503_rate,
       response_504_rate: report.response_504_rate }, null, 2)}\n` };
 }
