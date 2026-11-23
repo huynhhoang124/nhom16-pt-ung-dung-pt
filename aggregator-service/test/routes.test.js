@@ -295,8 +295,9 @@ test('UX-02 thống kê gom các bãi: bãi treo báo thiếu; STAFF chỉ thấ
   const { agg, tokens } = await system(t);
   await agg.call('/api/parkings/A/slots/A01/enter', { method: 'POST', token: tokens.admin, body: {} });
   await agg.call('/api/parkings/B/slots/B01/enter', { method: 'POST', token: tokens.admin, body: {} });
+  await agg.call('/api/parkings/B/slots/B01/exit', { method: 'POST', token: tokens.admin, body: { cash: true } });
   const all = await agg.call('/api/admin/stats', { token: tokens.admin });
-  assert.deepEqual([all.body.total.sessions, all.body.total.occupied, all.body.total.total], [2, 2, 6]);
+  assert.deepEqual([all.body.total.sessions, all.body.total.exited, all.body.total.occupied, all.body.total.total], [2, 1, 1, 6]);
   assert.deepEqual(all.body.unavailable, ['S']);
   const mine = await agg.call('/api/admin/stats', { token: tokens['staff-a'] });
   assert.deepEqual(mine.body.parkings.map((p) => p.parkingId), ['A']);

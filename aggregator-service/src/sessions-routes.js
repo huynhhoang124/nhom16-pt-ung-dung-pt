@@ -137,6 +137,7 @@ function mountSessions(app, {
       return res.json({
         total: {
           sessions: sum('sessions'),
+          exited,   // thẻ "lượt vào / lượt ra" của trang Thống kê đọc total.exited
           revenue: sum('revenue'),
           occupied: sum('occupied'),
           total: sum('total'),
