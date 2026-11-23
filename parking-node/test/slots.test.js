@@ -302,7 +302,7 @@ test('TC26 trả 2 lần cùng key: chỉ ghi nhận 1 lần, lần 2 trả lạ
 test('trả sớm rồi ở thêm: trong 15 phút ra bình thường; quá 15 phút mà phí tăng thì phải trả thêm phần chênh', async () => {
   const pool = await makePool();
   const { id, userId } = await parkedFor(pool, 150);                     // 2,5 giờ: 35.000 đ
-  const pay = (key) => s.pay(pool, { sessionId: id, method: 'ONLINE', paymentKey: `${userId}:${key}`, userId });
+  const pay = (key) => s.pay(pool, { sessionId: id, method: 'ONLINE', paymentKey: `${userId}:${key}`, userId, parkingId: 'A' });
   assert.equal((await pay('k1')).body.fee, 35000);
   // trả xong, 4 giờ sau mới ra (giả lập: lùi giờ vào và giờ trả 4 giờ) -> phí lên 75.000 đ, còn thiếu 40.000 đ
   await pool.query(`UPDATE parking_sessions SET entered_at = entered_at - interval '4 hours', paid_at = paid_at - interval '4 hours' WHERE id=$1`, [id]);
@@ -316,16 +316,21 @@ test('trả sớm rồi ở thêm: trong 15 phút ra bình thường; quá 15 ph
   assert.deepEqual(await pay('k3'), { code: 409, body: { error: 'ALREADY_PAID' } });
   const exit = await exitA01(pool);
   assert.deepEqual([exit.code, exit.body.session.fee], [200, 75000]);
+  // doanh thu (stats-service cộng theo PAYMENT_COMPLETED.fee): 35.000 + 40.000, không cộng trùng tổng 75.000
+  assert.deepEqual(await paidEvents(pool), [[35000, 35000], [40000, 75000]]);
 });
 
 test('trả sớm, quá 15 phút: nhân viên thu tiền mặt phần chênh thì ghi đúng tổng phí', async () => {
   const pool = await makePool();
   const { id, userId } = await parkedFor(pool, 150);
-  await s.pay(pool, { sessionId: id, method: 'ONLINE', paymentKey: `${userId}:k1`, userId });
+  await s.pay(pool, { sessionId: id, method: 'ONLINE', paymentKey: `${userId}:k1`, userId, parkingId: 'A' });
   await pool.query(`UPDATE parking_sessions SET entered_at = entered_at - interval '4 hours', paid_at = paid_at - interval '4 hours' WHERE id=$1`, [id]);
   const exit = await exitA01(pool, { cash: true });
   assert.deepEqual([exit.code, exit.body.session.fee], [200, 75000]);
+  assert.deepEqual(await paidEvents(pool), [[35000, 35000], [40000, 75000]]);   // phần chênh tiền mặt cũng là doanh thu
 });
+const paidEvents = async (pool) => (await pool.query(
+  `SELECT payload FROM parking_events WHERE event_type='PAYMENT_COMPLETED' ORDER BY id`)).rows.map((r) => [r.payload.fee, r.payload.total]);
 
 test('key thanh toán đã dùng cho phiên khác: 422, không trả lại kết quả của phiên kia, phiên này vẫn chưa trả', async () => {
   const pool = await makePool();

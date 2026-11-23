@@ -424,3 +424,31 @@ main.dense th, main.dense td { padding: var(--space-2) var(--space-3); }
 .split > *, .duo > * { min-width: 0; }
 .stack { display: flex; flex-direction: column; gap: var(--space-4); }
 @container app (max-width: 900px) { .split, .duo { grid-template-columns: 1fr; } }
+
+/* ───────── 24. NHÂN VIÊN: thu tiền, sửa ô, cổng — MỚI ───────── */
+.charge { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-4); border: 2px solid var(--lane); background: var(--warn-soft); }
+.charge-amount { font-family: var(--font-mono); font-weight: 700; font-size: 40px; line-height: 1.05; }
+.charge-amount span { font-family: var(--font-body); font-size: var(--fs-md); font-weight: 600; color: var(--muted); }
+.charge-lines { list-style: none; margin: 0; padding: 0; font-size: var(--fs-sm); }
+.charge-lines li { display: flex; justify-content: space-between; gap: var(--space-3); padding: 2px 0; border-bottom: 1px dashed var(--line); }
+.charge-lines b { font-family: var(--font-mono); }
+.charge-actions { display: grid; grid-template-columns: auto 1fr; gap: var(--space-2); margin-top: var(--space-1); }
+.check { display: flex; align-items: center; gap: var(--space-2); font-weight: 600; font-size: var(--fs-sm); cursor: pointer; }
+.check input { min-height: 0; width: 20px; height: 20px; accent-color: var(--primary); }
+.slot-edit { border-top: 1px solid var(--line); padding-top: var(--space-3); }
+.slot-edit summary { cursor: pointer; font-weight: 600; font-size: var(--fs-sm); color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.slot-edit summary:hover { color: var(--text); }
+.danger.solid { background: var(--bad); color: #fff; border-color: var(--bad); }
+.danger.solid:hover { background: color-mix(in srgb, var(--bad) 85%, #000); }
+.link.danger-link { color: var(--bad); }
+th .th-hint { font-family: var(--font-body); font-size: 11px; font-weight: 500; letter-spacing: 0; text-transform: none; color: var(--muted); }
+.gate-log { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line-strong); background: var(--card); }
+.gate-log li { display: grid; grid-template-columns: 72px 92px auto minmax(0, 1fr); gap: var(--space-3); align-items: center; padding: var(--space-2) var(--space-3); border-bottom: 1px solid var(--line); }
+.gate-log li:last-child { border-bottom: 0; }
+/* Chế độ cổng: ẩn thanh điều hướng để nhân viên không bấm nhầm sang trang khác. */
+body.kiosk .bar, body.kiosk .site-foot { display: none; }
+body.kiosk main { max-width: 760px; }
+@container app (max-width: 640px) {
+  .gate-log li { grid-template-columns: auto auto minmax(0, 1fr); }
+  .gate-log li > :last-child { grid-column: 1 / -1; }
+}

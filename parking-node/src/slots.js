@@ -125,28 +125,27 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     const now = startTime ? (await c.query('SELECT now() AS now')).rows[0].now : null;
     const start = startTime ? (new Date(startTime) > now ? new Date(startTime) : now) : null;
     const instant = !startTime || start - now <= minutes * 60_000;
-    // Một biển số không giữ hai ô khác nhau trùng giờ trong cùng bãi (bấm nhầm / giữ chỗ hộ). Biển số đã chuẩn hoá ở
-    // app.js; đặt ngay (start null) thì lấy now() của giao dịch. Cùng ô thì để ràng buộc khung giờ báo TIME_CONFLICT.
-    const dup = (await c.query(
-      `SELECT s.slot_code FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
-       WHERE r.status IN ('ACTIVE','PENDING_SAGA') AND r.license_plate = $1 AND s.slot_code <> $4
-         AND r.request_id <> $5
-         AND r.start_time < COALESCE($2::timestamptz, now()) + make_interval(mins => $3)
-         AND r.end_time > COALESCE($2::timestamptz, now())
-       LIMIT 1`, [licensePlate, start, durationMinutes, slotCode, requestId])).rows[0];
-    if (dup) throw new Abort(409, { error: 'PLATE_ALREADY_BOOKED', slotCode: dup.slot_code });
     // compare-and-swap nguyên tử: chỉ một request thấy 1 dòng bị ảnh hưởng
     // The held row feeds the INSERT: a losing CAS creates no reservation, and a failed INSERT rolls back the CAS.
     const hold = instant
       ? `UPDATE parking_slots SET status='RESERVED',version=version+1,updated_at=now()
          WHERE slot_code=$3 AND status='AVAILABLE'
            AND NOT EXISTS (SELECT 1 FROM reservations WHERE request_id=$1)
-           AND NOT EXISTS (SELECT 1 FROM policy WHERE banned OR locked) RETURNING id,version`
+           AND NOT EXISTS (SELECT 1 FROM policy WHERE banned OR locked)
+           AND NOT EXISTS (SELECT 1 FROM dup) RETURNING id,version`
       : `SELECT id,version FROM parking_slots WHERE slot_code=$3 AND status NOT IN ('MAINTENANCE','HIDDEN')
          AND NOT EXISTS (SELECT 1 FROM reservations WHERE request_id=$1)
-         AND NOT EXISTS (SELECT 1 FROM policy WHERE banned OR locked)`;
+         AND NOT EXISTS (SELECT 1 FROM policy WHERE banned OR locked)
+         AND NOT EXISTS (SELECT 1 FROM dup)`;
     const r = await c.query(
       `WITH policy AS MATERIALIZED (${ADMIN_POLICY_SQL.replace('$1', '$9').replace('$2', '$3')}),
+       dup AS MATERIALIZED (
+         SELECT s.slot_code FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
+         WHERE r.status IN ('ACTIVE','PENDING_SAGA') AND r.license_plate = $4 AND s.slot_code <> $3
+           AND r.start_time < COALESCE($5::timestamptz, now()) + make_interval(mins => $6)
+           AND r.end_time > COALESCE($5::timestamptz, now())
+         LIMIT 1
+       ),
        held AS (${hold}), inserted AS (
          INSERT INTO reservations(request_id,user_id,slot_id,license_plate,start_time,end_time,expire_time,status)
          SELECT $1,$2,held.id,$4,COALESCE($5::timestamptz,now()),
@@ -154,12 +153,17 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
            COALESCE($5::timestamptz,now()) + make_interval(mins => $7),$8 FROM held
          RETURNING *, (SELECT version FROM held) AS slot_version
        )
-       SELECT inserted.*, policy.banned, policy.locked FROM policy LEFT JOIN inserted ON true`,
+       SELECT inserted.*, policy.banned, policy.locked, (SELECT slot_code FROM dup) AS dup_slot FROM policy LEFT JOIN inserted ON true`,
       [requestId,userId,slotCode,licensePlate,start,durationMinutes,minutes,input.sagaId ? 'PENDING_SAGA' : 'ACTIVE',
         licensePlate ? normalizePlate(licensePlate) : null]);
     // No row held means no writes to roll back. Still check for an idempotent winner.
-    if (!r.rows[0].id) return replayOr(adminDenial(r.rows[0]) ?? { code: 409, body: { error: 'SLOT_TAKEN' } });
-    const { slot_version: version, banned, locked, ...reservation } = r.rows[0];
+    // Một biển số không giữ hai ô khác nhau trùng giờ trong cùng bãi. Cùng ô thì ràng buộc khung giờ báo TIME_CONFLICT.
+    const dupSlot = r.rows[0].dup_slot;
+    if (!r.rows[0].id) {
+      return replayOr(adminDenial(r.rows[0])
+        ?? { code: 409, body: dupSlot ? { error: 'PLATE_ALREADY_BOOKED', slotCode: dupSlot } : { error: 'SLOT_TAKEN' } });
+    }
+    const { slot_version: version, banned, locked, dup_slot, ...reservation } = r.rows[0];
     if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', version, licensePlate, { userId, reservationId: reservation.id });
     return { code: 201, body: { ...reservation, slot_code: slotCode },
       ...(instant && { replySlot: { slotCode, status: 'RESERVED', version: Number(version) } }) };
@@ -247,6 +251,14 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
         // xe ra: lượt đặt kết thúc, phần khung giờ còn lại trả cho người khác
         await c.query(`UPDATE reservations SET status='DONE' WHERE id=$1 AND status='USED'`, [open.reservation_id]);
         session = { ...(await getSession(c, open.id)), breakdown: q.breakdown };
+        // Đã trả trên ứng dụng, quá hạn và thu thêm tiền mặt phần chênh ở cổng: ghi nhận doanh thu phần chênh
+        // (CAR_EXIT chỉ tính doanh thu khi cả phiên trả tiền mặt lúc ra).
+        if (q.due > 0 && open.paid_at) {
+          await emit(c, parkingId, 'PAYMENT_COMPLETED', slotCode, undefined, 0, null, {
+            event: 'PAYMENT_COMPLETED', sessionId: open.id, fee: q.due, total: Number(session.fee), paymentMethod: 'CASH',
+            occurredAt: session.exitedAt,
+          });
+        }
       }
     }
     const eventExtra = session?.id
@@ -339,7 +351,9 @@ async function payIn(c, { sessionId, method, paymentKey, userId, parkingId }) {
       await emit(c, parkingId, 'PAYMENT_COMPLETED', session.slotCode, undefined, 0, null, {
         event: 'PAYMENT_COMPLETED',
         sessionId,
-        fee: Number(session.fee),
+        // fee = số tiền thu lần này (doanh thu cộng thêm); trả phần chênh thì khác tổng phí của phiên (total).
+        fee: q.due,
+        total: Number(session.fee),
         occurredAt: session.paidAt,
       });
     }

@@ -67,6 +67,8 @@ ALTER TABLE reservations ADD CONSTRAINT ex_no_overlap EXCLUDE USING gist
   (slot_id WITH =, tstzrange(start_time, end_time) WITH &&) WHERE (status IN ('PENDING_SAGA','ACTIVE','USED'));
 
 -- Vừa là lịch sử sự kiện, vừa là OUTBOX: ghi cùng giao dịch với dữ liệu, relay gửi lên broker sau
+-- Kiểm nhanh một biển số đang giữ ô khác (PLATE_ALREADY_BOOKED).
+CREATE INDEX IF NOT EXISTS ix_reservations_plate ON reservations(license_plate) WHERE status IN ('ACTIVE','PENDING_SAGA');
 ALTER TABLE reservations ADD COLUMN IF NOT EXISTS warned_at TIMESTAMPTZ;   -- NV-08: đã báo sắp hết giờ giữ chỗ
 
 CREATE TABLE IF NOT EXISTS parking_events (

@@ -19,7 +19,9 @@ test('PD03 broker request-reply on the composed dependency candidate',{skip:proc
   socket.on('COMMAND_RESULT',m=>received.push(m));otherSocket.on('COMMAND_RESULT',m=>leaked.push(m));
   const node=(id,path,options={})=>http(`http://localhost:${{A:8001,B:8002,C:8003}[id]}${path}`,{...options,headers:{'x-internal-key':key,...options.headers}});
   async function slot(id){const code=`${prefix}${++n}`;const r=await node(id,'/api/slots',{method:'POST',body:{slotCode:code,type:'CAR',floor:1}});assert.ok([200,201].includes(r.status));slots.push({id,code});return code;}
-  const reserve=(id,code,k,headers={})=>http(base+`/api/parkings/${id}/reservations`,{method:'POST',token:session.token,headers:{'idempotency-key':k,...headers},body:{slotCode:code,licensePlate:'30A-123.45'}});
+  // Mỗi ô một biển số cố định: luật PLATE_ALREADY_BOOKED không cho một biển giữ hai ô; gọi lại cùng ô phải cùng nội dung.
+  const plateOf=code=>`30A-${String(slots.findIndex(s=>s.code===code)+100).padStart(3,'0')}.45`;
+  const reserve=(id,code,k,headers={})=>http(base+`/api/parkings/${id}/reservations`,{method:'POST',token:session.token,headers:{'idempotency-key':k,...headers},body:{slotCode:code,licensePlate:plateOf(code)}});
   const remember=k=>{const id=`${session.user.id}:${k}`;ids.push(id);return id;};
   t.after(async()=>{
     sockets.forEach(s=>s.disconnect());
