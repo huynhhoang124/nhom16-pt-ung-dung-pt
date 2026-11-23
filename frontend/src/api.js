@@ -180,7 +180,9 @@ export async function nodeApi(parkingId, path, opts = {}) {
   });
 }
 // Aggregator không trả lời (sập / proxy báo lỗi) — khác với bãi trả lỗi nghiệp vụ.
-export const centralDown = (r) => r.status === 0 || r.status === 500 || r.status === 502 || r.status === 503 && !r.data?.parkingId;
+// 504 không kèm mã lỗi JSON là của Nginx (mọi Aggregator dừng); 504 có mã là Aggregator báo ghi chưa rõ kết quả, không gọi thẳng bãi.
+export const centralDown = (r) => r.status === 0 || r.status === 500 || r.status === 502
+  || (r.status === 503 && !r.data?.parkingId) || (r.status === 504 && !r.data?.error);
 
 // Idempotency-Key: sinh MỘT lần cho mỗi lượt đặt, giữ nguyên khi bấm "Thử lại".
 export const newKey = () =>
