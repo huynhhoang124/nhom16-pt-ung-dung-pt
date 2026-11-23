@@ -49,7 +49,7 @@ export default function ParkingMap({ items, me, onOpen }) {
   return (
     <div style={{ position: 'relative' }}>
       <MapContainer center={center} zoom={12} className="map" scrollWheelZoom>
-        <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+        <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" referrerPolicy="strict-origin-when-cross-origin" />
         <FitAll points={points} />
         {me && <CircleMarker center={me} radius={7} pathOptions={{ color: '#416180', fillOpacity: 0.9 }}><Popup>Vị trí của bạn</Popup></CircleMarker>}
         {items.filter((p) => p.lat != null).map((p) => (
