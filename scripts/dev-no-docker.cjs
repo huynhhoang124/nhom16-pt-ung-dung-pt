@@ -56,7 +56,9 @@ const listen = (handler, port) => new Promise((ok) => {
   for (const [id, port, slots] of BAYS) {
     const p = await pool();
     await initNode(p, id, slots);
-    await listen(makeNodeApp({ pool: p, parkingId: id, internalKey: KEY, jwtPublicKey: publicKey }), port);
+    // CORS: web dev chạy :3000 (mặc định) hoặc :5173 (khi :3000 bận) — để thử PT-05 gọi thẳng bãi.
+    await listen(makeNodeApp({ pool: p, parkingId: id, internalKey: KEY, jwtPublicKey: publicKey,
+      corsOrigins: ['http://localhost:3000', 'http://localhost:5173'] }), port);
     const relay = makeRelay(p, async (_key, payload) => { onEvent(payload); return true; });
     setInterval(() => relay().catch(() => {}), 300);
     setInterval(() => expireDue(p, id).then(() => activateDue(p, id)).then(() => warnExpiring(p, id)).catch(() => {}), 30_000);

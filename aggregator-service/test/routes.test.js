@@ -172,7 +172,7 @@ test('TC19 lịch sử gửi xe: tra biển số gom từ mọi bãi, bãi treo 
 });
 
 test('quản trị: xem trạng thái node, thêm bãi mới (không sửa code)', async (t) => {
-  const { agg, tokens } = await system(t);
+  const { a, agg, tokens } = await system(t);
   assert.equal((await agg.call('/api/admin/nodes', { token: tokens.user1 })).status, 403);
   assert.equal((await agg.call('/api/admin/nodes', { token: tokens.admin })).body.length, 3);
 
@@ -182,6 +182,33 @@ test('quản trị: xem trạng thái node, thêm bãi mới (không sửa code)
   const ok = await add({ parkingId: 'D', name: 'Bãi D', apiUrl: 'http://parking-d:8004' });
   assert.deepEqual([ok.status, ok.body.status], [201, 'OFFLINE']);  // chờ health check đầu tiên
   assert.deepEqual((await agg.call('/api/parkings')).body.map((p) => p.parkingId), ['A', 'B', 'S', 'D']);
+
+  // lỗi trả mã để giao diện báo đúng ô nhập
+  assert.equal((await add({ parkingId: 'E', name: 'x', apiUrl: 'parking-e:8005' })).body.error, 'INVALID_API_URL');
+  assert.equal((await add({ parkingId: 'e', name: 'x', apiUrl: 'http://x' })).body.error, 'INVALID_PARKING_ID');
+
+  // sửa thông tin bãi: tên/URL; dữ liệu sai -> 400; bãi không có -> 404
+  const patch = (id, body) => agg.call(`/api/admin/nodes/${id}`, { method: 'PATCH', token: tokens.admin, body });
+  assert.equal((await patch('D', { name: 'Bãi D – Long Biên', apiUrl: 'http://parking-d2:8004' })).body.name, 'Bãi D – Long Biên');
+  assert.equal((await agg.call('/api/admin/nodes', { token: tokens.admin })).body.find((n) => n.parkingId === 'D').url, 'http://parking-d2:8004');
+  assert.equal((await patch('D', { apiUrl: 'khong-phai-url' })).status, 400);
+  assert.equal((await patch('Z', { name: 'x' })).status, 404);
+  assert.equal((await agg.call('/api/admin/nodes/D', { method: 'PATCH', token: tokens.user1, body: { name: 'x' } })).status, 403);
+
+  // kiểm tra kết nối trước khi lưu: URL sai định dạng -> 400; không tới được -> ok:false (không ném lỗi)
+  const check = (apiUrl) => agg.call('/api/admin/nodes/check', { method: 'POST', token: tokens.admin, body: { apiUrl } });
+  assert.equal((await check('khong-phai-url')).status, 400);
+  const dead = await check('http://127.0.0.1:1');
+  assert.deepEqual([dead.status, dead.body.ok], [200, false]);
+  const live = (await check(a.url)).body;   // máy chủ bãi A thật: báo được mã bãi + đã có trong hệ thống
+  assert.deepEqual([live.ok, live.parkingId, live.registered], [true, 'A', true]);
+  assert.equal((await agg.call('/api/admin/nodes/check', { method: 'POST', token: tokens.user1, body: { apiUrl: 'http://x' } })).status, 403);
+
+  // gỡ bãi: chỉ khi mất kết nối; bãi đang chạy -> 409
+  const del = (id) => agg.call(`/api/admin/nodes/${id}`, { method: 'DELETE', token: tokens.admin });
+  assert.equal((await del('A')).status, 409);
+  assert.equal((await del('D')).status, 200);
+  assert.deepEqual((await agg.call('/api/parkings')).body.map((p) => p.parkingId), ['A', 'B', 'S']);
 });
 
 test('TC33–TC35 đăng ký, đổi mật khẩu, khoá tạm khi sai mật khẩu nhiều lần', async (t) => {

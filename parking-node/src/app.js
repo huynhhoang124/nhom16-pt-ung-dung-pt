@@ -211,6 +211,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
     res.json(await s.slotSchedule(pool, req.params.code, req.query.date));
   });
 
+  // ACTIVE: QR để vào. USED (xe đang trong bãi): vẫn trả QR để khách quét ở cổng ra (cổng không kiểm hạn khi ra).
   app.get('/api/reservations', async (req, res) => {
     const reservations = await s.listReservations(
       readPoolFor(req),
@@ -219,7 +220,7 @@ function makeApp({ pool, parkingId, internalKey, reservationMinutes = 15, qrSecr
 
     res.json(
       reservations.map((r) =>
-        r.status === 'ACTIVE'
+        ['ACTIVE', 'USED'].includes(r.status)
           ? { ...r, qrToken: tokenFor(qrSecret, parkingId, r) }
           : r
       )
