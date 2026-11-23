@@ -12,7 +12,8 @@ const NOMINATIM = 'https://nominatim.openstreetmap.org';
 const PHOTON = 'https://photon.komoot.io';   // dự phòng khi mạng chặn Nominatim (cùng dữ liệu OpenStreetMap)
 
 const getJson = async (url) => {
-  const r = await fetch(url, { signal: AbortSignal.timeout(5000) });
+  // Trang đặt Referrer-Policy same-origin; Nominatim yêu cầu biết ứng dụng gọi -> gửi kèm origin (không gửi đường dẫn).
+  const r = await fetch(url, { signal: AbortSignal.timeout(5000), referrerPolicy: 'strict-origin-when-cross-origin' });
   if (!r.ok) throw new Error(String(r.status));
   return r.json();
 };
@@ -120,7 +121,7 @@ export default function LocationPicker({ lat, lng, others = [], onPick }) {
       )}
       <div className="picker-map">
         <MapContainer center={pos ?? HANOI} zoom={pos ? 16 : 12} scrollWheelZoom className="map picker-leaflet">
-          <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+          <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" referrerPolicy="strict-origin-when-cross-origin" />
           <ClickToPick onPick={(p) => pick(p)} />
           <FlyTo target={fly} />
           {others.filter((o) => o.lat != null).map((o) => (
