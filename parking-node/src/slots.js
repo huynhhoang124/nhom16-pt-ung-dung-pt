@@ -131,12 +131,21 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
       ? `UPDATE parking_slots SET status='RESERVED',version=version+1,updated_at=now()
          WHERE slot_code=$3 AND status='AVAILABLE'
            AND NOT EXISTS (SELECT 1 FROM reservations WHERE request_id=$1)
-           AND NOT EXISTS (SELECT 1 FROM policy WHERE banned OR locked) RETURNING id,version`
+           AND NOT EXISTS (SELECT 1 FROM policy WHERE banned OR locked)
+           AND NOT EXISTS (SELECT 1 FROM dup) RETURNING id,version`
       : `SELECT id,version FROM parking_slots WHERE slot_code=$3 AND status NOT IN ('MAINTENANCE','HIDDEN')
          AND NOT EXISTS (SELECT 1 FROM reservations WHERE request_id=$1)
-         AND NOT EXISTS (SELECT 1 FROM policy WHERE banned OR locked)`;
+         AND NOT EXISTS (SELECT 1 FROM policy WHERE banned OR locked)
+         AND NOT EXISTS (SELECT 1 FROM dup)`;
     const r = await c.query(
       `WITH policy AS MATERIALIZED (${ADMIN_POLICY_SQL.replace('$1', '$9').replace('$2', '$3')}),
+       dup AS MATERIALIZED (
+         SELECT s.slot_code FROM reservations r JOIN parking_slots s ON s.id = r.slot_id
+         WHERE r.status IN ('ACTIVE','PENDING_SAGA') AND r.license_plate = $4 AND s.slot_code <> $3
+           AND r.start_time < COALESCE($5::timestamptz, now()) + make_interval(mins => $6)
+           AND r.end_time > COALESCE($5::timestamptz, now())
+         LIMIT 1
+       ),
        held AS (${hold}), inserted AS (
          INSERT INTO reservations(request_id,user_id,slot_id,license_plate,start_time,end_time,expire_time,status)
          SELECT $1,$2,held.id,$4,COALESCE($5::timestamptz,now()),
@@ -144,17 +153,22 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
            COALESCE($5::timestamptz,now()) + make_interval(mins => $7),$8 FROM held
          RETURNING *, (SELECT version FROM held) AS slot_version
        )
-       SELECT inserted.*, policy.banned, policy.locked FROM policy LEFT JOIN inserted ON true`,
+       SELECT inserted.*, policy.banned, policy.locked, (SELECT slot_code FROM dup) AS dup_slot FROM policy LEFT JOIN inserted ON true`,
       [requestId,userId,slotCode,licensePlate,start,durationMinutes,minutes,input.sagaId ? 'PENDING_SAGA' : 'ACTIVE',
         licensePlate ? normalizePlate(licensePlate) : null]);
     // No row held means no writes to roll back. Still check for an idempotent winner.
-    if (!r.rows[0].id) return replayOr(adminDenial(r.rows[0]) ?? { code: 409, body: { error: 'SLOT_TAKEN' } });
-    const { slot_version: version, banned, locked, ...reservation } = r.rows[0];
+    // Một biển số không giữ hai ô khác nhau trùng giờ trong cùng bãi. Cùng ô thì ràng buộc khung giờ báo TIME_CONFLICT.
+    const dupSlot = r.rows[0].dup_slot;
+    if (!r.rows[0].id) {
+      return replayOr(adminDenial(r.rows[0])
+        ?? { code: 409, body: dupSlot ? { error: 'PLATE_ALREADY_BOOKED', slotCode: dupSlot } : { error: 'SLOT_TAKEN' } });
+    }
+    const { slot_version: version, banned, locked, dup_slot, ...reservation } = r.rows[0];
     if (instant) await emit(c, parkingId, 'RESERVED', slotCode, 'RESERVED', version, licensePlate, { userId, reservationId: reservation.id });
     return { code: 201, body: { ...reservation, slot_code: slotCode },
       ...(instant && { replySlot: { slotCode, status: 'RESERVED', version: Number(version) } }) };
   }, async (e) => {
-    if (e.code === '23P01') return replayOr({ code: 409, body: { error: 'TIME_CONFLICT' } });
+    if (e.code === '23P01') return replayOr({ code: 409, body: { error: e.constraint === 'ex_plate_one_slot' ? 'PLATE_ALREADY_BOOKED' : 'TIME_CONFLICT' } });
     if (e.code === '23505') return replayOr({ code: 409, body: { error: 'SLOT_TAKEN' } });
     throw e;
   }, { lockAdmin: true });
@@ -222,11 +236,13 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
       if (open) {
         plate = plate || open.license_plate;
         const q = await quoteIn(c, open.id);
-        const fee = open.paid_at ? open.fee : q.fee;     // đã trả trước thì giữ số tiền đã trả
-        // NV-04: chưa trả thì không cho ra; nhân viên thu tiền mặt = trả CASH + cho ra trong một giao dịch.
-        if (!open.paid_at && fee > 0 && !opts.cash) {
-          throw new Abort(402, { error: 'PAYMENT_REQUIRED', sessionId: open.id, fee, breakdown: q.breakdown });
+        // NV-04: còn tiền phải trả thì không cho ra; nhân viên thu tiền mặt = trả CASH + cho ra trong một giao dịch.
+        // Đã trả trong bãi: trong 15 phút giữ số đã trả; quá hạn mà phí tăng thì phải trả thêm phần chênh (q.due).
+        if (q.due > 0 && !opts.cash) {
+          throw new Abort(402, { error: 'PAYMENT_REQUIRED', sessionId: open.id, fee: q.due, total: q.fee, paid: q.paid,
+            extra: !!open.paid_at, breakdown: q.breakdown });
         }
+        const fee = q.due > 0 || !open.paid_at ? q.fee : open.fee;
         await c.query(
           `UPDATE parking_sessions SET exited_at=now(), fee=$2,
              paid_at = COALESCE(paid_at, CASE WHEN $2 > 0 THEN now() END),
@@ -234,7 +250,16 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
            WHERE id=$1`, [open.id, fee]);
         // xe ra: lượt đặt kết thúc, phần khung giờ còn lại trả cho người khác
         await c.query(`UPDATE reservations SET status='DONE' WHERE id=$1 AND status='USED'`, [open.reservation_id]);
-        session = { ...(await getSession(c, open.id)), breakdown: q.breakdown };
+        // collected: tiền mặt thu ở lần ra này (chỉ phần chênh nếu khách đã trả trước trên ứng dụng)
+        session = { ...(await getSession(c, open.id)), breakdown: q.breakdown, collected: q.due };
+        // Đã trả trên ứng dụng, quá hạn và thu thêm tiền mặt phần chênh ở cổng: ghi nhận doanh thu phần chênh
+        // (CAR_EXIT chỉ tính doanh thu khi cả phiên trả tiền mặt lúc ra).
+        if (q.due > 0 && open.paid_at) {
+          await emit(c, parkingId, 'PAYMENT_COMPLETED', slotCode, undefined, 0, null, {
+            event: 'PAYMENT_COMPLETED', sessionId: open.id, fee: q.due, total: Number(session.fee), paymentMethod: 'CASH',
+            occurredAt: session.exitedAt,
+          });
+        }
       }
     }
     const eventExtra = session?.id
@@ -278,15 +303,24 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
 const getSession = async (c, id) => (await c.query(
   `SELECT ${SESSION_COLS} FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id WHERE ps.id=$1`, [id])).rows[0];
 
+// Trả tiền trong bãi xong có PAY_GRACE_MIN phút để ra. Quá hạn mà phí đã lên mức cao hơn -> phải trả thêm phần chênh
+// (trước đây trả sớm là khoá số tiền: trả lúc 1 giờ rồi ở thêm 5 giờ vẫn ra với giá 1 giờ).
+const PAY_GRACE_MIN = 15;
+
 // Phí của một phiên: đã ra thì tính đến giờ ra; còn trong bãi thì tạm tính đến now() của DB bãi.
+// paid: số đã trả; due: số còn phải trả bây giờ (0 nếu đã trả và còn trong 15 phút, hoặc phí chưa tăng).
 async function quoteIn(c, sessionId) {
   const r = (await c.query(
-    `SELECT ps.entered_at, COALESCE(ps.exited_at, now()) AS until, ps.exited_at, pr.*
+    `SELECT ps.entered_at, COALESCE(ps.exited_at, now()) AS until, ps.exited_at, ps.paid_at, ps.fee AS paid_fee,
+            (ps.paid_at IS NOT NULL AND now() - ps.paid_at > make_interval(mins => $2)) AS pay_expired,
+            ps.paid_at + make_interval(mins => $2) AS pay_deadline, pr.*
      FROM parking_sessions ps JOIN parking_slots s ON s.id = ps.slot_id
-     LEFT JOIN pricing_rules pr ON pr.vehicle_type = s.type WHERE ps.id=$1`, [sessionId])).rows[0];
+     LEFT JOIN pricing_rules pr ON pr.vehicle_type = s.type WHERE ps.id=$1`, [sessionId, PAY_GRACE_MIN])).rows[0];
   if (!r) return null;
   const q = r.vehicle_type ? calcFee(fromRow(r), r.entered_at, r.until) : { fee: 0, minutes: 0, breakdown: [] };
-  return { sessionId, ...q, final: !!r.exited_at };
+  const paid = r.paid_at ? (r.paid_fee ?? 0) : 0;
+  const due = !r.paid_at ? q.fee : (!r.exited_at && r.pay_expired && q.fee > paid ? q.fee - paid : 0);
+  return { sessionId, ...q, final: !!r.exited_at, paid, due, paidAt: r.paid_at, payDeadline: r.pay_deadline };
 }
 const quote = (pool, sessionId) => quoteIn(pool, sessionId);
 
@@ -306,9 +340,9 @@ async function payIn(c, { sessionId, method, paymentKey, userId, parkingId }) {
     const cur = (await c.query(
       `SELECT paid_at, user_id FROM parking_sessions WHERE id=$1 FOR UPDATE`, [sessionId])).rows[0];
     if (!cur || (userId && cur.user_id !== userId)) throw new Abort(404, { error: 'SESSION_NOT_FOUND' });
-    if (cur.paid_at) throw new Abort(409, { error: 'ALREADY_PAID' });
     const q = await quoteIn(c, sessionId);
-    if (q.fee <= 0) throw new Abort(409, { error: 'NOTHING_TO_PAY' });
+    // Đã trả và chưa phát sinh thêm -> ALREADY_PAID; quá 15 phút mà phí tăng -> trả phần chênh (ghi tổng mới).
+    if (q.due <= 0) throw new Abort(409, { error: cur.paid_at ? 'ALREADY_PAID' : 'NOTHING_TO_PAY' });
     await c.query(
       `UPDATE parking_sessions SET paid_at=now(), payment_method=$2, payment_key=$3, fee=$4 WHERE id=$1`,
       [sessionId, method, paymentKey, q.fee],
@@ -318,7 +352,9 @@ async function payIn(c, { sessionId, method, paymentKey, userId, parkingId }) {
       await emit(c, parkingId, 'PAYMENT_COMPLETED', session.slotCode, undefined, 0, null, {
         event: 'PAYMENT_COMPLETED',
         sessionId,
-        fee: Number(session.fee),
+        // fee = số tiền thu lần này (doanh thu cộng thêm); trả phần chênh thì khác tổng phí của phiên (total).
+        fee: q.due,
+        total: Number(session.fee),
         occurredAt: session.paidAt,
       });
     }
@@ -336,13 +372,14 @@ function pay(pool, input) { return tx(pool, (c) => payIn(c, input)); }
 
 // Lịch sử phiên gửi xe: chuẩn hoá biển số và sắp xếp theo HLC của lần CAR_ENTER.
 // Phiên cũ chưa có HLC được xếp sau các phiên có HLC; entered_at là tiêu chí phụ.
+// Biển số khớp MỘT PHẦN sau khi bỏ dấu cách/chấm/gạch, không phân biệt hoa thường: "12345" tìm ra 30A-123.45.
 const listSessions = async (pool, { plate, userId, from, to } = {}) =>
   (await pool.query(
     `SELECT ${SESSION_COLS}
      FROM parking_sessions ps
      JOIN parking_slots s ON s.id = ps.slot_id
-     WHERE ($1::text IS NULL OR regexp_replace(upper(ps.license_plate), '[^A-Z0-9]', '', 'g')
-                                = regexp_replace(upper($1), '[^A-Z0-9]', '', 'g'))
+     WHERE ($1::text IS NULL OR position(regexp_replace(upper($1), '[^A-Z0-9]', '', 'g')
+                                         in regexp_replace(upper(ps.license_plate), '[^A-Z0-9]', '', 'g')) > 0)
        AND ($2::text IS NULL OR ps.user_id = $2)
        AND ($3::timestamptz IS NULL OR ps.entered_at >= $3)
        AND ($4::timestamptz IS NULL OR ps.entered_at < $4)

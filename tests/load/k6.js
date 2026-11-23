@@ -112,7 +112,7 @@ export function reserve({ token, slots, runId }) {
   const auth = { headers: { ...json.headers, Authorization: `Bearer ${token}`, 'Idempotency-Key': key } };
   const url = `${BASE}/api/parkings/${encodeURIComponent(parkingId)}/reservations`;
   const started = Date.now();
-  const response = record(http.post(url, JSON.stringify({ slotCode, licensePlate: '30A-999.99' }), auth), 'reserve');
+  const response = record(http.post(url, JSON.stringify({ slotCode, licensePlate: `30A-${String(__VU % 1000).padStart(3, '0')}.${String(__ITER % 100).padStart(2, '0')}` }), auth), 'reserve');
   check(response, { 'đặt: 201/202/409': (r) => [201, 202, 409].includes(r.status) });
   const final = resolve(response, auth);
   reserveDuration.add(Date.now() - started);

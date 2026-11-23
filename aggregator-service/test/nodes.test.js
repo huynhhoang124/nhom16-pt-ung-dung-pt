@@ -132,6 +132,16 @@ test('PT-01 X-Instance và nạp bãi do bản Aggregator khác thêm (dùng chu
   assert.equal(r.headers.get('x-instance'), 'aggregator-1');
   assert.deepEqual(agg.reg.sync([{ parking_id: 'X', name: 'X', api_url: 'http://x' }, { parking_id: 'Z', name: 'Z', api_url: 'http://z' }]), ['Z']);
   assert.equal(agg.reg.get('Z').status, 'OFFLINE');   // bãi mới: chờ health check
+  // bản khác sửa URL của Z và gỡ X -> bản này cập nhật theo DB
+  assert.deepEqual(agg.reg.sync([{ parking_id: 'Z', name: 'Z', api_url: 'http://z2' }]), []);
+  assert.equal(agg.reg.get('Z').url, 'http://z2');
+  assert.equal(agg.reg.get('X'), undefined);
+  // bãi chỉ đăng ký qua etcd (không có dòng DB) không bị xoá; địa chỉ etcd không bị DB cũ ghi đè khi dòng DB không đổi
+  agg.reg.add({ parking_id: 'E', api_url: 'http://etcd-e', hasLease: true });
+  agg.reg.add({ parking_id: 'Z', api_url: 'http://etcd-z', hasLease: true });
+  agg.reg.sync([{ parking_id: 'Z', name: 'Z', api_url: 'http://z2' }]);
+  assert.equal(agg.reg.get('E').url, 'http://etcd-e');
+  assert.equal(agg.reg.get('Z').url, 'http://etcd-z');
 });
 
 test('resolveUrl: tên -> IP; IP giữ nguyên; DNS lỗi thì giữ tên', async () => {

@@ -18,9 +18,11 @@ docker compose up -d --build
 ```
 - Web: http://localhost:3000. Tự đăng ký tài khoản người dùng, hoặc dùng tài khoản demo (mật khẩu `123456`): `user1`, `user2`, `staff-a`/`staff-b`/`staff-c` (nhân viên từng bãi), `admin`.
 - RabbitMQ: http://localhost:15672 (parking / parking) · Aggregator: :8000 · Parking A/B/C: :8001/:8002/:8003
-- Thêm bãi D để demo mở rộng: `docker compose --profile extra up -d`, rồi đăng ký trên trang Quản trị với `http://parking-d:8004`.
 - Dữ liệu demo mới có **10 slot mỗi bãi**. A–C có tổng 30 slot; bật `extra` có 40; stack A–F có 60. Seed chỉ thêm slot còn thiếu, nên dùng project Compose và volume mới khi cần demo đúng số slot. Ví dụ `docker compose -p parking-demo-compact up -d --build` khi các cổng demo đang rảnh. Gate TC80 chạy trên cấu hình demo A/B/C mỗi bãi 10 slot, đủ 300 VU. Các phép so sánh lịch sử và PD-20 dùng `tests/load/benchmark-slots.compose.yml` với A=40, B=60, C=30.
 - Với cụm RabbitMQ ba nút, chạy `docker compose exec -T rabbitmq sh -s < scripts/prepare-rabbit-ha.sh` sau khi dựng stack. Script bổ sung bản sao cho các hàng đợi quorum và `events.stream`, rồi kiểm tra có thể dừng từng broker mà vẫn giữ đa số.
+- Thêm bãi D để demo mở rộng: xem [Kịch bản demo: thêm bãi mới](#kịch-bản-demo-thêm-bãi-mới) bên dưới.
+- Cổng 3000 / 8000 đã có chương trình khác chiếm (container của project khác, hoặc bản dev không Docker đang chạy) thì web/Aggregator không lên: kiểm tra `netstat -ano | findstr :3000` rồi tắt chương trình đó trước.
+- `ETCD_ENDPOINTS` trong `.env` chỉ bật khi chạy kèm `--profile coord` (cụm etcd). Bật mà không chạy etcd thì các bãi kẹt lúc khởi động ("Không thể đọc etcd ban đầu") và luôn hiện mất kết nối.
 - Mở rộng PD-12 thành 6 bãi ở 2 vùng: `node scripts/gen-lots.mjs`, rồi `docker compose -f docker-compose.yml -f docker-compose.scale.yml --profile scale --profile coord up -d --build`. A–C thuộc vùng Bắc; D–F thuộc vùng Nam, đăng ký lease qua cụm etcd và đi qua Toxiproxy với độ trễ 40 ± 10 ms. Kiểm tra: `$env:SCALE='1'; $env:COORD='1'; node --test tests/e2e.test.mjs` (PowerShell). Không dùng `--wait`: service `region-latency` chạy xong thì thoát nên `--wait` báo lỗi. Aggregator đặt `ZONE` thì gọi bãi cùng vùng trước.
 - Giả lập barrier gọi thẳng bãi: `node scripts/barrier.mjs A A05 enter 30A-123.45` (đọc khoá từ `.env`)
 - Sinh dữ liệu mẫu trang Thống kê: `node scripts/du-lieu-mau.mjs [số_lượt]` (mặc định 150 lượt xe vào/ra ngẫu nhiên trên 3 bãi; đặt `SCALE=1` để chạy trên cả 6)
@@ -31,11 +33,41 @@ docker compose up -d --build
 - Lần theo một request qua mọi dịch vụ (log JSON, mã ở header `X-Request-Id` của response): `docker compose logs | grep <mã>`
 - Dừng: `docker compose down` (giữ dữ liệu) · `docker compose down -v` (xoá sạch)
 
+## Kịch bản demo: thêm bãi mới
+Bãi A, B, C nạp sẵn; bãi D có sẵn máy chủ (`parking-d`) nhưng **chưa đăng ký** — dùng để demo mở rộng không sửa code, không khởi động lại trung tâm.
+1. `.env` để `ETCD_ENDPOINTS=` (rỗng). Nếu bật etcd, bãi D **tự đăng ký** và hiện trong bảng, chỉ còn bước "Sửa" tên/vị trí.
+2. `docker compose up -d --build`, vào http://localhost:3000, đăng nhập `admin` → **Quản trị**.
+3. Bật máy chủ bãi D: `docker compose --profile extra up -d`. Đợi đến khi `docker compose logs parking-d` có dòng "Parking D chạy ở cổng 8004".
+4. Form **Thêm bãi mới**: gõ mã `D` → địa chỉ máy chủ tự gợi ý `http://parking-d:8004` → **Kiểm tra kết nối** (phải ✅ "máy chủ bãi D") → đặt tên → chọn vị trí trên bản đồ (bấm / kéo ghim / tìm địa chỉ) → **Thêm bãi**.
+5. Vài giây sau bãi D "Đang kết nối"; Tổng quan và Bản đồ có bãi D; `user1` đặt chỗ được ở D.
+6. (Tuỳ chọn) chịu lỗi: `docker compose stop parking-d` → sau ~15 s bãi D "Mất kết nối", khách thấy dữ liệu cũ và không đặt được; `docker compose start parking-d` để bật lại.
+
+Địa chỉ máy chủ của bãi là nơi service `parking-node` của bãi đó chạy (biến `NODE_URL`), **trung tâm phải gọi tới được**: trong Docker dùng tên service (`http://parking-d:8004`), không dùng `localhost`. Bãi chỉ gỡ được khi đang mất kết nối (thêm nhầm / đã ngừng chạy).
+
 ## Làm giao diện không cần Docker
 ```bash
 node scripts/dev-no-docker.cjs     # 3 bãi + Aggregator bằng PGlite trong 1 tiến trình (dữ liệu trong RAM)
-cd frontend && npm run dev         # http://localhost:3000
+cd frontend && npm run dev         # http://localhost:3000 (cổng 3000 bận thì: npm run dev -- --port 5173)
 ```
+Bản này không có bãi D, không có RabbitMQ; khoá nội bộ là `dev` (khác Docker) nên không trộn với container Docker. Dữ liệu mất khi tắt.
+
+## Test quét QR bằng điện thoại
+Trình duyệt **chỉ cho dùng camera trên HTTPS hoặc `localhost`**. Điện thoại vào `http://<IP-máy>:3000` vẫn **hiện** mã QR được nhưng **không quét** được (iPhone: mọi trình duyệt, kể cả Chrome, đều chặn).
+- **Điện thoại hiện QR, laptop quét:** điện thoại mở `http://<IP-máy>:3000` → `user1` đặt chỗ "Ngay bây giờ" ở bãi A → *Đặt chỗ của tôi* → chạm mã QR (mở toàn màn hình, giữ màn hình sáng). Laptop mở `http://localhost:3000` → `staff-a` → *Cổng* → *Quét mã QR*. Máy quét không đọc được: giảm độ sáng điện thoại, đưa cách 15–25 cm, nghiêng nhẹ cho đỡ loá.
+- **Điện thoại làm máy quét (cần HTTPS):** chạy hệ thống (Docker hoặc `dev-no-docker`), rồi
+  ```bash
+  node scripts/dev-cert.mjs          # chứng chỉ tự ký cho các IP của máy (frontend/.cert, ngoài git)
+  cd frontend && npm run dev:https   # https://<IP-máy>:5173, proxy /api tới Aggregator :8000
+  ```
+  Điện thoại mở `https://<IP-máy>:5173` → cảnh báo chứng chỉ → *Hiện chi tiết → Truy cập trang web này* → `staff-a` → *Cổng* → *Quét mã QR*. Trên chính máy tính dùng `https://127.0.0.1:5173`.
+- Điện thoại không vào được: cùng Wi-Fi chưa; Windows để mạng Wi-Fi ở chế độ **Private** hoặc mở cổng (PowerShell Admin: `New-NetFirewallRule -DisplayName "Nhom16 dev" -Direction Inbound -Protocol TCP -LocalPort 3000,5173 -Action Allow`); Wi-Fi công cộng hay chặn thiết bị nói chuyện với nhau → dùng hotspot của điện thoại.
+
+## Giao diện (nhánh personal/luan-ui)
+- Một giao diện chung đỏ–navy cho mọi vai trò (`frontend/src/theme.css`), có chế độ tối; mỗi màn có URL riêng (`#/mine`, `#/parking/A/A05`...).
+- Người dùng: chọn nhanh giờ đến, tóm tắt giờ ra / hạn giữ chỗ / phí ước tính trước khi đặt, "Xe của tôi", vé chia nhóm (đang trong bãi / đang giữ / sắp tới) kèm chỉ đường.
+- Thanh toán trong bãi: trả xong có **15 phút** để ra; ra muộn hơn mà phí đã tăng thì trả thêm phần chênh (ứng dụng hoặc tiền mặt ở cổng).
+- Nhân viên: vào thẳng bãi mình, thông tin xe trong ô, đối chiếu biển số với vé, bước thu tiền mặt riêng, cảnh báo vé khi khoá bảo trì, màn Cổng tự nhận vào/ra + chế độ toàn màn hình, làm việc thẳng với bãi khi trung tâm sập.
+- Quản trị: sửa/gỡ bãi, kiểm tra kết nối trước khi thêm, chọn vị trí trên bản đồ, Thống kê lọc theo bãi.
 
 ## Kiểm thử
 ```bash

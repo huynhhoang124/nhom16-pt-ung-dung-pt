@@ -51,6 +51,17 @@ test('signed envelope: property authority, identity, metadata and producer/consu
   );
 });
 
+test('lệnh reserve qua broker: biển số đang giữ ô khác -> trả 409 PLATE_ALREADY_BOOKED, cả khi chạy lẻ lẫn theo lô', async (t) => {
+  const pool = await makePool('A', 5); t.after(() => pool.db.close());
+  const processCommand = makeCommandProcessor({ pool, parkingId: 'A', internalKey: KEY });
+  const cmd = (key, slotCode, licensePlate) => message(key, 'reserve', { slotCode, licensePlate });
+  assert.equal((await processCommand(cmd('b1', 'A01', '30A-123.45'))).code, 201);
+  const dup = await processCommand(cmd('b2', 'A02', '30A-123.45'));
+  assert.deepEqual([dup.code, dup.body.error, dup.body.slotCode], [409, 'PLATE_ALREADY_BOOKED', 'A01']);
+  const batch = await processCommand.batch([cmd('b3', 'A02', '30A-123.45'), cmd('b4', 'A03', '30A-678.90')]);
+  assert.deepEqual(batch.map((r) => r.code), [409, 201]);
+});
+
 test('inbox transaction: replay, key reuse, savepoint, rollback, permissions, replies and retention', async (t) => {
   const pool = await makePool('A', 5); t.after(() => pool.db.close());
   const processCommand = makeCommandProcessor({ pool, parkingId: 'A', internalKey: KEY });
