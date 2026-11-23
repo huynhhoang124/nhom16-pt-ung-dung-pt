@@ -202,6 +202,7 @@ const MESSAGES = {
   INVALID_API_URL: 'Địa chỉ máy chủ phải bắt đầu bằng http:// hoặc https://.',
   INVALID_COORDS: 'Toạ độ không hợp lệ (vĩ độ -90…90, kinh độ -180…180).',
   PARKING_ONLINE: 'Bãi đang hoạt động, không gỡ được. Chỉ gỡ được bãi đang mất kết nối.',
+  PARKING_REGISTERED: 'Máy chủ bãi vẫn đang đăng ký với hệ thống. Tắt máy chủ bãi rồi gỡ lại sau ít giây.',
   PARKING_NOT_FOUND: 'Không tìm thấy bãi.',
   NETWORK: 'Không kết nối được máy chủ.',
   SERVER_UNAVAILABLE: 'Máy chủ trung tâm đang mất kết nối. Hệ thống sẽ hoạt động lại khi kết nối được, vui lòng thử lại sau ít phút.',

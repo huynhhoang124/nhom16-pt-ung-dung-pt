@@ -168,7 +168,7 @@ async function reserveIn(c, parkingId, input, minutes = 15) {
     return { code: 201, body: { ...reservation, slot_code: slotCode },
       ...(instant && { replySlot: { slotCode, status: 'RESERVED', version: Number(version) } }) };
   }, async (e) => {
-    if (e.code === '23P01') return replayOr({ code: 409, body: { error: 'TIME_CONFLICT' } });
+    if (e.code === '23P01') return replayOr({ code: 409, body: { error: e.constraint === 'ex_plate_one_slot' ? 'PLATE_ALREADY_BOOKED' : 'TIME_CONFLICT' } });
     if (e.code === '23505') return replayOr({ code: 409, body: { error: 'SLOT_TAKEN' } });
     throw e;
   }, { lockAdmin: true });
@@ -250,7 +250,8 @@ function moveSlot(pool, parkingId, slotCode, from, to, type, plate, opts = {}) {
            WHERE id=$1`, [open.id, fee]);
         // xe ra: lượt đặt kết thúc, phần khung giờ còn lại trả cho người khác
         await c.query(`UPDATE reservations SET status='DONE' WHERE id=$1 AND status='USED'`, [open.reservation_id]);
-        session = { ...(await getSession(c, open.id)), breakdown: q.breakdown };
+        // collected: tiền mặt thu ở lần ra này (chỉ phần chênh nếu khách đã trả trước trên ứng dụng)
+        session = { ...(await getSession(c, open.id)), breakdown: q.breakdown, collected: q.due };
         // Đã trả trên ứng dụng, quá hạn và thu thêm tiền mặt phần chênh ở cổng: ghi nhận doanh thu phần chênh
         // (CAR_EXIT chỉ tính doanh thu khi cả phiên trả tiền mặt lúc ra).
         if (q.due > 0 && open.paid_at) {

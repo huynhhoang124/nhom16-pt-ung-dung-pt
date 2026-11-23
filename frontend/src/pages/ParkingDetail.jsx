@@ -196,7 +196,8 @@ export default function ParkingDetail({ parkingId, user, onBack, onMine, initial
     if (action === 'enter') return `${car} đã vào ô ${selected}.`;
     if (action === 'exit') {
       const fee = d?.session?.fee ?? 0;
-      const how = !fee ? 'miễn phí' : cash ? `đã thu ${money(fee)} tiền mặt` : `đã thanh toán ${money(fee)} trên ứng dụng`;
+      const collected = d?.session?.collected ?? fee;   // đã trả trước trên ứng dụng thì chỉ thu phần chênh
+      const how = !fee ? 'miễn phí' : cash && collected ? `đã thu ${money(collected)} tiền mặt${collected < fee ? ` (tổng phí ${money(fee)})` : ''}` : `đã thanh toán ${money(fee)} trên ứng dụng`;
       return `${car} đã ra khỏi ô ${selected} · ${how}.`;
     }
     return action === 'maintenance' ? `Đã khoá ô ${selected} để bảo trì.` : `Đã mở khoá ô ${selected}, ô sẵn sàng nhận xe.`;

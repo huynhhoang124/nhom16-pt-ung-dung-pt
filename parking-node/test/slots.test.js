@@ -111,6 +111,11 @@ test('một biển số không giữ hai chỗ trùng giờ: 409 PLATE_ALREADY_B
   const dup = await s.reserve(pool, P, plate('p2', 'A02'));
   assert.deepEqual([dup.code, dup.body.error, dup.body.slotCode], [409, 'PLATE_ALREADY_BOOKED', 'A01']);
   assert.equal((await s.listSlots(pool)).find((x) => x.slotCode === 'A02').status, 'AVAILABLE');   // không giữ nhầm A02
+  // lưới đỡ ở DB cho hai yêu cầu đồng thời (bước kiểm của cả hai đều chưa thấy dòng của nhau)
+  await assert.rejects(pool.query(
+    `INSERT INTO reservations(request_id,user_id,slot_id,license_plate,end_time,expire_time)
+     SELECT 'race','u',id,'30A12345',now()+interval '1 hour',now()+interval '15 minutes' FROM parking_slots WHERE slot_code='A02'`),
+    (e) => e.code === '23P01' && e.constraint === 'ex_plate_one_slot');
   const later = new Date(Date.now() + 6 * 3600_000).toISOString();     // sau khi lượt đầu (2 giờ) đã kết thúc
   assert.equal((await s.reserve(pool, P, plate('p3', 'A02', { startTime: later }))).code, 201);
 });
@@ -326,7 +331,7 @@ test('trả sớm, quá 15 phút: nhân viên thu tiền mặt phần chênh th�
   await s.pay(pool, { sessionId: id, method: 'ONLINE', paymentKey: `${userId}:k1`, userId, parkingId: 'A' });
   await pool.query(`UPDATE parking_sessions SET entered_at = entered_at - interval '4 hours', paid_at = paid_at - interval '4 hours' WHERE id=$1`, [id]);
   const exit = await exitA01(pool, { cash: true });
-  assert.deepEqual([exit.code, exit.body.session.fee], [200, 75000]);
+  assert.deepEqual([exit.code, exit.body.session.fee, exit.body.session.collected], [200, 75000, 40000]);
   assert.deepEqual(await paidEvents(pool), [[35000, 35000], [40000, 75000]]);   // phần chênh tiền mặt cũng là doanh thu
 });
 const paidEvents = async (pool) => (await pool.query(

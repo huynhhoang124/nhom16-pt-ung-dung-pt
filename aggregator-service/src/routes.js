@@ -516,6 +516,8 @@ function makeApp({ pool, reg, cache, auth, commands, broadcasts, commandFlow, dl
     const n = reg.get(req.params.id);
     if (!n) return res.status(404).json({ error: 'PARKING_NOT_FOUND' });
     if (n.status !== 'OFFLINE') return res.status(409).json({ error: 'PARKING_ONLINE' });
+    // Tiến trình bãi còn gia hạn lease etcd thì các bản Aggregator sẽ nạp lại bãi: phải tắt bãi (lease hết) trước khi gỡ.
+    if (n.hasLease === true) return res.status(409).json({ error: 'PARKING_REGISTERED' });
     await pool.query('DELETE FROM parking_nodes WHERE parking_id=$1', [n.id]);
     reg.nodes.delete(n.id);
     res.json({ ok: true });

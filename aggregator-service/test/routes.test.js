@@ -207,6 +207,9 @@ test('quản trị: xem trạng thái node, thêm bãi mới (không sửa code)
   // gỡ bãi: chỉ khi mất kết nối; bãi đang chạy -> 409
   const del = (id) => agg.call(`/api/admin/nodes/${id}`, { method: 'DELETE', token: tokens.admin });
   assert.equal((await del('A')).status, 409);
+  agg.reg.get('D').hasLease = true;    // HTTP lỗi nhưng còn đăng ký etcd: gỡ sẽ bị nạp lại nên từ chối
+  assert.deepEqual([(await del('D')).status, (await del('D')).body.error], [409, 'PARKING_REGISTERED']);
+  agg.reg.get('D').hasLease = false;
   assert.equal((await del('D')).status, 200);
   assert.deepEqual((await agg.call('/api/parkings')).body.map((p) => p.parkingId), ['A', 'B', 'S']);
 });
