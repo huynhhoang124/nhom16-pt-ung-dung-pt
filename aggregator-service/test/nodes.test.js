@@ -79,7 +79,9 @@ test('TC40 mạch mở: lỗi liên tiếp đủ ngưỡng thì OFFLINE ngay, re
   const started = performance.now();
   const r = await agg.call('/api/parkings/X/reservations', { method: 'POST', token, key: 'k1', body: { slotCode: 'X01', licensePlate: '30A-111.11' } });
   assert.equal(r.status, 503);
-  assert.ok(performance.now() - started < 50, 'mạch mở: từ chối ngay, không gọi node');
+  // Không chờ timeout của node (reserveTimeoutMs 3 s). Ngưỡng rộng vì runner CI có lúc rất chậm; việc không gọi node đã
+  // được kiểm bằng hits ở dòng dưới.
+  assert.ok(performance.now() - started < 2000, 'mạch mở: từ chối ngay, không gọi node');
   assert.equal(x.state.hits, 3);
 
   await agg.reg.check();                                   // /health của node giả vẫn UP -> nửa mở thành công
