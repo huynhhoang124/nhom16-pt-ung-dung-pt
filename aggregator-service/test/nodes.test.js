@@ -132,6 +132,10 @@ test('PT-01 X-Instance và nạp bãi do bản Aggregator khác thêm (dùng chu
   assert.equal(r.headers.get('x-instance'), 'aggregator-1');
   assert.deepEqual(agg.reg.sync([{ parking_id: 'X', name: 'X', api_url: 'http://x' }, { parking_id: 'Z', name: 'Z', api_url: 'http://z' }]), ['Z']);
   assert.equal(agg.reg.get('Z').status, 'OFFLINE');   // bãi mới: chờ health check
+  // bản khác sửa URL của Z và gỡ X -> bản này cập nhật theo DB
+  assert.deepEqual(agg.reg.sync([{ parking_id: 'Z', name: 'Z', api_url: 'http://z2' }]), []);
+  assert.equal(agg.reg.get('Z').url, 'http://z2');
+  assert.equal(agg.reg.get('X'), undefined);
 });
 
 test('resolveUrl: tên -> IP; IP giữ nguyên; DNS lỗi thì giữ tên', async () => {
