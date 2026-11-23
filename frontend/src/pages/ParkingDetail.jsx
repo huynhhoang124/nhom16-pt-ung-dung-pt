@@ -41,7 +41,7 @@ const since = (iso) => {
 
 export default function ParkingDetail({ parkingId, user, onBack, onMine, initialSlot = null }) {
   const [p, setP] = useState(null);
-  const [selected, setSelected] = useState(initialSlot);    // slot đang chọn (mở từ "Tra biển số" thì chọn sẵn)
+  const [selected, setSelected] = useState(user.role === 'USER' ? null : initialSlot);    // slot đang chọn (nhân viên mở từ "Tra biển số" thì chọn sẵn; khách phải bấm ô để có form đặt)
   const [pending, setPending] = useState(null);      // lượt đặt chỗ: { slotCode, key, plate, unknown }
   const [plate, setPlate] = useState('');
   const [when, setWhen] = useState('');               // giờ đến (datetime-local), '' = đặt ngay
